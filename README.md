@@ -1,2 +1,2 @@
 # circuit-editor
-An editor for electric and hydraulic circuits.
+An editor for electrical circuits and hydraulic circuits.
