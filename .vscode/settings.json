@@ -1,0 +1,10 @@
+{
+   "editor.defaultFormatter": "esbenp.prettier-vscode",
+   "editor.rulers": [80],
+   "[javascript]": {
+      "editor.defaultFormatter": "esbenp.prettier-vscode"
+   },
+   "[svelte]": {
+      "editor.defaultFormatter": "svelte.svelte-vscode"
+   }
+}
