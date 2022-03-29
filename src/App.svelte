@@ -1,34 +1,5 @@
 <script lang="ts">
-   // Math
-   type Vec = { x: number; y: number }
-   type Line = { start: Vec; end: Vec }
-   function length(v: Vec): number {
-      return Math.sqrt(v.x * v.x + v.y * v.y)
-   }
-   function lengthSq(v: Vec): number {
-      return v.x * v.x + v.y * v.y
-   }
-   function distance(u: Vec, v: Vec): number {
-      return length(sub(u, v))
-   }
-   function distanceSq(u: Vec, v: Vec): number {
-      return lengthSq(sub(u, v))
-   }
-   function scale(v: Vec, s: number): Vec {
-      return { x: s * v.x, y: s * v.y }
-   }
-   function add(u: Vec, v: Vec): Vec {
-      return { x: u.x + v.x, y: u.y + v.y }
-   }
-   function sub(u: Vec, v: Vec): Vec {
-      return { x: u.x - v.x, y: u.y - v.y }
-   }
-   function dot(u: Vec, v: Vec): number {
-      return u.x * v.x + u.y * v.y
-   }
-   function clone(v: Vec): Vec {
-      return { x: v.x, y: v.y }
-   }
+   import { Vec, Line } from "./math"
    // Angle constants
    const tau = 2 * Math.PI
    const snapDistanceSq = 15 * 15
@@ -45,10 +16,10 @@
       0.875 * tau,
    ]
    const snapVectors = snapAngles.map((a) => {
-      return { x: Math.cos(a), y: Math.sin(a) }
+      return new Vec(Math.cos(a), Math.sin(a))
    })
    // State
-   let mouse: Vec = { x: 0, y: 0 }
+   let mouse: Vec = new Vec(0, 0)
    let lines: Line[] = []
    let lineStart: Vec | null = null
    let lineEnd: Vec | null
@@ -58,34 +29,36 @@
          let snapped = false
          // If the line is close to the endpoint of another line, then snap it.
          for (let line of lines) {
-            if (distanceSq(mouse, line.start) < snapDistanceSq) {
-               lineEnd = clone(line.start)
+            if (mouse.distanceSq(line.start) < snapDistanceSq) {
+               lineEnd = line.start.clone()
                snapped = true
                break
             }
-            if (distanceSq(mouse, line.end) < snapDistanceSq) {
-               lineEnd = clone(line.end)
+            if (mouse.distanceSq(line.end) < snapDistanceSq) {
+               lineEnd = line.end.clone()
                snapped = true
                break
             }
          }
          // If the line is close to a snap angle, then snap it.
-         const dv = sub(mouse, lineStart)
-         if (!snapped && lengthSq(dv) >= lengthSqAtWhichSnapsActivate) {
+         // TODO: If we are extending an existing line, we should also snap to
+         // that line's angle, and to orthogonal angles.
+         const dv = mouse.sub(lineStart)
+         if (!snapped && dv.lengthSq() >= lengthSqAtWhichSnapsActivate) {
             for (let dir of snapVectors) {
                // Projection onto unit vector
-               const p = scale(dir, dot(dv, dir))
+               const p = dir.scale(dv.dot(dir))
                // Rejection from unit vector
-               const d = sub(dv, p)
-               if (lengthSq(d) < snapDistanceSq) {
-                  lineEnd = add(lineStart, p)
+               const d = dv.sub(p)
+               if (d.lengthSq() < snapDistanceSq) {
+                  lineEnd = lineStart.add(p)
                   snapped = true
                   break
                }
             }
          }
          if (!snapped) {
-            lineEnd = clone(mouse)
+            lineEnd = mouse.clone()
          }
       } else {
          lineEnd = null
@@ -95,32 +68,33 @@
 
 <svg
    on:pointermove={(event) => {
-      mouse = { x: event.clientX, y: event.clientY }
+      mouse = new Vec(event.clientX, event.clientY)
    }}
    on:pointerdown={(event) => {
+      let click = new Vec(event.clientX, event.clientY)
+      // If we clicked near the endpoint of a line, snap to it.
+      // TODO: This code is a duplicate of the lineEnd code. Refactor it.
+      let snapped = false
+      for (let line of lines) {
+         if (click.distanceSq(line.start) < snapDistanceSq) {
+            lineStart = line.start.clone()
+            snapped = true
+            break
+         }
+         if (click.distanceSq(line.end) < snapDistanceSq) {
+            lineStart = line.end.clone()
+            snapped = true
+            break
+         }
+      }
+      if (!snapped) {
+         lineStart = click
+      }
+   }}
+   on:pointerup={() => {
       if (lineStart && lineEnd) {
          lines = [...lines, { start: lineStart, end: lineEnd }]
          lineStart = null
-      } else {
-         let click = { x: event.clientX, y: event.clientY }
-         // If we clicked near the endpoint of a line, snap to it.
-         // TODO: This code is a duplicate of the lineEnd code. Refactor it.
-         let snapped = false
-         for (let line of lines) {
-            if (distanceSq(click, line.start) < snapDistanceSq) {
-               lineStart = clone(line.start)
-               snapped = true
-               break
-            }
-            if (distanceSq(click, line.end) < snapDistanceSq) {
-               lineStart = clone(line.end)
-               snapped = true
-               break
-            }
-         }
-         if (!snapped) {
-            lineStart = click
-         }
       }
    }}
 >
@@ -148,9 +122,5 @@
    line {
       stroke: rgb(106, 2, 167);
       stroke-width: 2px;
-   }
-   .axisLine {
-      /* Don't apply antialiasing to horizontal and vertical lines. */
-      shape-rendering: crispEdges;
    }
 </style>
