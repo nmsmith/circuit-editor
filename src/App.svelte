@@ -1,29 +1,30 @@
 <script lang="ts">
-   import { Vec, Line } from "./math"
+   import { Vec, Point, Line } from "./math"
    // Snapping
-   const snapDistanceSq = 15 * 15
-   const lengthSqAtWhichSnapsActivate = 2 * snapDistanceSq
+   const sqSnapDistance = 15 * 15
+   const sqLengthAtWhichSnapsActivate = 2 * sqSnapDistance
 
    // Snap if applicable, and return the outcome.
-   function trySnapToPoint(source: Vec, target: Vec): [boolean, Vec] {
-      if (source.distanceSq(target) < snapDistanceSq) {
+   function trySnapToPoint(source: Point, target: Point): [boolean, Point] {
+      if (source.sqDistanceFrom(target) < sqSnapDistance) {
          return [true, target.clone()]
       } else {
          return [false, source]
       }
    }
-   function trySnapToLine(source: Vec, target: Line): [boolean, Vec] {
+   // If close to the target line, snap by "growing"
+   function trySnapToLine(source: Point, target: Line): [boolean, Point] {
       // Use coordinates relative to one endpoint of the line
-      let s = source.sub(target.start)
-      let t = target.end.sub(target.start)
-      let lenSq = t.lengthSq()
+      let s = source.displacementFrom(target.start)
+      let t = target.end.displacementFrom(target.start)
+      let lenSq = t.sqLength()
       let dot = s.dot(t)
       // The source is "next to" the line iff the dot product is in [0, lenSq]
       if (dot >= 0 && dot <= lenSq) {
-         let projection = t.scale(dot / lenSq)
+         let projection = t.scaleBy(dot / lenSq)
          let rejection = s.sub(projection)
-         if (rejection.lengthSq() < snapDistanceSq) {
-            return [true, target.start.add(projection)]
+         if (rejection.sqLength() < sqSnapDistance) {
+            return [true, target.start.displaceBy(projection)]
          } else {
             return [false, source]
          }
@@ -50,13 +51,13 @@
       return new Vec(Math.cos(a), Math.sin(a))
    })
    // --------------- State ---------------
-   let mouse: Vec = new Vec(0, 0)
+   let mouse: Point = new Point(0, 0)
    let lines: Line[] = []
    // The line that defines the current metric used for drawing
    let referenceLine: { line: Line; length: number } | null = null
    // Drawing state
-   let lineStart: Vec | null = null
-   let lineEnd: Vec | null
+   let lineStart: Point | null = null
+   let lineEnd: Point | null
 
    $: {
       if (lineStart) {
@@ -72,15 +73,18 @@
             if (snappedToPoint) break
          }
          // Priority #2: Try snapping to angles.
-         const dv = lineEnd.sub(lineStart)
+         const dirLine = lineEnd.displacementFrom(lineStart)
          let snapped = false
-         if (!snappedToPoint && dv.lengthSq() >= lengthSqAtWhichSnapsActivate) {
-            for (let dir of snapVectors) {
-               // Projection onto unit vector
-               const p = dir.scale(dv.dot(dir))
-               ;[snapped] = trySnapToPoint(dv, p)
-               if (snapped) {
-                  lineEnd = lineStart.add(p)
+         if (
+            !snappedToPoint &&
+            dirLine.sqLength() >= sqLengthAtWhichSnapsActivate
+         ) {
+            for (let dirSnap of snapVectors) {
+               const dirProjected = dirLine.projectionOnto(dirSnap)
+               const rejection = dirLine.sub(dirProjected)
+               if (rejection.sqLength() < sqSnapDistance) {
+                  snapped = true
+                  lineEnd = lineStart.displaceBy(dirProjected)
                   break
                }
             }
@@ -100,10 +104,10 @@
 
 <svg
    on:pointermove={(event) => {
-      mouse = new Vec(event.clientX, event.clientY)
+      mouse = new Point(event.clientX, event.clientY)
    }}
    on:pointerdown={(event) => {
-      let click = new Vec(event.clientX, event.clientY)
+      let click = new Point(event.clientX, event.clientY)
       // If we clicked near the endpoint of a line, snap to it.
       let snapped = false
       for (let line of lines) {
