@@ -82,13 +82,13 @@
    $: {
       if (segStart) {
          // By default, the segment endpoint should be at the mouse position.
-         segEnd = mouse.clone()
-         // Priority #1: Try snapping to points along the reference segment.
+         segEnd = mouse
          let snappedToPoint
+         // Priority #1: Try snapping to points along the reference segment.
          if (reference) {
             for (let p of reference.segment.points(reference.length - 1)) {
                if (pointsCanSnap(segEnd, p)) {
-                  segEnd = snappedToPoint = p.clone()
+                  segEnd = snappedToPoint = p
                   break
                }
             }
@@ -97,14 +97,13 @@
          if (!snappedToPoint) {
             for (let p of endpoints()) {
                if (pointsCanSnap(segEnd, p)) {
-                  segEnd = snappedToPoint = p.clone()
+                  segEnd = snappedToPoint = p
                   break
                }
             }
          }
          // Priority #3: Try snapping to angles.
          const dir = segEnd.displacementFrom(segStart)
-         let snapped = false
          if (
             !snappedToPoint &&
             dir.sqLength() >= sqLengthAtWhichSnapsActivate
@@ -113,7 +112,6 @@
                const dirProjected = dir.projectionOnto(dirSnap)
                const rejection = dir.sub(dirProjected)
                if (rejection.sqLength() < sqSnapDistance) {
-                  snapped = true
                   segEnd = segStart.displaceBy(dirProjected)
                   break
                }
@@ -142,11 +140,33 @@
    }}
    on:pointerdown={(event) => {
       segStart = new Point(event.clientX, event.clientY)
-      // If we clicked near the endpoint of a segment, snap to it.
-      for (let p of endpoints()) {
-         if (pointsCanSnap(segStart, p)) {
-            segStart = p.clone()
-            break
+      let snappedToPoint
+      // Priority #1: Try snapping to points along the reference segment.
+      if (reference) {
+         for (let p of reference.segment.points(reference.length - 1)) {
+            if (pointsCanSnap(segStart, p)) {
+               segEnd = snappedToPoint = p
+               break
+            }
+         }
+      }
+      // Priority #2: Try snapping to segment endpoints.
+      if (!snappedToPoint) {
+         for (let p of endpoints()) {
+            if (pointsCanSnap(segStart, p)) {
+               segStart = snappedToPoint = p
+               break
+            }
+         }
+      }
+      // Priority #3: Try snapping to segments.
+      if (!snappedToPoint) {
+         for (let seg of segments) {
+            snappedToPoint = trySnapToSegment(segStart, seg)
+            if (snappedToPoint) {
+               segStart = snappedToPoint
+               break
+            }
          }
       }
    }}

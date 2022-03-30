@@ -33,9 +33,6 @@ export class Vec extends VecBase {
    projectionOnto(v: Vec): Vec {
       return v.scaleBy(this.dot(v) / v.dot(v))
    }
-   clone(): Vec {
-      return new Vec(this.x, this.y)
-   }
 }
 
 export class Point extends VecBase {
