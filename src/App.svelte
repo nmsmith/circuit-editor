@@ -1,5 +1,6 @@
 <script lang="ts">
    import { Vec, Point, Ray, Segment } from "./math"
+   import { DefaultMap } from "./utilities"
    // Angle constants
    const tau = 2 * Math.PI
    // Snapping
@@ -89,8 +90,12 @@
    // so every edge is only stored once. This is necessary for some operations.
    // The second encoding is undirected, so every edge is stored twice. This
    // is necessary for graph traversal operations.
-   let circuitDir: Map<Point, Set<Point>> = new Map()
-   let circuitUndir: Map<Point, Set<Point>> = new Map()
+   let circuitDir: DefaultMap<Point, Set<Point>> = new DefaultMap(
+      () => new Set()
+   )
+   let circuitUndir: DefaultMap<Point, Set<Point>> = new DefaultMap(
+      () => new Set()
+   )
    function* segments() {
       for (let [start, ends] of circuitDir) {
          for (let end of ends) {
@@ -155,30 +160,15 @@
       if (drawStart && drawEnd) {
          // Update the directed circuit.
          // Don't add the segment "backwards" if it already appears forward.
-         if (!circuitDir.get(drawEnd)?.has(drawStart)) {
-            let segments = circuitDir.get(drawStart)
-            if (segments) {
-               segments.add(drawEnd)
-            } else {
-               circuitDir.set(drawStart, new Set([drawEnd]))
-            }
+         if (!circuitDir.get(drawEnd).has(drawStart)) {
+            circuitDir.get(drawStart).add(drawEnd)
          }
          circuitDir = circuitDir
          // Update the undirected circuit.
-         let segmentsAtStart = circuitUndir.get(drawStart)
-         if (segmentsAtStart) {
-            segmentsAtStart.add(drawEnd)
-         } else {
-            circuitUndir.set(drawStart, new Set([drawEnd]))
-         }
-         let segmentsAtEnd = circuitUndir.get(drawEnd)
-         if (segmentsAtEnd) {
-            segmentsAtEnd.add(drawStart)
-         } else {
-            circuitUndir.set(drawEnd, new Set([drawStart]))
-         }
+         circuitUndir.get(drawStart).add(drawEnd)
+         circuitUndir.get(drawEnd).add(drawStart)
          circuitUndir = circuitUndir
-         // Reset the dragging start point
+         // Reset the drawing state.
          drawStart = null
       }
    }}
