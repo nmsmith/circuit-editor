@@ -65,13 +65,8 @@
 
    // --------------- State ---------------
    let mouse: Point = new Point(0, 0)
-   let segments: Segment[] = []
-   function* endpoints() {
-      for (let seg of segments) {
-         yield seg.start
-         yield seg.end
-      }
-   }
+   let circuitDir: Map<Point, Set<Point>> = new Map()
+   let circuitUndir: Map<Point, Set<Point>> = new Map()
    let segmentUnderMouse: Segment | null
    // The segment that defines the current metric used for drawing
    let reference: { segment: Segment; length: number } | null = null
@@ -95,7 +90,7 @@
          }
          // Priority #2: Try snapping to segment endpoints.
          if (!snappedToPoint) {
-            for (let p of endpoints()) {
+            for (let p of circuitUndir.keys()) {
                if (pointsCanSnap(segEnd, p)) {
                   segEnd = snappedToPoint = p
                   break
@@ -120,11 +115,17 @@
          // Priority #4: Try snapping to segments.
          if (!snappedToPoint) {
             let snapDirection = segEnd.displacementFrom(segStart)
-            for (let seg of segments) {
-               snappedToPoint = trySnapToSegment(segEnd, seg, snapDirection)
-               if (snappedToPoint) {
-                  segEnd = snappedToPoint
-                  break
+            for (let [start, ends] of circuitDir) {
+               for (let end of ends) {
+                  snappedToPoint = trySnapToSegment(
+                     segEnd,
+                     new Segment(start, end),
+                     snapDirection
+                  )
+                  if (snappedToPoint) {
+                     segEnd = snappedToPoint
+                     break
+                  }
                }
             }
          }
@@ -145,14 +146,14 @@
       if (reference) {
          for (let p of reference.segment.points(reference.length - 1)) {
             if (pointsCanSnap(segStart, p)) {
-               segEnd = snappedToPoint = p
+               segStart = snappedToPoint = p
                break
             }
          }
       }
       // Priority #2: Try snapping to segment endpoints.
       if (!snappedToPoint) {
-         for (let p of endpoints()) {
+         for (let p of circuitUndir.keys()) {
             if (pointsCanSnap(segStart, p)) {
                segStart = snappedToPoint = p
                break
@@ -161,18 +162,52 @@
       }
       // Priority #3: Try snapping to segments.
       if (!snappedToPoint) {
-         for (let seg of segments) {
-            snappedToPoint = trySnapToSegment(segStart, seg)
-            if (snappedToPoint) {
-               segStart = snappedToPoint
-               break
+         for (let [start, ends] of circuitDir) {
+            for (let end of ends) {
+               snappedToPoint = trySnapToSegment(
+                  segStart,
+                  new Segment(start, end)
+               )
+               if (snappedToPoint) {
+                  segStart = snappedToPoint
+                  break
+               }
             }
          }
       }
    }}
    on:pointerup={() => {
+      // Note: if segStart or segEnd have been chosen as the result of snapping,
+      // then they will refer to existing Point objects. This is crucial to
+      // ensuring that the circuit Maps and Sets accurately reflect the circuit
+      // topology.
       if (segStart && segEnd) {
-         segments = [...segments, new Segment(segStart, segEnd)]
+         // Update the directed circuit.
+         // Don't add the segment "backwards" if it already appears forward.
+         if (!circuitDir.get(segEnd)?.has(segStart)) {
+            let segments = circuitDir.get(segStart)
+            if (segments) {
+               segments.add(segEnd)
+            } else {
+               circuitDir.set(segStart, new Set([segEnd]))
+            }
+         }
+         circuitDir = circuitDir
+         // Update the undirected circuit.
+         let segmentsAtStart = circuitUndir.get(segStart)
+         if (segmentsAtStart) {
+            segmentsAtStart.add(segEnd)
+         } else {
+            circuitUndir.set(segStart, new Set([segEnd]))
+         }
+         let segmentsAtEnd = circuitUndir.get(segEnd)
+         if (segmentsAtEnd) {
+            segmentsAtEnd.add(segStart)
+         } else {
+            circuitUndir.set(segEnd, new Set([segStart]))
+         }
+         circuitUndir = circuitUndir
+         // Reset the dragging start point
          segStart = null
       }
    }}
@@ -186,10 +221,12 @@
          />
       {/each}
    {/if} -->
-   {#each segments as seg}
-      <line x1={seg.start.x} y1={seg.start.y} x2={seg.end.x} y2={seg.end.y} />
-      {#each [...seg.points(0)] as p}
-         <circle cx={p.x} cy={p.y} r={4} />
+   {#each [...circuitDir] as [start, ends]}
+      {#each [...ends] as end}
+         <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} />
+         {#each [...new Segment(start, end).points(0)] as p}
+            <circle cx={p.x} cy={p.y} r={4} />
+         {/each}
       {/each}
    {/each}
    {#if segStart && segEnd}
