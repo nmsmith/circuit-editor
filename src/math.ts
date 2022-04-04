@@ -18,6 +18,9 @@ export class Vec extends VecBase {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
+   direction(): Vec {
+      return this.scaleBy(1 / this.length())
+   }
    scaleBy(s: number): Vec {
       return new Vec(s * this.x, s * this.y)
    }
@@ -53,6 +56,17 @@ export class Point extends VecBase {
    }
    clone(): Point {
       return new Point(this.x, this.y)
+   }
+   // These "move" operations are the only operations that mutate points.
+   // If we have these operations, we can implement circuit manipulations such
+   // as dragging without having to mutate the circuit data structure itself.
+   moveTo(x: number, y: number): void {
+      ;(this.x as number) = x
+      ;(this.y as number) = y
+   }
+   moveBy(v: Vec): void {
+      ;(this.x as number) += v.x
+      ;(this.y as number) += v.y
    }
 }
 

@@ -4,8 +4,8 @@
    // Angle constants
    const tau = 2 * Math.PI
    // Snapping
-   const sqSnapDistance = 15 * 15
-   const sqLengthAtWhichSnapsActivate = 2 * sqSnapDistance
+   const sqMaxSnapDistance = 15 * 15
+   const sqMinLengthToSnapToDir = 2 * sqMaxSnapDistance
    const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
    const snapAngles = [
       // Angles used when snapping to an angle (ordered by priority)
@@ -18,31 +18,51 @@
       0.625 * tau,
       0.875 * tau,
    ]
-   const snapVectors = snapAngles.map((a) => {
+   const snapDirections = snapAngles.map((a) => {
       return new Vec(Math.cos(a), Math.sin(a))
    })
 
    // Snap the point to a significant point in the scene, if possible.
    // Otherwise, return the same point.
-   function trySnappingToPoint(point: Point): Point {
+   function trySnappingToPoints(point: Point): Point {
       // Try snapping to segment endpoints.
       for (let p of circuitUndir.keys()) {
-         if (p.sqDistanceFrom(point) < sqSnapDistance) return p
+         if (p.sqDistanceFrom(point) < sqMaxSnapDistance) return p
       }
       // Try snapping to points along the reference segment.
       if (reference) {
          for (let p of reference.segment.points(reference.length - 1)) {
-            if (p.sqDistanceFrom(point) < sqSnapDistance) return p
+            if (p.sqDistanceFrom(point) < sqMaxSnapDistance) return p
+         }
+      }
+      return point
+   }
+   // Snap the point to a nearby direction, if possible.
+   // Otherwise, return the same point.
+   function trySnappingToDirections(
+      point: Point,
+      startPoint: Point,
+      snapDirs: Iterable<Vec>,
+      sqMinLengthToSnap: number
+   ): Point {
+      const dir = point.displacementFrom(startPoint)
+      if (dir.sqLength() >= sqMinLengthToSnap) {
+         for (let dirSnap of snapDirs) {
+            const dirProjected = dir.projectionOnto(dirSnap)
+            const rejection = dir.sub(dirProjected)
+            if (rejection.sqLength() < sqMaxSnapDistance) {
+               return startPoint.displaceBy(dirProjected)
+            }
          }
       }
       return point
    }
    // Snap the point to a nearby line segment, if possible.
    // Otherwise, return the same point.
-   function trySnappingToSegment(
+   function trySnappingToSegments(
       point: Point,
       snapDirection?: Vec // If empty, we will just project onto the segment.
-   ): Point {
+   ): [Point, Segment | null] {
       for (let [start, end] of segments()) {
          // Use coordinates relative to one endpoint of the segment.
          let p = point.displacementFrom(start)
@@ -55,7 +75,8 @@
             // Only snap if the point is sufficiently close to the segment.
             let projection = t.scaleBy(dot / sqLength)
             let rejection = p.sub(projection)
-            if (rejection.sqLength() < sqSnapDistance) {
+            if (rejection.sqLength() < sqMaxSnapDistance) {
+               let target = new Segment(start, end)
                // If we have been given a snap direction, and the angle
                // between the segment and the snap direction is not too
                // narrow, attempt to snap to that direction.
@@ -66,22 +87,22 @@
                   if (Math.abs(cosAngle) <= cosMinimumSnapAngle) {
                      let forward = new Ray(point, snapDirection)
                      let backward = new Ray(point, snapDirection.scaleBy(-1))
-                     let target = new Segment(start, end)
+
                      let intersection =
                         forward.intersection(target) ||
                         backward.intersection(target)
                      if (intersection) {
-                        return intersection
+                        return [intersection, target]
                      }
                   }
                } else {
                   // Otherwise, snap in the direction of the projection.
-                  return start.displaceBy(projection)
+                  return [start.displaceBy(projection), target]
                }
             }
          }
       }
-      return point
+      return [point, null]
    }
 
    // --------------- State ---------------
@@ -109,55 +130,129 @@
    // Input state
    let mouse: Point = Point.zero
    let drawStart: Point | null = null
-   let drawEnd: Point | null
-   let dragStart: Point | null = null
-   let dragEnd: Point | null
+   let drawEnd: Point | null = null
+   let pointsGrabbed: Point[] = []
+   let moveStart: Point | null = null
+   let moveEnd: Point | null = null
+   let moves: DefaultMap<Point, Vec>
 
    $: {
-      drawEnd = null
       if (drawStart) {
          // Try snapping to a point of significance.
-         drawEnd = trySnappingToPoint(mouse)
+         drawEnd = trySnappingToPoints(mouse)
          if (drawEnd === mouse) {
             // If no snapping occurred, try snapping to an angle and/or a
             // line segment instead.
-            const dir = mouse.displacementFrom(drawStart)
-            if (dir.sqLength() >= sqLengthAtWhichSnapsActivate) {
-               for (let dirSnap of snapVectors) {
-                  const dirProjected = dir.projectionOnto(dirSnap)
-                  const rejection = dir.sub(dirProjected)
-                  if (rejection.sqLength() < sqSnapDistance) {
-                     drawEnd = drawStart.displaceBy(dirProjected)
-                     break
-                  }
-               }
-            }
-            let snapDirection = drawEnd.displacementFrom(drawStart)
-            drawEnd = trySnappingToSegment(drawEnd, snapDirection)
+            drawEnd = trySnappingToDirections(
+               mouse,
+               drawStart,
+               snapDirections,
+               sqMinLengthToSnapToDir
+            )
+            ;[drawEnd] = trySnappingToSegments(
+               drawEnd,
+               drawEnd.displacementFrom(drawStart)
+            )
          }
       }
+   }
+   $: {
+      moves = new DefaultMap(() => Vec.zero)
+      if (moveStart) {
+         moveEnd = mouse
+         // Compute how each point should move in response to the drag.
+
+         // First pass: find the directions to snap in.
+         let moveSnapDirs: Set<Vec> = new Set()
+         let visited: Set<Point> = new Set()
+         for (let point of pointsGrabbed) {
+            visited.add(point)
+            searchForDirections(point)
+         }
+         function searchForDirections(point: Point) {
+            for (let p of circuitUndir.get(point)) {
+               if (!visited.has(p)) {
+                  moveSnapDirs.add(p.displacementFrom(point).direction())
+                  visited.add(p)
+                  searchForDirections(p)
+               }
+            }
+         }
+         // Now, snap to a direction if possible.
+         moveEnd = trySnappingToDirections(moveEnd, moveStart, moveSnapDirs, 0)
+         // Second pass: compute movement given the snapping.
+         let moveVector = moveEnd.displacementFrom(moveStart)
+         for (let point of pointsGrabbed) {
+            moves.set(point, moveVector)
+            propagateMovement(point)
+         }
+         function propagateMovement(point: Point) {
+            for (let p of circuitUndir.get(point)) {
+               let segment = p.displacementFrom(point)
+               let rejection = moveVector.sub(
+                  moveVector.projectionOnto(segment)
+               )
+               // TODO: After implementing reference lines, turn this tolerance
+               // down.
+               const errorTolerance = 1
+               if (rejection.sqLength() > errorTolerance && !moves.has(p)) {
+                  moves.set(p, moveVector)
+                  propagateMovement(p)
+               }
+            }
+         }
+      }
+   }
+   function isDraw(event: MouseEvent) {
+      // Left mouse button without the Shift key
+      return event.button === 0 && !event.getModifierState("Shift")
+   }
+   function isMove(event: MouseEvent) {
+      // Right mouse button, or left mouse button with the shift key
+      return (
+         event.button === 2 ||
+         (event.button === 0 && event.getModifierState("Shift"))
+      )
    }
 </script>
 
 <svg
+   on:contextmenu={(event) => {
+      // Disable the context menu.
+      event.preventDefault()
+      return false
+   }}
    on:pointermove={(event) => {
       mouse = new Point(event.clientX, event.clientY)
    }}
    on:pointerdown={(event) => {
       let clickPosition = new Point(event.clientX, event.clientY)
-      // Try snapping to a point of significance.
-      drawStart = trySnappingToPoint(clickPosition)
-      if (drawStart === clickPosition) {
-         // If no snapping occurred, try snapping to a segment instead.
-         drawStart = trySnappingToSegment(drawStart)
+
+      if (isDraw(event)) {
+         drawStart = trySnappingToPoints(clickPosition)
+         if (drawStart === clickPosition) {
+            ;[drawStart] = trySnappingToSegments(drawStart)
+         }
+      } else if (isMove(event)) {
+         pointsGrabbed = []
+         moveStart = trySnappingToPoints(clickPosition)
+         if (moveStart === clickPosition) {
+            let segment
+            ;[moveStart, segment] = trySnappingToSegments(moveStart)
+            if (segment) {
+               pointsGrabbed.push(segment.start, segment.end)
+            }
+         } else {
+            pointsGrabbed.push(moveStart)
+         }
       }
    }}
-   on:pointerup={() => {
+   on:pointerup={(event) => {
       // Note: if drawStart or drawEnd have been chosen as the result of
       // snapping, then they will refer to existing Point objects. This is
       // crucial to ensuring that the circuit Maps and Sets accurately reflect
       // the circuit topology.
-      if (drawStart && drawEnd) {
+      if (isDraw(event) && drawStart && drawEnd) {
          // Update the directed circuit.
          // Don't add the segment "backwards" if it already appears forward.
          if (!circuitDir.get(drawEnd).has(drawStart)) {
@@ -170,28 +265,54 @@
          circuitUndir = circuitUndir
          // Reset the drawing state.
          drawStart = null
+         drawEnd = null
+      } else if (isMove(event) && moveStart && moveEnd) {
+         // Commit the movement.
+         for (let point of circuitUndir.keys()) {
+            point.moveBy(moves.get(point))
+         }
+         moveStart = null
+         moveEnd = null
       }
    }}
 >
-   <!-- {#if drawStart && drawEnd}
-      {#each segments as seg}
-         <circle
-            r={7}
-            cx={new Segment(drawStart, drawEnd).intersection(seg)?.x}
-            cy={new Segment(drawStart, drawEnd).intersection(seg)?.y}
-         />
-      {/each}
-   {/if} -->
+   <g>
+      {#if moveStart && moveEnd}
+         {#each pointsGrabbed as p}
+            <line
+               class="move"
+               x1={p.x}
+               y1={p.y}
+               x2={p.x + moves.get(p).x}
+               y2={p.y + moves.get(p).y}
+            />
+         {/each}
+      {/if}
+   </g>
+
    {#each [...circuitDir] as [start, ends]}
       {#each [...ends] as end}
-         <line x1={start.x} y1={start.y} x2={end.x} y2={end.y} />
+         <line
+            class="wire"
+            x1={start.x + moves.get(start).x}
+            y1={start.y + moves.get(start).y}
+            x2={end.x + moves.get(end).x}
+            y2={end.y + moves.get(end).y}
+         />
          {#each [...new Segment(start, end).points(0)] as p}
-            <circle cx={p.x} cy={p.y} r={4} />
+            <circle cx={p.x + moves.get(p).x} cy={p.y + moves.get(p).y} r={4} />
          {/each}
       {/each}
    {/each}
+
    {#if drawStart && drawEnd}
-      <line x1={drawStart.x} y1={drawStart.y} x2={drawEnd.x} y2={drawEnd.y} />
+      <line
+         class="wire"
+         x1={drawStart.x}
+         y1={drawStart.y}
+         x2={drawEnd.x}
+         y2={drawEnd.y}
+      />
    {/if}
 </svg>
 
@@ -205,11 +326,15 @@
       height: 100%;
       fill: green;
    }
-   line {
+   circle {
+      fill: black;
+   }
+   .wire {
       stroke: rgb(106, 2, 167);
       stroke-width: 2px;
    }
-   circle {
-      fill: black;
+   .move {
+      stroke: rgb(134, 186, 255);
+      stroke-width: 2px;
    }
 </style>
