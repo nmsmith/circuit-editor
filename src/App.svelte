@@ -170,7 +170,80 @@
    $: {
       moves = new DefaultMap(() => Vector.zero)
       if (moveStart) {
-         moveEnd = mouse
+         // Snap the dragging to an axis if possible.
+         function* axes() {
+            for (let axis of circuitAxes.keys()) yield axis
+            for (let axis of snapAxes) yield axis
+         }
+         moveEnd = trySnappingToAxes(mouse, moveStart, axes(), 0)
+         let moveVector = moveEnd.displacementFrom(moveStart)
+         let moveAxis = tryRoundingToExistingAxis(Axis.fromVector(moveVector))
+
+         // Data we will need to maintain in the upcoming traversal.
+         let pointData = new DefaultMap(() => {
+            return {
+               finalized: false as boolean | Axis,
+               basis: null as null | Axis[],
+               bannedAxis: null as null | Axis,
+            }
+         })
+         // Find all of the points whose edges are aligned with exactly two
+         // Axes. We can treat these two Axes as a vector basis, which allows
+         // us to use a different movement algorithm for these points that
+         // results in a manipulation that feels more like "resizing a
+         // rectangle" than our default algorithm (stretching and contracting).
+         for (let [point, edges] of circuitUndir) {
+            let data = pointData.get(point)
+            let possibleBasis: Axis[] = []
+            for (let [_, axis] of edges) {
+               if (!possibleBasis.includes(axis)) possibleBasis.push(axis)
+            }
+            if (possibleBasis.length === 2) data.basis = possibleBasis
+         }
+         // Move each grabbed point.
+         for (let point of pointsGrabbed) {
+            moves.set(point, moveVector)
+            pointData.get(point).finalized = true
+            propagateMovement(point, null)
+         }
+         // Propagate the movement to the point's neighbours. If an axis is
+         // provided, only propagate the movement along edges of that axis.
+         function propagateMovement(pSource: Point, alongAxis: Axis | null) {
+            for (let [pTarget, traversalAxis] of circuitUndir.get(pSource)) {
+               let target = pointData.get(pTarget)
+               if (
+                  target.finalized === true ||
+                  target.finalized === traversalAxis ||
+                  (alongAxis !== null && alongAxis !== traversalAxis)
+               )
+                  continue
+               // Figure out which movement algorithm should be applied.
+               if (target.basis && traversalAxis !== target.bannedAxis) {
+                  // Use the "rectangle resizing" algorithm.
+                  let axis0 = target.basis[0]
+                  let axis1 = target.basis[1]
+                  let otherAxis = traversalAxis === axis0 ? axis1 : axis0
+                  // Formula for change of basis:
+                  let magnitude =
+                     (traversalAxis.x * moveVector.y -
+                        traversalAxis.y * moveVector.x) /
+                     (traversalAxis.x * otherAxis.y -
+                        traversalAxis.y * otherAxis.x)
+                  moves.set(pTarget, otherAxis.scaleBy(magnitude))
+                  target.finalized = traversalAxis
+                  // traversalAxis is now the only axis we are "allowed" to
+                  // arrive at pTarget from. If we arrive from the other axis,
+                  // we revert to the stretching & contracting algorithm.
+                  target.bannedAxis = otherAxis
+                  propagateMovement(pTarget, traversalAxis)
+               } else if (traversalAxis !== moveAxis) {
+                  // Propagate the movement.
+                  moves.set(pTarget, moveVector)
+                  target.finalized = true
+                  propagateMovement(pTarget, null)
+               } else continue // Absorb the movement.
+            }
+         }
       }
    }
    function isDraw(event: MouseEvent) {
@@ -228,7 +301,6 @@
             let newAxis = Axis.fromVector(drawEnd.displacementFrom(drawStart))
             let axis = tryRoundingToExistingAxis(newAxis)
             circuitAxes.update(axis, (c) => c + 1)
-            console.log(circuitAxes)
             // Update the directed circuit.
             circuitDir.get(drawStart).add([drawEnd, axis])
             circuitDir = circuitDir
