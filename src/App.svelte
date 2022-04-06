@@ -72,8 +72,7 @@
                // angle between the segment and the axis is not too narrow,
                // attempt to snap by stretching/contracting along that axis.
                if (stretchAxis) {
-                  let cosAngle =
-                     t.dot(stretchAxis) / (t.length() * stretchAxis.length())
+                  let cosAngle = t.dot(stretchAxis) / t.length()
                   if (Math.abs(cosAngle) <= cosMinimumSnapAngle) {
                      let forward = new Ray(point, stretchAxis)
                      let backward = new Ray(point, stretchAxis.scaleBy(-1))
@@ -172,76 +171,89 @@
       if (moveStart) {
          // Snap the dragging to an axis if possible.
          function* axes() {
-            for (let axis of circuitAxes.keys()) yield axis
+            //for (let axis of circuitAxes.keys()) yield axis
             for (let axis of snapAxes) yield axis
          }
-         moveEnd = trySnappingToAxes(mouse, moveStart, axes(), 0)
+         moveEnd = mouse //trySnappingToAxes(mouse, moveStart, axes(), 0)
          let moveVector = moveEnd.displacementFrom(moveStart)
-         let moveAxis = tryRoundingToExistingAxis(Axis.fromVector(moveVector))
+         //let moveAxis = tryRoundingToExistingAxis(Axis.fromVector(moveVector))
 
          // Data we will need to maintain in the upcoming traversal.
          let pointData = new DefaultMap(() => {
             return {
+               // Whether the point's movement has been determined yet.
                finalized: false as boolean | Axis,
+               // Whether the point has only one edge.
+               loneEdge: false,
+               // If a Point's edges are aligned with exactly two Axes, we
+               // treat the Axes as a vector basis, which we use to move points
+               // according to a "rectangle resizing" algorithm.
                basis: null as null | Axis[],
                bannedAxis: null as null | Axis,
             }
          })
-         // Find all of the points whose edges are aligned with exactly two
-         // Axes. We can treat these two Axes as a vector basis, which allows
-         // us to use a different movement algorithm for these points that
-         // results in a manipulation that feels more like "resizing a
-         // rectangle" than our default algorithm (stretching and contracting).
+         // Gather some prerequisite data.
          for (let [point, edges] of circuitUndir) {
             let data = pointData.get(point)
             let possibleBasis: Axis[] = []
             for (let [_, axis] of edges) {
                if (!possibleBasis.includes(axis)) possibleBasis.push(axis)
             }
+            if (edges.size === 1) data.loneEdge = true
             if (possibleBasis.length === 2) data.basis = possibleBasis
          }
          // Move each grabbed point.
          for (let point of pointsGrabbed) {
-            moves.set(point, moveVector)
-            pointData.get(point).finalized = true
             propagateMovement(point, null)
          }
-         // Propagate the movement to the point's neighbours. If an axis is
-         // provided, only propagate the movement along edges of that axis.
-         function propagateMovement(pSource: Point, alongAxis: Axis | null) {
-            for (let [pTarget, traversalAxis] of circuitUndir.get(pSource)) {
-               let target = pointData.get(pTarget)
-               if (
-                  target.finalized === true ||
-                  target.finalized === traversalAxis ||
-                  (alongAxis !== null && alongAxis !== traversalAxis)
+         function propagateMovement(
+            currentPoint: Point, // The point we are moving.
+            edgeAxis: Axis | null // The axis of the edge we just followed.
+         ) {
+            let current = pointData.get(currentPoint)
+            let moveAlongAxis: Vector | null
+            let moveLoneEdge: Vector
+            if (current.basis && edgeAxis && edgeAxis !== current.bannedAxis) {
+               // Move in accordance with "rectangle resizing".
+               let axis0 = current.basis[0]
+               let axis1 = current.basis[1]
+               let otherAxis = edgeAxis === axis0 ? axis1 : axis0
+               // This is (part of) the formula for expressing a vector in
+               // terms of a new basis. We need it to determine how the (x,y)
+               // move vector can be expressed in terms of (edgeAxis,
+               // otherAxis). This tells us which way the point needs to move.
+               let movementAlongOtherAxis = otherAxis.scaleBy(
+                  (edgeAxis.x * moveVector.y - edgeAxis.y * moveVector.x) /
+                     (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
                )
+               moves.set(currentPoint, movementAlongOtherAxis)
+               current.finalized = edgeAxis
+               moveAlongAxis = edgeAxis
+               moveLoneEdge = movementAlongOtherAxis
+               // edgeAxis is now the only axis we are "allowed" to
+               // arrive at this point from. If we later arrive from the
+               // other axis, we will resort to moving rigidly.
+               current.bannedAxis = otherAxis
+            } else {
+               // Move rigidly.
+               moves.set(currentPoint, moveVector)
+               current.finalized = true
+               moveAlongAxis = null
+               moveLoneEdge = moveVector
+            }
+            let nextEdges = circuitUndir.get(currentPoint)
+            for (let [nextPoint, nextEdgeAxis] of nextEdges) {
+               let next = pointData.get(nextPoint)
+               if (next.finalized === true || next.finalized === nextEdgeAxis) {
                   continue
-               // Figure out which movement algorithm should be applied.
-               if (target.basis && traversalAxis !== target.bannedAxis) {
-                  // Use the "rectangle resizing" algorithm.
-                  let axis0 = target.basis[0]
-                  let axis1 = target.basis[1]
-                  let otherAxis = traversalAxis === axis0 ? axis1 : axis0
-                  // Formula for change of basis:
-                  let magnitude =
-                     (traversalAxis.x * moveVector.y -
-                        traversalAxis.y * moveVector.x) /
-                     (traversalAxis.x * otherAxis.y -
-                        traversalAxis.y * otherAxis.x)
-                  moves.set(pTarget, otherAxis.scaleBy(magnitude))
-                  target.finalized = traversalAxis
-                  // traversalAxis is now the only axis we are "allowed" to
-                  // arrive at pTarget from. If we arrive from the other axis,
-                  // we revert to the stretching & contracting algorithm.
-                  target.bannedAxis = otherAxis
-                  propagateMovement(pTarget, traversalAxis)
-               } else if (traversalAxis !== moveAxis) {
-                  // Propagate the movement.
-                  moves.set(pTarget, moveVector)
-                  target.finalized = true
-                  propagateMovement(pTarget, null)
-               } else continue // Absorb the movement.
+               } else if (next.loneEdge) {
+                  moves.set(nextPoint, moveLoneEdge)
+               } else if (
+                  moveAlongAxis === null ||
+                  moveAlongAxis === nextEdgeAxis
+               ) {
+                  propagateMovement(nextPoint, nextEdgeAxis)
+               }
             }
          }
       }
@@ -296,7 +308,7 @@
       // crucial to ensuring that the circuit Maps and Sets accurately reflect
       // the circuit topology.
       if (isDraw(event) && drawStart && drawEnd) {
-         if (!connected(drawStart, drawEnd)) {
+         if (drawStart !== drawEnd && !connected(drawStart, drawEnd)) {
             // Find the axis that the new edge aligns with.
             let newAxis = Axis.fromVector(drawEnd.displacementFrom(drawStart))
             let axis = tryRoundingToExistingAxis(newAxis)
@@ -323,7 +335,7 @@
    }}
 >
    <g>
-      {#if moveStart && moveEnd}
+      <!-- {#if moveStart && moveEnd}
          {#each pointsGrabbed as p}
             <line
                class="move"
@@ -333,7 +345,7 @@
                y2={p.y + moves.get(p).y}
             />
          {/each}
-      {/if}
+      {/if} -->
    </g>
 
    {#each [...circuitDir] as [start, edges]}
