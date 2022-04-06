@@ -1,44 +1,79 @@
-abstract class VecBase {
+abstract class VectorBase {
    readonly x: number
    readonly y: number
    constructor(x: number, y: number) {
       this.x = x
       this.y = y
    }
-   equals(v: this) {
-      return this.x == v.x && this.y == v.y
+   approxEquals(v: this, absoluteError: number) {
+      return (
+         v.x - absoluteError <= this.x &&
+         v.x + absoluteError >= this.x &&
+         v.y - absoluteError <= this.y &&
+         v.y + absoluteError >= this.y
+      )
    }
 }
 
-export class Vec extends VecBase {
-   static readonly zero = new Vec(0, 0)
+export class Vector extends VectorBase {
+   static readonly zero = new Vector(0, 0)
    sqLength(): number {
       return this.x * this.x + this.y * this.y
    }
    length(): number {
       return Math.sqrt(this.sqLength())
    }
-   direction(): Vec {
-      return this.scaleBy(1 / this.length())
+   scaleBy(s: number): Vector {
+      return new Vector(s * this.x, s * this.y)
    }
-   scaleBy(s: number): Vec {
-      return new Vec(s * this.x, s * this.y)
+   add(v: Vector): Vector {
+      return new Vector(this.x + v.x, this.y + v.y)
    }
-   add(v: Vec): Vec {
-      return new Vec(this.x + v.x, this.y + v.y)
+   sub(v: Vector): Vector {
+      return new Vector(this.x - v.x, this.y - v.y)
    }
-   sub(v: Vec): Vec {
-      return new Vec(this.x - v.x, this.y - v.y)
-   }
-   dot(v: Vec): number {
+   dot(v: Vector): number {
       return this.x * v.x + this.y * v.y
    }
-   projectionOnto(v: Vec): Vec {
+   projectionOnto(v: Vector): Vector {
       return v.scaleBy(this.dot(v) / v.dot(v))
    }
 }
 
-export class Point extends VecBase {
+function mod(x: number, y: number) {
+   return ((x % y) + y) % y
+}
+
+// We encode an axis as a unit vector with an angle between 0 and 180.
+export class Axis extends Vector {
+   static readonly horizontal = new Axis(1, 0)
+   static readonly vertical = new Axis(0, 1)
+   private constructor(x: number, y: number) {
+      super(x, y)
+   }
+   static fromAngle(radians: number): Axis {
+      // Ensure the angle is between 0 and 180.
+      radians = mod(radians, Math.PI)
+      return new Axis(Math.cos(radians), Math.sin(radians))
+   }
+   static fromVector(vec: Vector): Axis {
+      if (vec.y >= 0) {
+         let v = vec.scaleBy(1 / vec.length())
+         return new Axis(v.x, v.y)
+      } else {
+         let v = vec.scaleBy(-1 / vec.length())
+         return new Axis(v.x, v.y)
+      }
+   }
+   approxEquals(a: this, errorRatio: number): boolean {
+      return (
+         super.approxEquals(a, errorRatio) ||
+         super.approxEquals(a.scaleBy(-1) as this, errorRatio)
+      )
+   }
+}
+
+export class Point extends VectorBase {
    static readonly zero = new Point(0, 0)
    sqDistanceFrom(p: Point): number {
       let dx = this.x - p.x
@@ -48,11 +83,11 @@ export class Point extends VecBase {
    distanceFrom(p: Point): number {
       return Math.sqrt(this.sqDistanceFrom(p))
    }
-   displaceBy(v: Vec): Point {
+   displaceBy(v: Vector): Point {
       return new Point(this.x + v.x, this.y + v.y)
    }
-   displacementFrom(p: Point): Vec {
-      return new Vec(this.x - p.x, this.y - p.y)
+   displacementFrom(p: Point): Vector {
+      return new Vector(this.x - p.x, this.y - p.y)
    }
    clone(): Point {
       return new Point(this.x, this.y)
@@ -64,7 +99,7 @@ export class Point extends VecBase {
       ;(this.x as number) = x
       ;(this.y as number) = y
    }
-   moveBy(v: Vec): void {
+   moveBy(v: Vector): void {
       ;(this.x as number) += v.x
       ;(this.y as number) += v.y
    }
@@ -73,8 +108,8 @@ export class Point extends VecBase {
 // A line with one endpoint.
 export class Ray {
    readonly origin: Point
-   readonly dir: Vec
-   constructor(origin: Point, dir: Vec) {
+   readonly dir: Vector
+   constructor(origin: Point, dir: Vector) {
       this.origin = origin
       this.dir = dir
    }

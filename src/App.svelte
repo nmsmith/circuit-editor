@@ -1,28 +1,19 @@
 <script lang="ts">
-   import { Vec, Point, Ray, Segment } from "./math"
+   import { Vector, Point, Ray, Segment, Axis } from "./math"
    import { DefaultMap } from "./utilities"
-   // Angle constants
    const tau = 2 * Math.PI
    // Snapping
    const sqMaxSnapDistance = 15 * 15
-   const sqMinLengthToSnapToDir = 2 * sqMaxSnapDistance
+   const sqMinLengthToSnapToAxis = 2 * sqMaxSnapDistance
    const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
-   const snapAngles = [
-      // Angles used when snapping to an angle (ordered by priority)
-      0,
-      0.25 * tau,
-      0.5 * tau,
-      0.75 * tau,
-      0.125 * tau,
-      0.375 * tau,
-      0.625 * tau,
-      0.875 * tau,
+   const snapAxes = [
+      // Default axes used for snapping (ordered by priority)
+      Axis.horizontal,
+      Axis.vertical,
+      Axis.fromAngle(0.125 * tau), // 45 degrees
+      Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
-   const snapDirections = snapAngles.map((a) => {
-      return new Vec(Math.cos(a), Math.sin(a))
-   })
-
-   // Snap the point to a significant point in the scene, if possible.
+   // Snap the point to a nearby point of significance, if possible.
    // Otherwise, return the same point.
    function trySnappingToPoints(point: Point): Point {
       // Try snapping to segment endpoints.
@@ -37,21 +28,21 @@
       }
       return point
    }
-   // Snap the point to a nearby direction, if possible.
+   // Snap the point to a nearby axis of significance, if possible.
    // Otherwise, return the same point.
-   function trySnappingToDirections(
+   function trySnappingToAxes(
       point: Point,
       startPoint: Point,
-      snapDirs: Iterable<Vec>,
+      snapAxes: Iterable<Axis>,
       sqMinLengthToSnap: number
    ): Point {
-      const dir = point.displacementFrom(startPoint)
-      if (dir.sqLength() >= sqMinLengthToSnap) {
-         for (let dirSnap of snapDirs) {
-            const dirProjected = dir.projectionOnto(dirSnap)
-            const rejection = dir.sub(dirProjected)
+      const d = point.displacementFrom(startPoint)
+      if (d.sqLength() >= sqMinLengthToSnap) {
+         for (let axis of snapAxes) {
+            const dp = d.projectionOnto(axis)
+            const rejection = d.sub(dp)
             if (rejection.sqLength() < sqMaxSnapDistance) {
-               return startPoint.displaceBy(dirProjected)
+               return startPoint.displaceBy(dp)
             }
          }
       }
@@ -61,7 +52,7 @@
    // Otherwise, return the same point.
    function trySnappingToSegments(
       point: Point,
-      snapDirection?: Vec // If empty, we will just project onto the segment.
+      stretchAxis?: Axis
    ): [Point, Segment | null] {
       for (let [start, end] of segments()) {
          // Use coordinates relative to one endpoint of the segment.
@@ -77,17 +68,15 @@
             let rejection = p.sub(projection)
             if (rejection.sqLength() < sqMaxSnapDistance) {
                let target = new Segment(start, end)
-               // If we have been given a snap direction, and the angle
-               // between the segment and the snap direction is not too
-               // narrow, attempt to snap to that direction.
-               if (snapDirection) {
+               // If we have been given an axis to stretch along, and the
+               // angle between the segment and the axis is not too narrow,
+               // attempt to snap by stretching/contracting along that axis.
+               if (stretchAxis) {
                   let cosAngle =
-                     t.dot(snapDirection) /
-                     (t.length() * snapDirection.length())
+                     t.dot(stretchAxis) / (t.length() * stretchAxis.length())
                   if (Math.abs(cosAngle) <= cosMinimumSnapAngle) {
-                     let forward = new Ray(point, snapDirection)
-                     let backward = new Ray(point, snapDirection.scaleBy(-1))
-
+                     let forward = new Ray(point, stretchAxis)
+                     let backward = new Ray(point, stretchAxis.scaleBy(-1))
                      let intersection =
                         forward.intersection(target) ||
                         backward.intersection(target)
@@ -110,19 +99,41 @@
    // traversals. We store the circuit twice. The first encoding is directed,
    // so every edge is only stored once. This is necessary for some operations.
    // The second encoding is undirected, so every edge is stored twice. This
-   // is necessary for graph traversal operations.
-   let circuitDir: DefaultMap<Point, Set<Point>> = new DefaultMap(
-      () => new Set()
-   )
-   let circuitUndir: DefaultMap<Point, Set<Point>> = new DefaultMap(
-      () => new Set()
-   )
-   function* segments() {
-      for (let [start, ends] of circuitDir) {
-         for (let end of ends) {
+   // is necessary for graph traversal operations. Also, some operations need
+   // to know the Axis that an edge aligns with, so we record that too.
+   type EdgeOut = [Point, Axis]
+   type Circuit = DefaultMap<Point, Set<EdgeOut>>
+   let circuitDir: Circuit = new DefaultMap(() => new Set())
+   let circuitUndir: Circuit = new DefaultMap(() => new Set())
+   // Store the multiplicity of every axis in the circuit, so that if all the
+   // edges aligned to a given axis are removed, the axis is forgotten.
+   let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
+   // The error ratio (between 0 and 1) at which two axes should be considered
+   // parallel. This value has been chosen to approximately match when two
+   // lines *look* parallel to the human eye. But it can also be set lower.
+   // A non-zero tolerance is required to circumvent numerical error.
+   const axisErrorTolerance = 0.004
+   function tryRoundingToExistingAxis(subject: Axis): Axis {
+      for (let axis of snapAxes) {
+         if (subject.approxEquals(axis, axisErrorTolerance)) return axis
+      }
+      for (let [axis, _] of circuitAxes) {
+         if (subject.approxEquals(axis, axisErrorTolerance)) return axis
+      }
+      return subject
+   }
+   function* segments(): Generator<[Point, Point]> {
+      for (let [start, edges] of circuitDir) {
+         for (let [end, _] of edges) {
             yield [start, end]
          }
       }
+   }
+   function connected(p1: Point, p2: Point) {
+      for (let [p, _] of circuitUndir.get(p1)) {
+         if (p === p2) return true
+      }
+      return false
    }
    let segmentUnderMouse: Segment | null
    // The segment that defines the current metric used for drawing
@@ -134,7 +145,7 @@
    let pointsGrabbed: Point[] = []
    let moveStart: Point | null = null
    let moveEnd: Point | null = null
-   let moves: DefaultMap<Point, Vec>
+   let moves: DefaultMap<Point, Vector>
 
    $: {
       if (drawStart) {
@@ -143,64 +154,23 @@
          if (drawEnd === mouse) {
             // If no snapping occurred, try snapping to an angle and/or a
             // line segment instead.
-            drawEnd = trySnappingToDirections(
+            drawEnd = trySnappingToAxes(
                mouse,
                drawStart,
-               snapDirections,
-               sqMinLengthToSnapToDir
+               snapAxes,
+               sqMinLengthToSnapToAxis
             )
             ;[drawEnd] = trySnappingToSegments(
                drawEnd,
-               drawEnd.displacementFrom(drawStart)
+               Axis.fromVector(drawEnd.displacementFrom(drawStart))
             )
          }
       }
    }
    $: {
-      moves = new DefaultMap(() => Vec.zero)
+      moves = new DefaultMap(() => Vector.zero)
       if (moveStart) {
          moveEnd = mouse
-         // Compute how each point should move in response to the drag.
-
-         // First pass: find the directions to snap in.
-         let moveSnapDirs: Set<Vec> = new Set()
-         let visited: Set<Point> = new Set()
-         for (let point of pointsGrabbed) {
-            visited.add(point)
-            searchForDirections(point)
-         }
-         function searchForDirections(point: Point) {
-            for (let p of circuitUndir.get(point)) {
-               if (!visited.has(p)) {
-                  moveSnapDirs.add(p.displacementFrom(point).direction())
-                  visited.add(p)
-                  searchForDirections(p)
-               }
-            }
-         }
-         // Now, snap to a direction if possible.
-         moveEnd = trySnappingToDirections(moveEnd, moveStart, moveSnapDirs, 0)
-         // Second pass: compute movement given the snapping.
-         let moveVector = moveEnd.displacementFrom(moveStart)
-         for (let point of pointsGrabbed) {
-            moves.set(point, moveVector)
-            propagateMovement(point)
-         }
-         function propagateMovement(point: Point) {
-            for (let p of circuitUndir.get(point)) {
-               let segment = p.displacementFrom(point)
-               let rejection = moveVector.sub(
-                  moveVector.projectionOnto(segment)
-               )
-               // TODO: After implementing reference lines, turn this tolerance
-               // down.
-               const errorTolerance = 1
-               if (rejection.sqLength() > errorTolerance && !moves.has(p)) {
-                  moves.set(p, moveVector)
-                  propagateMovement(p)
-               }
-            }
-         }
       }
    }
    function isDraw(event: MouseEvent) {
@@ -253,16 +223,20 @@
       // crucial to ensuring that the circuit Maps and Sets accurately reflect
       // the circuit topology.
       if (isDraw(event) && drawStart && drawEnd) {
-         // Update the directed circuit.
-         // Don't add the segment "backwards" if it already appears forward.
-         if (!circuitDir.get(drawEnd).has(drawStart)) {
-            circuitDir.get(drawStart).add(drawEnd)
+         if (!connected(drawStart, drawEnd)) {
+            // Find the axis that the new edge aligns with.
+            let newAxis = Axis.fromVector(drawEnd.displacementFrom(drawStart))
+            let axis = tryRoundingToExistingAxis(newAxis)
+            circuitAxes.update(axis, (c) => c + 1)
+            console.log(circuitAxes)
+            // Update the directed circuit.
+            circuitDir.get(drawStart).add([drawEnd, axis])
+            circuitDir = circuitDir
+            // Update the undirected circuit.
+            circuitUndir.get(drawStart).add([drawEnd, axis])
+            circuitUndir.get(drawEnd).add([drawStart, axis])
+            circuitUndir = circuitUndir
          }
-         circuitDir = circuitDir
-         // Update the undirected circuit.
-         circuitUndir.get(drawStart).add(drawEnd)
-         circuitUndir.get(drawEnd).add(drawStart)
-         circuitUndir = circuitUndir
          // Reset the drawing state.
          drawStart = null
          drawEnd = null
@@ -290,8 +264,8 @@
       {/if}
    </g>
 
-   {#each [...circuitDir] as [start, ends]}
-      {#each [...ends] as end}
+   {#each [...circuitDir] as [start, edges]}
+      {#each [...edges] as [end, _]}
          <line
             class="wire"
             x1={start.x + moves.get(start).x}
