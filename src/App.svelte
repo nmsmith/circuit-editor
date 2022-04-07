@@ -1,13 +1,24 @@
 <script lang="ts">
    import { Vector, Point, Ray, Segment, Axis } from "./math"
    import { DefaultMap } from "./utilities"
+   // Math constants
    const tau = 2 * Math.PI
-   // Snapping
-   const sqMaxSnapDistance = 15 * 15
+   // Configurable constants
+   const minimumSegmentLength = 20
+   // The error ratio (between 0 and 1) at which two axes should be considered
+   // parallel. A non-zero tolerance is required to circumvent numerical error.
+   const axisErrorTolerance = 0.004
+   // Snapping constants
+   const maxSnapDistance = 15
+   const sqMaxSnapDistance = maxSnapDistance * maxSnapDistance
    const sqMinLengthToSnapToAxis = 2 * sqMaxSnapDistance
    const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
+   // Ruler constants
+   const rulerOpaqueDistance = maxSnapDistance // Max distance at which opaque
+   const rulerTransparentDistance = 60 // Min distance at which transparent
+   const rulerTransparencyTaper = rulerTransparentDistance * Math.SQRT2
+   // The default axes used for snapping (ordered by priority)
    const snapAxes = [
-      // Default axes used for snapping (ordered by priority)
       Axis.horizontal,
       Axis.vertical,
       Axis.fromAngle(0.125 * tau), // 45 degrees
@@ -33,11 +44,10 @@
    function trySnappingToAxes(
       point: Point,
       startPoint: Point,
-      snapAxes: Iterable<Axis>,
-      sqMinLengthToSnap: number
+      snapAxes: Iterable<Axis>
    ): Point {
       const d = point.displacementFrom(startPoint)
-      if (d.sqLength() >= sqMinLengthToSnap) {
+      if (d.sqLength() >= sqMinLengthToSnapToAxis) {
          for (let axis of snapAxes) {
             const dp = d.projectionOnto(axis)
             const rejection = d.sub(dp)
@@ -107,11 +117,7 @@
    // Store the multiplicity of every axis in the circuit, so that if all the
    // edges aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
-   // The error ratio (between 0 and 1) at which two axes should be considered
-   // parallel. This value has been chosen to approximately match when two
-   // lines *look* parallel to the human eye. But it can also be set lower.
-   // A non-zero tolerance is required to circumvent numerical error.
-   const axisErrorTolerance = 0.004
+
    function tryRoundingToExistingAxis(subject: Axis): Axis {
       for (let axis of snapAxes) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
@@ -145,7 +151,12 @@
    let moveStart: Point | null = null
    let moveEnd: Point | null = null
    let moves: DefaultMap<Point, Vector>
+   // Aids that indicate snap locations and axis alignment
+   type Ruler = { start: Point; end: Point; opacity: number }
+   let rulers: Ruler[] = []
+   let rulerTicks: Point[] = []
 
+   // ----- Compute the endpoint of the line being drawn -----
    $: {
       if (drawStart) {
          // Try snapping to a point of significance.
@@ -153,12 +164,15 @@
          if (drawEnd === mouse) {
             // If no snapping occurred, try snapping to an angle and/or a
             // line segment instead.
-            drawEnd = trySnappingToAxes(
-               mouse,
-               drawStart,
-               snapAxes,
-               sqMinLengthToSnapToAxis
-            )
+            function* axes() {
+               if (circuitUndir.has(drawStart as Point)) {
+                  for (let [_, axis] of circuitUndir.get(drawStart as Point)) {
+                     yield axis
+                  }
+               }
+               for (let axis of snapAxes) yield axis
+            }
+            drawEnd = trySnappingToAxes(mouse, drawStart, axes())
             ;[drawEnd] = trySnappingToSegments(
                drawEnd,
                Axis.fromVector(drawEnd.displacementFrom(drawStart))
@@ -166,6 +180,45 @@
          }
       }
    }
+   // ----- Compute the rulers associated with the line being drawn -----
+   $: {
+      rulers = []
+      if (drawStart && drawEnd) {
+         // Draw a ruler for each of the "standard" axes.
+         for (let axis of snapAxes) {
+            addRuler(drawStart, drawEnd, axis)
+            addRuler(drawStart, drawEnd, axis.scaleBy(-1))
+         }
+
+         // Draw a ruler for each edge incident to this point.
+         if (circuitUndir.has(drawStart)) {
+            for (let [point, axis] of circuitUndir.get(drawStart)) {
+               if (!snapAxes.includes(axis)) {
+                  addRuler(drawStart, drawEnd, axis)
+                  addRuler(drawStart, drawEnd, axis.scaleBy(-1))
+               }
+            }
+         }
+
+         function addRuler(dragStart: Point, dragEnd: Point, axis: Axis) {
+            let distance = new Ray(dragStart, axis).distanceFrom(
+               drawEnd as Point
+            )
+            // Taper the opacity at small drag distances.
+            let dragDistance = dragEnd.distanceFrom(dragStart)
+            let taper = Math.min(dragDistance / rulerTransparencyTaper, 1)
+            const od = taper * rulerOpaqueDistance
+            const td = taper * rulerTransparentDistance
+            let opacity =
+               taper === 0 ? 0 : taper * (1 - (distance - od) / (td - od))
+            let end = dragStart.displaceBy(axis.scaleBy(4000)) // Hack.
+            if (opacity > 0) {
+               rulers.push({ start: dragStart, end, opacity })
+            }
+         }
+      }
+   }
+   // ----- Compute the endpoint of the move operation underway -----
    $: {
       moves = new DefaultMap(() => Vector.zero)
       if (moveStart) {
@@ -174,9 +227,8 @@
             //for (let axis of circuitAxes.keys()) yield axis
             for (let axis of snapAxes) yield axis
          }
-         moveEnd = mouse //trySnappingToAxes(mouse, moveStart, axes(), 0)
+         moveEnd = trySnappingToAxes(mouse, moveStart, axes())
          let moveVector = moveEnd.displacementFrom(moveStart)
-         //let moveAxis = tryRoundingToExistingAxis(Axis.fromVector(moveVector))
 
          // Data we will need to maintain in the upcoming traversal.
          let pointData = new DefaultMap(() => {
@@ -271,16 +323,22 @@
          }
       }
    }
-   function isDraw(event: MouseEvent) {
+   function isDrawStart(event: MouseEvent) {
       // Left mouse button without the Shift key
       return event.button === 0 && !event.getModifierState("Shift")
    }
-   function isMove(event: MouseEvent) {
+   function isDrawEnd(event: MouseEvent) {
+      return event.button === 0
+   }
+   function isMoveStart(event: MouseEvent) {
       // Right mouse button, or left mouse button with the shift key
       return (
          event.button === 2 ||
          (event.button === 0 && event.getModifierState("Shift"))
       )
+   }
+   function isMoveEnd(event: MouseEvent) {
+      return event.button === 0 || event.button === 2
    }
 </script>
 
@@ -296,12 +354,12 @@
    on:pointerdown={(event) => {
       let clickPosition = new Point(event.clientX, event.clientY)
 
-      if (isDraw(event)) {
+      if (isDrawStart(event)) {
          drawStart = trySnappingToPoints(clickPosition)
          if (drawStart === clickPosition) {
             ;[drawStart] = trySnappingToSegments(drawStart)
          }
-      } else if (isMove(event)) {
+      } else if (isMoveStart(event)) {
          pointsGrabbed = []
          moveStart = trySnappingToPoints(clickPosition)
          if (moveStart === clickPosition) {
@@ -320,8 +378,11 @@
       // snapping, then they will refer to existing Point objects. This is
       // crucial to ensuring that the circuit Maps and Sets accurately reflect
       // the circuit topology.
-      if (isDraw(event) && drawStart && drawEnd) {
-         if (drawStart !== drawEnd && !connected(drawStart, drawEnd)) {
+      if (isDrawEnd(event) && drawStart && drawEnd) {
+         if (
+            drawStart.distanceFrom(drawEnd) >= minimumSegmentLength &&
+            !connected(drawStart, drawEnd)
+         ) {
             // Find the axis that the new edge aligns with.
             let newAxis = Axis.fromVector(drawEnd.displacementFrom(drawStart))
             let axis = tryRoundingToExistingAxis(newAxis)
@@ -337,7 +398,7 @@
          // Reset the drawing state.
          drawStart = null
          drawEnd = null
-      } else if (isMove(event) && moveStart && moveEnd) {
+      } else if (isMoveEnd(event) && moveStart && moveEnd) {
          // Commit the movement.
          for (let point of circuitUndir.keys()) {
             point.moveBy(moves.get(point))
@@ -348,17 +409,16 @@
    }}
 >
    <g>
-      <!-- {#if moveStart && moveEnd}
-         {#each pointsGrabbed as p}
-            <line
-               class="move"
-               x1={p.x}
-               y1={p.y}
-               x2={p.x + moves.get(p).x}
-               y2={p.y + moves.get(p).y}
-            />
-         {/each}
-      {/if} -->
+      {#each rulers as ruler}
+         <line
+            class="ruler"
+            x1={ruler.start.x}
+            y1={ruler.start.y}
+            x2={ruler.end.x}
+            y2={ruler.end.y}
+            opacity={ruler.opacity}
+         />
+      {/each}
    </g>
 
    {#each [...circuitDir] as [start, edges]}
@@ -404,8 +464,8 @@
       stroke: rgb(106, 2, 167);
       stroke-width: 2px;
    }
-   .move {
-      stroke: rgb(134, 186, 255);
-      stroke-width: 2px;
+   .ruler {
+      stroke: rgb(225, 225, 225);
+      stroke-width: 6px;
    }
 </style>

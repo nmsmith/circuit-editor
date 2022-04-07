@@ -38,6 +38,9 @@ export class Vector extends VectorBase {
    projectionOnto(v: Vector): Vector {
       return v.scaleBy(this.dot(v) / v.dot(v))
    }
+   scalarProjectionOnto(v: Vector): number {
+      return this.dot(v) / v.length()
+   }
 }
 
 function mod(x: number, y: number) {
@@ -121,6 +124,18 @@ export class Ray {
          this.origin.displaceBy(this.dir),
          true
       )
+   }
+   distanceFrom(point: Point): number {
+      let v = point.displacementFrom(this.origin)
+      let projection = v.projectionOnto(this.dir)
+      if (
+         Math.sign(projection.x) === Math.sign(this.dir.x) &&
+         Math.sign(projection.y) === Math.sign(this.dir.y)
+      ) {
+         return v.sub(projection).length()
+      } else {
+         return Math.sqrt(projection.sqLength() + v.sub(projection).sqLength())
+      }
    }
 }
 
