@@ -184,27 +184,40 @@
                // Whether the point's movement has been determined yet.
                finalized: false as boolean | Axis,
                // Whether the point has only one edge.
-               loneEdge: false,
+               loneEdge: null as null | EdgeOut,
                // If a Point's edges are aligned with exactly two Axes, we
                // treat the Axes as a vector basis, which we use to move points
-               // according to a "rectangle resizing" algorithm.
+               // according to a "rectangle/polygon resizing" algorithm.
                basis: null as null | Axis[],
                bannedAxis: null as null | Axis,
             }
          })
          // Gather some prerequisite data.
          for (let [point, edges] of circuitUndir) {
-            let data = pointData.get(point)
-            let possibleBasis: Axis[] = []
-            for (let [_, axis] of edges) {
-               if (!possibleBasis.includes(axis)) possibleBasis.push(axis)
+            let axes: Axis[] = []
+            let edge = null
+            for (edge of edges) {
+               let [_, axis] = edge
+               if (!axes.includes(axis)) axes.push(axis)
             }
-            if (edges.size === 1) data.loneEdge = true
-            if (possibleBasis.length === 2) data.basis = possibleBasis
+            if (edges.size === 1) pointData.get(point).loneEdge = edge
+            else if (axes.length === 2) pointData.get(point).basis = axes
          }
-         // Move each grabbed point.
-         for (let point of pointsGrabbed) {
-            propagateMovement(point, null)
+         // If we're grabbing a point with only one edge, alter the move vector
+         // so that the edge will be resized instead of "pushed".
+         let grabbed0 = pointData.get(pointsGrabbed[0])
+         if (pointsGrabbed.length === 1 && grabbed0.loneEdge) {
+            moves.set(pointsGrabbed[0], moveVector)
+            grabbed0.finalized = true
+            let [nextPoint, nextAxis] = grabbed0.loneEdge
+            // Only propagate the orthogonal component of the move vector.
+            moveVector = moveVector.sub(moveVector.projectionOnto(nextAxis))
+            propagateMovement(nextPoint, nextAxis)
+         } else {
+            // Move each grabbed point.
+            for (let point of pointsGrabbed) {
+               propagateMovement(point, null)
+            }
          }
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
@@ -214,7 +227,7 @@
             let moveAlongAxis: Vector | null
             let moveLoneEdge: Vector
             if (current.basis && edgeAxis && edgeAxis !== current.bannedAxis) {
-               // Move in accordance with "rectangle resizing".
+               // Move in accordance with "rectangle/polygon resizing".
                let axis0 = current.basis[0]
                let axis1 = current.basis[1]
                let otherAxis = edgeAxis === axis0 ? axis1 : axis0
