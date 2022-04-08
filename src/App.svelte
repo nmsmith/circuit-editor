@@ -29,12 +29,14 @@
    function trySnappingToPoints(point: Point): Point {
       // Try snapping to segment endpoints.
       for (let p of circuitUndir.keys()) {
-         if (p.sqDistanceFrom(point) < sqMaxSnapDistance) return p
+         if (p === draw?.start) continue
+         if (p.sqDistanceFrom(point) <= sqMaxSnapDistance) return p
       }
       // Try snapping to points along the reference segment.
       if (reference) {
          for (let p of reference.segment.points(reference.length - 1)) {
-            if (p.sqDistanceFrom(point) < sqMaxSnapDistance) return p
+            if (p === draw?.start) continue
+            if (p.sqDistanceFrom(point) <= sqMaxSnapDistance) return p
          }
       }
       return point
@@ -51,7 +53,7 @@
          for (let axis of snapAxes) {
             const dp = d.projectionOnto(axis)
             const rejection = d.sub(dp)
-            if (rejection.sqLength() < sqMaxSnapDistance) {
+            if (rejection.sqLength() <= sqMaxSnapDistance) {
                return startPoint.displaceBy(dp)
             }
          }
@@ -65,6 +67,7 @@
       stretchAxis?: Axis
    ): [Point, Segment | null] {
       for (let [start, end] of segments()) {
+         if (start === draw?.start || end === draw?.start) continue
          // Use coordinates relative to one endpoint of the segment.
          let p = point.displacementFrom(start)
          let t = end.displacementFrom(start)
@@ -72,33 +75,24 @@
          let dot = p.dot(t)
          // Only try snapping if the point's projection lies on the segment.
          // This occurs iff the dot product is in [0, lenSq].
-         if (dot >= 0 && dot <= sqLength) {
-            // Only snap if the point is sufficiently close to the segment.
-            let projection = t.scaleBy(dot / sqLength)
-            let rejection = p.sub(projection)
-            if (rejection.sqLength() < sqMaxSnapDistance) {
-               let target = new Segment(start, end)
-               // If we have been given an axis to stretch along, and the
-               // angle between the segment and the axis is not too narrow,
-               // attempt to snap by stretching/contracting along that axis.
-               if (stretchAxis) {
-                  let cosAngle = t.dot(stretchAxis) / t.length()
-                  if (Math.abs(cosAngle) <= cosMinimumSnapAngle) {
-                     let forward = new Ray(point, stretchAxis)
-                     let backward = new Ray(point, stretchAxis.scaleBy(-1))
-                     let intersection =
-                        forward.intersection(target) ||
-                        backward.intersection(target)
-                     if (intersection) {
-                        return [intersection, target]
-                     }
-                  }
-               } else {
-                  // Otherwise, snap in the direction of the projection.
-                  return [start.displaceBy(projection), target]
-               }
-            }
-         }
+         if (dot < 0 || dot > sqLength) continue
+         // Only snap if the point is sufficiently close to the segment.
+         let projection = t.scaleBy(dot / sqLength)
+         let rejection = p.sub(projection)
+         if (rejection.sqLength() > sqMaxSnapDistance) continue
+         // If we have been given an axis, attempt to snap by stretching along
+         // that axis. Otherwise, snap in the direction of the projection.
+         let target = new Segment(start, end)
+         if (stretchAxis) {
+            // Only snap if the angle is not too narrow.
+            let cosAngle = t.dot(stretchAxis) / t.length()
+            if (Math.abs(cosAngle) > cosMinimumSnapAngle) continue
+            let forward = new Ray(point, stretchAxis)
+            let backward = new Ray(point, stretchAxis.scaleBy(-1))
+            let intersection =
+               forward.intersection(target) || backward.intersection(target)
+            if (intersection) return [intersection, target]
+         } else return [start.displaceBy(projection), target]
       }
       return [point, null]
    }
@@ -145,12 +139,13 @@
    let reference: { segment: Segment; length: number } | null = null
    // Input state
    let mouse: Point = Point.zero
-   let drawStart: Point | null = null
-   let drawEnd: Point | null = null
+   let draw: { start: Point; end: Point; axis: Axis } | null = null
+   let move: {
+      start: Point
+      end: Point
+      vectors: DefaultMap<Point, Vector>
+   } | null = null
    let pointsGrabbed: Point[] = []
-   let moveStart: Point | null = null
-   let moveEnd: Point | null = null
-   let moves: DefaultMap<Point, Vector>
    // Aids that indicate snap locations and axis alignment
    type Ruler = { start: Point; end: Point; opacity: number }
    let rulers: Ruler[] = []
@@ -158,52 +153,48 @@
 
    // ----- Compute the endpoint of the line being drawn -----
    $: {
-      if (drawStart) {
+      if (draw) {
          // Try snapping to a point of significance.
-         drawEnd = trySnappingToPoints(mouse)
-         if (drawEnd === mouse) {
+         draw.end = trySnappingToPoints(mouse)
+         if (draw.end === mouse) {
             // If no snapping occurred, try snapping to an angle and/or a
             // line segment instead.
             function* axes() {
-               if (circuitUndir.has(drawStart as Point)) {
-                  for (let [_, axis] of circuitUndir.get(drawStart as Point)) {
+               if (circuitUndir.has(draw!.start)) {
+                  for (let [_, axis] of circuitUndir.get(draw!.start)) {
                      yield axis
                   }
                }
                for (let axis of snapAxes) yield axis
             }
-            drawEnd = trySnappingToAxes(mouse, drawStart, axes())
-            ;[drawEnd] = trySnappingToSegments(
-               drawEnd,
-               Axis.fromVector(drawEnd.displacementFrom(drawStart))
+            draw.end = trySnappingToAxes(mouse, draw.start, axes())
+            draw.axis = tryRoundingToExistingAxis(
+               Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
+            ;[draw.end] = trySnappingToSegments(draw.end, draw.axis)
          }
       }
    }
    // ----- Compute the rulers associated with the line being drawn -----
    $: {
       rulers = []
-      if (drawStart && drawEnd) {
+      if (draw) {
          // Draw a ruler for each of the "standard" axes.
          for (let axis of snapAxes) {
-            addRuler(drawStart, drawEnd, axis)
-            addRuler(drawStart, drawEnd, axis.scaleBy(-1))
+            addRuler(draw.start, draw.end, axis)
+            addRuler(draw.start, draw.end, axis.scaleBy(-1))
          }
-
          // Draw a ruler for each edge incident to this point.
-         if (circuitUndir.has(drawStart)) {
-            for (let [point, axis] of circuitUndir.get(drawStart)) {
+         if (circuitUndir.has(draw.start)) {
+            for (let [point, axis] of circuitUndir.get(draw.start)) {
                if (!snapAxes.includes(axis)) {
-                  addRuler(drawStart, drawEnd, axis)
-                  addRuler(drawStart, drawEnd, axis.scaleBy(-1))
+                  addRuler(draw.start, draw.end, axis)
+                  addRuler(draw.start, draw.end, axis.scaleBy(-1))
                }
             }
          }
-
          function addRuler(dragStart: Point, dragEnd: Point, axis: Axis) {
-            let distance = new Ray(dragStart, axis).distanceFrom(
-               drawEnd as Point
-            )
+            let distance = new Ray(dragStart, axis).distanceFrom(dragEnd)
             // Taper the opacity at small drag distances.
             let dragDistance = dragEnd.distanceFrom(dragStart)
             let taper = Math.min(dragDistance / rulerTransparencyTaper, 1)
@@ -220,15 +211,15 @@
    }
    // ----- Compute the endpoint of the move operation underway -----
    $: {
-      moves = new DefaultMap(() => Vector.zero)
-      if (moveStart) {
+      if (move) {
          // Snap the dragging to an axis if possible.
          function* axes() {
             //for (let axis of circuitAxes.keys()) yield axis
             for (let axis of snapAxes) yield axis
          }
-         moveEnd = trySnappingToAxes(mouse, moveStart, axes())
-         let moveVector = moveEnd.displacementFrom(moveStart)
+         move.end = trySnappingToAxes(mouse, move.start, axes())
+         move.vectors = new DefaultMap(() => Vector.zero)
+         let moveVector = move.end.displacementFrom(move.start)
 
          // Data we will need to maintain in the upcoming traversal.
          let pointData = new DefaultMap(() => {
@@ -259,7 +250,7 @@
          // so that the edge will be resized instead of "pushed".
          let grabbed0 = pointData.get(pointsGrabbed[0])
          if (pointsGrabbed.length === 1 && grabbed0.loneEdge) {
-            moves.set(pointsGrabbed[0], moveVector)
+            move.vectors.set(pointsGrabbed[0], moveVector)
             grabbed0.finalized = true
             let [nextPoint, nextAxis] = grabbed0.loneEdge
             // Only propagate the orthogonal component of the move vector.
@@ -291,7 +282,7 @@
                   (edgeAxis.x * moveVector.y - edgeAxis.y * moveVector.x) /
                      (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
                )
-               moves.set(currentPoint, movementAlongOtherAxis)
+               move!.vectors.set(currentPoint, movementAlongOtherAxis)
                current.finalized = edgeAxis
                moveAlongAxis = edgeAxis
                moveLoneEdge = movementAlongOtherAxis
@@ -301,7 +292,7 @@
                current.bannedAxis = otherAxis
             } else {
                // Move rigidly.
-               moves.set(currentPoint, moveVector)
+               move!.vectors.set(currentPoint, moveVector)
                current.finalized = true
                moveAlongAxis = null
                moveLoneEdge = moveVector
@@ -312,7 +303,7 @@
                if (next.finalized === true || next.finalized === nextEdgeAxis) {
                   continue
                } else if (next.loneEdge) {
-                  moves.set(nextPoint, moveLoneEdge)
+                  move!.vectors.set(nextPoint, moveLoneEdge)
                } else if (
                   moveAlongAxis === null ||
                   moveAlongAxis === nextEdgeAxis
@@ -355,56 +346,57 @@
       let clickPosition = new Point(event.clientX, event.clientY)
 
       if (isDrawStart(event)) {
-         drawStart = trySnappingToPoints(clickPosition)
-         if (drawStart === clickPosition) {
-            ;[drawStart] = trySnappingToSegments(drawStart)
+         draw = { start: clickPosition, end: clickPosition, axis: Axis.zero }
+         draw.start = trySnappingToPoints(clickPosition)
+         if (draw.start === clickPosition) {
+            ;[draw.start] = trySnappingToSegments(draw.start)
          }
       } else if (isMoveStart(event)) {
+         move = {
+            start: clickPosition,
+            end: clickPosition,
+            vectors: new DefaultMap(() => Vector.zero),
+         }
          pointsGrabbed = []
-         moveStart = trySnappingToPoints(clickPosition)
-         if (moveStart === clickPosition) {
+         move.start = trySnappingToPoints(clickPosition)
+         if (move.start === clickPosition) {
             let segment
-            ;[moveStart, segment] = trySnappingToSegments(moveStart)
+            ;[move.start, segment] = trySnappingToSegments(move.start)
             if (segment) {
                pointsGrabbed.push(segment.start, segment.end)
             }
          } else {
-            pointsGrabbed.push(moveStart)
+            pointsGrabbed.push(move.start)
          }
       }
    }}
    on:pointerup={(event) => {
-      // Note: if drawStart or drawEnd have been chosen as the result of
+      // Note: if draw.start or draw.end have been chosen as the result of
       // snapping, then they will refer to existing Point objects. This is
       // crucial to ensuring that the circuit Maps and Sets accurately reflect
       // the circuit topology.
-      if (isDrawEnd(event) && drawStart && drawEnd) {
+      if (isDrawEnd(event) && draw) {
          if (
-            drawStart.distanceFrom(drawEnd) >= minimumSegmentLength &&
-            !connected(drawStart, drawEnd)
+            draw.start.distanceFrom(draw.end) >= minimumSegmentLength &&
+            !connected(draw.start, draw.end)
          ) {
-            // Find the axis that the new edge aligns with.
-            let newAxis = Axis.fromVector(drawEnd.displacementFrom(drawStart))
-            let axis = tryRoundingToExistingAxis(newAxis)
-            circuitAxes.update(axis, (c) => c + 1)
+            circuitAxes.update(draw.axis, (c) => c + 1)
             // Update the directed circuit.
-            circuitDir.get(drawStart).add([drawEnd, axis])
+            circuitDir.get(draw.start).add([draw.end, draw.axis])
             circuitDir = circuitDir
             // Update the undirected circuit.
-            circuitUndir.get(drawStart).add([drawEnd, axis])
-            circuitUndir.get(drawEnd).add([drawStart, axis])
+            circuitUndir.get(draw.start).add([draw.end, draw.axis])
+            circuitUndir.get(draw.end).add([draw.start, draw.axis])
             circuitUndir = circuitUndir
          }
          // Reset the drawing state.
-         drawStart = null
-         drawEnd = null
-      } else if (isMoveEnd(event) && moveStart && moveEnd) {
+         draw = null
+      } else if (isMoveEnd(event) && move) {
          // Commit the movement.
          for (let point of circuitUndir.keys()) {
-            point.moveBy(moves.get(point))
+            point.moveBy(move.vectors.get(point))
          }
-         moveStart = null
-         moveEnd = null
+         move = null
       }
    }}
 >
@@ -421,28 +413,39 @@
       {/each}
    </g>
 
-   {#each [...circuitDir] as [start, edges]}
+   {#each [...circuitDir] as [st, edges]}
       {#each [...edges] as [end, _]}
-         <line
-            class="wire"
-            x1={start.x + moves.get(start).x}
-            y1={start.y + moves.get(start).y}
-            x2={end.x + moves.get(end).x}
-            y2={end.y + moves.get(end).y}
-         />
-         {#each [...new Segment(start, end).points(0)] as p}
-            <circle cx={p.x + moves.get(p).x} cy={p.y + moves.get(p).y} r={4} />
-         {/each}
+         {#if move}
+            <line
+               class="wire"
+               x1={st.x + move.vectors.get(st).x}
+               y1={st.y + move.vectors.get(st).y}
+               x2={end.x + move.vectors.get(end).x}
+               y2={end.y + move.vectors.get(end).y}
+            />
+            {#each [...new Segment(st, end).points(0)] as p}
+               <circle
+                  cx={p.x + move.vectors.get(p).x}
+                  cy={p.y + move.vectors.get(p).y}
+                  r={4}
+               />
+            {/each}
+         {:else}
+            <line class="wire" x1={st.x} y1={st.y} x2={end.x} y2={end.y} />
+            {#each [...new Segment(st, end).points(0)] as p}
+               <circle cx={p.x} cy={p.y} r={4} />
+            {/each}
+         {/if}
       {/each}
    {/each}
 
-   {#if drawStart && drawEnd}
+   {#if draw}
       <line
          class="wire"
-         x1={drawStart.x}
-         y1={drawStart.y}
-         x2={drawEnd.x}
-         y2={drawEnd.y}
+         x1={draw.start.x}
+         y1={draw.start.y}
+         x2={draw.end.x}
+         y2={draw.end.y}
       />
    {/if}
 </svg>
