@@ -28,7 +28,7 @@
    // Otherwise, return the same point.
    function trySnappingToPoints(point: Point): Point {
       // Try snapping to segment endpoints.
-      for (let p of circuitUndir.keys()) {
+      for (let p of circuit.keys()) {
          if (p === draw?.start) continue
          if (p.sqDistanceFrom(point) <= sqMaxSnapDistance) return p
       }
@@ -44,11 +44,11 @@
    // Snap the point to the first ruler that is sufficiently close.
    // If no ruler is sufficiently close, return the same point.
    function trySnappingToFirstRuler(point: Point): Point {
-      for (let ruler of activeRulers) {
-         let d = point.displacementFrom(ruler.line.origin)
-         let projection = d.projectionOnto(ruler.line.axis)
+      for (let { line } of activeRulers) {
+         let d = point.displacementFrom(line.origin)
+         let projection = d.projectionOnto(line.axis)
          if (d.sub(projection).sqLength() <= sqMaxSnapDistance) {
-            return ruler.line.origin.displaceBy(projection)
+            return line.origin.displaceBy(projection)
          }
       }
       return point
@@ -89,8 +89,8 @@
    function trySnappingToSegments(
       point: Point,
       stretchAxis?: Axis
-   ): [Point, Segment | null] {
-      for (let [start, end] of segments()) {
+   ): [Point, Segment | undefined] {
+      for (let { start, end } of segments) {
          if (start === draw?.start || end === draw?.start) continue
          // Use coordinates relative to one endpoint of the segment.
          let p = point.displacementFrom(start)
@@ -118,24 +118,49 @@
             if (intersection) return [intersection, target]
          } else return [start.displaceBy(projection), target]
       }
-      return [point, null]
+      return [point, undefined]
    }
 
    // --------------- State ---------------
-   // The circuit is stored as an adjacency list to enable efficient graph
-   // traversals. We store the circuit twice. The first encoding is directed,
-   // so every edge is only stored once. This is necessary for some operations.
-   // The second encoding is undirected, so every edge is stored twice. This
-   // is necessary for graph traversal operations. Also, some operations need
-   // to know the Axis that an edge aligns with, so we record that too.
+   // The primary encoding of the circuit is an adjacency list. This supports
+   // efficient graph traversals. Some operations need to know the Axis that
+   // an edge aligns with, so we record that as part of each edge.
    type EdgeOut = [Point, Axis]
    type Circuit = DefaultMap<Point, Set<EdgeOut>>
-   let circuitDir: Circuit = new DefaultMap(() => new Set())
-   let circuitUndir: Circuit = new DefaultMap(() => new Set())
-   // Store the multiplicity of every axis in the circuit, so that if all the
-   // edges aligned to a given axis are removed, the axis is forgotten.
+   let circuit: Circuit = new DefaultMap(() => new Set())
+   // As a supplementary encoding, we encode each segment directly. This
+   // supports operations that need to query segments.
+   let segments: Set<Segment> = new Set()
+   // We store the multiplicity of every axis in the circuit, so that if all
+   // the edges aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
 
+   function deleteSegment({ start, end }: Segment): void {
+      // Delete from "circuit"
+      let startEdges = circuit.get(start)
+      for (let edge of startEdges) {
+         if (edge[0] === end) {
+            startEdges.delete(edge)
+            if (startEdges.size === 0) circuit.delete(start)
+         }
+      }
+      let endEdges = circuit.get(end)
+      for (let edge of endEdges) {
+         if (edge[0] === start) {
+            endEdges.delete(edge)
+            if (endEdges.size === 0) circuit.delete(end)
+         }
+      }
+      // Delete from "segments"
+      for (let seg of segments) {
+         if (seg.start === start && seg.end === end) {
+            segments.delete(seg)
+            break
+         }
+      }
+      circuit = circuit
+      segments = segments
+   }
    function tryRoundingToExistingAxis(subject: Axis): Axis {
       for (let axis of snapAxes) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
@@ -145,15 +170,8 @@
       }
       return subject
    }
-   function* segments(): Generator<[Point, Point]> {
-      for (let [start, edges] of circuitDir) {
-         for (let [end, _] of edges) {
-            yield [start, end]
-         }
-      }
-   }
    function connected(p1: Point, p2: Point) {
-      for (let [p, _] of circuitUndir.get(p1)) {
+      for (let [p, _] of circuit.get(p1)) {
          if (p === p2) return true
       }
       return false
@@ -162,7 +180,14 @@
    let reference: { segment: Segment; length: number } | null = null
    // Input state
    let mouse: Point = Point.zero
-   let draw: { start: Point; end: Point; axis: Axis } | null = null
+   $: [_, segmentUnderMouse] = trySnappingToSegments(mouse)
+   let draw: {
+      start: Point
+      startSegment?: Segment
+      end: Point
+      endSegment?: Segment
+      axis: Axis
+   } | null = null
    let move: {
       points: Point[]
       start: Point
@@ -217,7 +242,7 @@
       }
       // If we couldn't snap to a point, try snapping to a segment.
       if (draw.start === clickPosition) {
-         ;[draw.start] = trySnappingToSegments(draw.start)
+         ;[draw.start, draw.startSegment] = trySnappingToSegments(draw.start)
       }
       let r: Set<Ruler> = new Set()
       // Create a ruler for each of the "standard" axes.
@@ -225,8 +250,8 @@
          r.add(new Ruler(draw.start, axis, "ray"))
       }
       // Create a ruler for each edge incident to the starting vertex (if any).
-      if (circuitUndir.has(draw.start)) {
-         for (let [_, axis] of circuitUndir.get(draw.start)) {
+      if (circuit.has(draw.start)) {
+         for (let [_, axis] of circuit.get(draw.start)) {
             if (!snapAxes.includes(axis)) {
                r.add(new Ruler(draw.start, axis, "ray"))
             }
@@ -245,7 +270,10 @@
             draw.axis = tryRoundingToExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
-            ;[draw.end] = trySnappingToSegments(draw.end, draw.axis)
+            ;[draw.end, draw.endSegment] = trySnappingToSegments(
+               draw.end,
+               draw.axis
+            )
          } else {
             draw.axis = tryRoundingToExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
@@ -262,14 +290,30 @@
          draw.start.distanceFrom(draw.end) >= minimumSegmentLength &&
          !connected(draw.start, draw.end)
       ) {
+         // Add the new segment
          circuitAxes.update(draw.axis, (c) => c + 1)
-         // Update the directed circuit.
-         circuitDir.get(draw.start).add([draw.end, draw.axis])
-         circuitDir = circuitDir
-         // Update the undirected circuit.
-         circuitUndir.get(draw.start).add([draw.end, draw.axis])
-         circuitUndir.get(draw.end).add([draw.start, draw.axis])
-         circuitUndir = circuitUndir
+         circuit.get(draw.start).add([draw.end, draw.axis])
+         circuit.get(draw.end).add([draw.start, draw.axis])
+         segments.add(new Segment(draw.start, draw.end))
+         // Bifurcate existing segments if necessary
+         if (draw.startSegment) bifurcate(draw.startSegment, draw.start)
+         if (draw.endSegment) bifurcate(draw.endSegment, draw.end)
+         function bifurcate(segment: Segment, bifurcationPoint: Point) {
+            deleteSegment(segment)
+            let { start, end } = segment
+            let axis = tryRoundingToExistingAxis(
+               Axis.fromVector(start.displacementFrom(end))
+            )
+            circuit.get(bifurcationPoint).add([start, axis])
+            circuit.get(start).add([bifurcationPoint, axis])
+            segments.add(new Segment(bifurcationPoint, start))
+            circuit.get(bifurcationPoint).add([end, axis])
+            circuit.get(end).add([bifurcationPoint, axis])
+            segments.add(new Segment(bifurcationPoint, end))
+         }
+         // Let Svelte know the circuit has changed
+         circuit = circuit
+         segments = segments
       }
       // Reset the drawing state.
       draw = null
@@ -304,7 +348,7 @@
          let axisIsStillCommon: DefaultMap<Axis, boolean> = new DefaultMap(
             () => false
          )
-         let edges = circuitUndir.get(point)
+         let edges = circuit.get(point)
          for (let [origin, edgeAxis] of edges) {
             // Ignore edges that aren't common to all grabbed points.
             if (!axisIsCommon.get(edgeAxis)) continue
@@ -327,7 +371,7 @@
             }
             if (!rulerFound) {
                let ruler
-               if (edges.size > 1 && circuitUndir.get(origin).size === 1) {
+               if (edges.size > 1 && circuit.get(origin).size === 1) {
                   // Some edge-cases to make rendering less noisy.
                   ruler =
                      move.points.length > 1
@@ -378,7 +422,7 @@
             }
          })
          // Gather some prerequisite data.
-         for (let [point, edges] of circuitUndir) {
+         for (let [point, edges] of circuit) {
             let axes: Axis[] = []
             let edge = null
             for (edge of edges) {
@@ -447,7 +491,7 @@
                moveAlongAxis = null
                moveLoneEdge = moveVector
             }
-            let nextEdges = circuitUndir.get(currentPoint)
+            let nextEdges = circuit.get(currentPoint)
             for (let [nextPoint, nextEdgeAxis] of nextEdges) {
                let next = pointData.get(nextPoint)
                if (next.finalized === true || next.finalized === nextEdgeAxis) {
@@ -467,7 +511,7 @@
    function endMove() {
       if (!move) return
       // Commit the movement.
-      for (let point of circuitUndir.keys()) {
+      for (let point of circuit.keys()) {
          point.moveBy(move.vectors.get(point))
       }
       move = null
@@ -475,6 +519,16 @@
    }
 </script>
 
+<svelte:window
+   on:keydown={(event) => {
+      if (event.key === "Backspace" || event.key === "Delete") {
+         if (segmentUnderMouse) {
+            deleteSegment(segmentUnderMouse)
+            segmentUnderMouse = undefined
+         }
+      }
+   }}
+/>
 <svg
    on:contextmenu={(event) => {
       // Disable the context menu.
@@ -538,32 +592,38 @@
          {/if}
       {/each}
    </g>
-
-   {#each [...circuitDir] as [st, edges]}
-      {#each [...edges] as [end, _]}
-         {#if move}
-            <line
-               class="wire"
-               x1={st.x + move.vectors.get(st).x}
-               y1={st.y + move.vectors.get(st).y}
-               x2={end.x + move.vectors.get(end).x}
-               y2={end.y + move.vectors.get(end).y}
+   {#if segmentUnderMouse && !draw && !move}
+      <line
+         class="wireHighlight"
+         x1={segmentUnderMouse.start.x}
+         y1={segmentUnderMouse.start.y}
+         x2={segmentUnderMouse.end.x}
+         y2={segmentUnderMouse.end.y}
+      />
+   {/if}
+   {#each [...segments] as { start, end }}
+      {#if move}
+         <line
+            class="wire"
+            x1={start.x + move.vectors.get(start).x}
+            y1={start.y + move.vectors.get(start).y}
+            x2={end.x + move.vectors.get(end).x}
+            y2={end.y + move.vectors.get(end).y}
+         />
+         {#each [...new Segment(start, end).points(0)] as p}
+            <circle
+               class="endPoint"
+               cx={p.x + move.vectors.get(p).x}
+               cy={p.y + move.vectors.get(p).y}
+               r={4}
             />
-            {#each [...new Segment(st, end).points(0)] as p}
-               <circle
-                  class="endPoint"
-                  cx={p.x + move.vectors.get(p).x}
-                  cy={p.y + move.vectors.get(p).y}
-                  r={4}
-               />
-            {/each}
-         {:else}
-            <line class="wire" x1={st.x} y1={st.y} x2={end.x} y2={end.y} />
-            {#each [...new Segment(st, end).points(0)] as p}
-               <circle class="endPoint" cx={p.x} cy={p.y} r={4} />
-            {/each}
-         {/if}
-      {/each}
+         {/each}
+      {:else}
+         <line class="wire" x1={start.x} y1={start.y} x2={end.x} y2={end.y} />
+         {#each [...new Segment(start, end).points(0)] as p}
+            <circle class="endPoint" cx={p.x} cy={p.y} r={4} />
+         {/each}
+      {/if}
    {/each}
 
    {#if draw}
@@ -597,6 +657,10 @@
    .wire {
       stroke: rgb(106, 2, 167);
       stroke-width: 2px;
+   }
+   .wireHighlight {
+      stroke: rgb(255, 220, 0);
+      stroke-width: 6px;
    }
    .endPoint {
       fill: black;
