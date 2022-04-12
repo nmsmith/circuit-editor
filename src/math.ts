@@ -123,6 +123,21 @@ export class Line {
    distanceFrom(point: Point): number {
       return Math.sqrt(this.sqDistanceFrom(point))
    }
+   intersection(line: Line): Point | null {
+      let grad1 = this.axis.y / this.axis.x
+      let grad2 = line.axis.y / line.axis.x
+      let intercept1 = this.origin.y - grad1 * this.origin.x
+      let intercept2 = line.origin.y - grad2 * line.origin.x
+      if (grad1 === grad2) return null
+      else if (!isFinite(grad1)) {
+         return new Point(this.origin.x, grad2 * this.origin.x + intercept2)
+      } else if (!isFinite(grad2)) {
+         return new Point(line.origin.x, grad1 * line.origin.x + intercept1)
+      } else {
+         let x = (intercept2 - intercept1) / (grad1 - grad2)
+         return new Point(x, grad1 * x + intercept1)
+      }
+   }
 }
 
 // A line that extends infinitely in (only) one direction.
@@ -157,6 +172,10 @@ export class Ray {
    distanceFrom(point: Point): number {
       return Math.sqrt(this.sqDistanceFrom(point))
    }
+   // Whether the given point projects onto the ray.
+   shadowedBy(point: Point): boolean {
+      return point.displacementFrom(this.origin).dot(this.direction) >= 0
+   }
 }
 
 // A line segment.
@@ -175,6 +194,13 @@ export class Segment {
    }
    intersection(seg: Segment): Point | null {
       return genericIntersection(this.start, this.end, seg.start, seg.end)
+   }
+   // Whether the given point projects onto the line segment.
+   shadowedBy(point: Point): boolean {
+      let dot = point
+         .displacementFrom(this.start)
+         .dot(this.end.displacementFrom(this.start))
+      return dot >= 0 && dot <= this.sqLength()
    }
    // Returns the endpoints of the segment, plus the specified number of
    // interior points (equally spaced).
