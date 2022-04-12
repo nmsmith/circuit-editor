@@ -1,5 +1,5 @@
 <script lang="ts">
-   import { Vector, Point, Ray, Segment, Axis } from "./math"
+   import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
    import { DefaultMap } from "./utilities"
    // Math constants
    const tau = 2 * Math.PI
@@ -11,12 +11,12 @@
    // Snapping constants
    const maxSnapDistance = 15
    const sqMaxSnapDistance = maxSnapDistance * maxSnapDistance
-   const sqMinLengthToSnapToAxis = 2 * sqMaxSnapDistance
+   const sqMinLengthForRulerSnap = 2 * sqMaxSnapDistance
    const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
    // Ruler constants
    const rulerOpaqueDistance = maxSnapDistance // Max distance at which opaque
    const rulerTransparentDistance = 60 // Min distance at which transparent
-   const rulerTransparencyTaper = rulerTransparentDistance * Math.SQRT2
+   const rulerTaperDistance = rulerTransparentDistance * Math.SQRT2
    // The default axes used for snapping (ordered by priority)
    const snapAxes = [
       Axis.horizontal,
@@ -41,20 +41,19 @@
       }
       return point
    }
-   // Snap the point to a nearby axis of significance, if possible.
+   // Snap the point to a nearby ruler, if possible.
    // Otherwise, return the same point.
-   function trySnappingToAxes(
+   function trySnappingToRulers(
       point: Point,
-      startPoint: Point,
-      snapAxes: Iterable<Axis>
+      snapAtSmallDistances: boolean
    ): Point {
-      const d = point.displacementFrom(startPoint)
-      if (d.sqLength() >= sqMinLengthToSnapToAxis) {
-         for (let axis of snapAxes) {
-            const dp = d.projectionOnto(axis)
-            const rejection = d.sub(dp)
-            if (rejection.sqLength() <= sqMaxSnapDistance) {
-               return startPoint.displaceBy(dp)
+      for (let ruler of activeRulers) {
+         let g = ruler.geometry
+         let d = point.displacementFrom(g.origin)
+         if (snapAtSmallDistances || d.sqLength() >= sqMinLengthForRulerSnap) {
+            let proj = d.projectionOnto(g instanceof Ray ? g.direction : g.axis)
+            if (d.sub(proj).sqLength() <= sqMaxSnapDistance) {
+               return g.origin.displaceBy(proj)
             }
          }
       }
@@ -134,91 +133,191 @@
       }
       return false
    }
-   let segmentUnderMouse: Segment | null
    // The segment that defines the current metric used for drawing
    let reference: { segment: Segment; length: number } | null = null
    // Input state
    let mouse: Point = Point.zero
    let draw: { start: Point; end: Point; axis: Axis } | null = null
    let move: {
+      points: Point[]
       start: Point
       end: Point
       vectors: DefaultMap<Point, Vector>
    } | null = null
-   let pointsGrabbed: Point[] = []
-   // Aids that indicate snap locations and axis alignment
-   type Ruler = { start: Point; end: Point; opacity: number }
-   let rulers: Ruler[] = []
-   let rulerTicks: Point[] = []
+   // Rulers that act as a visual indicator of snapping behaviour
+   type Ruler = {
+      geometry: Ray | Line
+      opacity: number
+      reference?: Point // reference point for opacity calculations
+   }
+   let activeRulers: Set<Ruler> = new Set()
 
-   // ----- Compute the endpoint of the line being drawn -----
-   $: {
+   function rulerOpacity(ruler: Ruler, cursor: Point): number {
+      if (ruler.geometry instanceof Ray) {
+         // Taper the opacity when the cursor is close to the origin.
+         // This prevents too many rays from appearing.
+         let taper =
+            cursor.distanceFrom(ruler.geometry.origin) / rulerTaperDistance
+         if (taper > 1) taper = 1
+         const od = taper * rulerOpaqueDistance
+         const td = taper * rulerTransparentDistance
+         let distance = ruler.geometry.distanceFrom(cursor)
+         return taper === 0 ? 0 : taper * (1 - (distance - od) / (td - od))
+      } else {
+         const od = rulerOpaqueDistance
+         const td = rulerTransparentDistance
+         let distance = ruler.geometry.distanceFrom(cursor)
+         return 1 - (distance - od) / (td - od)
+      }
+   }
+   function beginDraw(clickPosition: Point) {
+      draw = {
+         start: trySnappingToPoints(clickPosition),
+         end: clickPosition, // Updated elsewhere
+         axis: Axis.zero, // Updated elsewhere
+      }
+      // If we couldn't snap to a point, try snapping to a segment.
+      if (draw.start === clickPosition) {
+         ;[draw.start] = trySnappingToSegments(draw.start)
+      }
+      let r: Set<Ruler> = new Set()
+      // Create a ruler for each of the "standard" axes.
+      for (let axis of snapAxes) {
+         r.add({ geometry: new Ray(draw.start, axis), opacity: 1 })
+         axis = axis.scaleBy(-1)
+         r.add({ geometry: new Ray(draw.start, axis), opacity: 1 })
+      }
+      // Create a ruler for each edge incident to the starting vertex (if any).
+      if (circuitUndir.has(draw.start)) {
+         for (let [_, axis] of circuitUndir.get(draw.start)) {
+            if (!snapAxes.includes(axis)) {
+               r.add({ geometry: new Ray(draw.start, axis), opacity: 1 })
+               axis = axis.scaleBy(-1)
+               r.add({ geometry: new Ray(draw.start, axis), opacity: 1 })
+            }
+         }
+      }
+      activeRulers = r
+   }
+   // ----- Compute the state of an in-progress draw operation -----
+   $: /* On a change to 'draw' or 'mouse' */ {
       if (draw) {
-         // Try snapping to a point of significance.
          draw.end = trySnappingToPoints(mouse)
          if (draw.end === mouse) {
-            // If no snapping occurred, try snapping to an angle and/or a
-            // line segment instead.
-            function* axes() {
-               if (circuitUndir.has(draw!.start)) {
-                  for (let [_, axis] of circuitUndir.get(draw!.start)) {
-                     yield axis
-                  }
-               }
-               for (let axis of snapAxes) yield axis
-            }
-            draw.end = trySnappingToAxes(mouse, draw.start, axes())
+            draw.end = trySnappingToRulers(mouse, false)
             draw.axis = tryRoundingToExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
             ;[draw.end] = trySnappingToSegments(draw.end, draw.axis)
+         } else {
+            draw.axis = tryRoundingToExistingAxis(
+               Axis.fromVector(draw.end.displacementFrom(draw.start))
+            )
          }
+         // Update the opacity of rulers.
+         for (let ruler of activeRulers) {
+            ruler.opacity = rulerOpacity(ruler, draw.end)
+         }
+         activeRulers = activeRulers // Tell Svelte the state has changed.
       }
    }
-   // ----- Compute the rulers associated with the line being drawn -----
-   $: {
-      rulers = []
-      if (draw) {
-         // Draw a ruler for each of the "standard" axes.
-         for (let axis of snapAxes) {
-            addRuler(draw.start, draw.end, axis)
-            addRuler(draw.start, draw.end, axis.scaleBy(-1))
+   function endDraw() {
+      if (!draw) return
+      if (
+         draw.start.distanceFrom(draw.end) >= minimumSegmentLength &&
+         !connected(draw.start, draw.end)
+      ) {
+         circuitAxes.update(draw.axis, (c) => c + 1)
+         // Update the directed circuit.
+         circuitDir.get(draw.start).add([draw.end, draw.axis])
+         circuitDir = circuitDir
+         // Update the undirected circuit.
+         circuitUndir.get(draw.start).add([draw.end, draw.axis])
+         circuitUndir.get(draw.end).add([draw.start, draw.axis])
+         circuitUndir = circuitUndir
+      }
+      // Reset the drawing state.
+      draw = null
+      activeRulers = new Set()
+   }
+   function beginMove(clickPosition: Point) {
+      move = {
+         points: [],
+         start: trySnappingToPoints(clickPosition),
+         end: clickPosition, // Updated elsewhere
+         vectors: new DefaultMap(() => Vector.zero), // Updated elsewhere
+      }
+      if (move.start === clickPosition) {
+         let segment
+         ;[move.start, segment] = trySnappingToSegments(move.start)
+         if (segment) {
+            move.points.push(segment.start, segment.end)
          }
-         // Draw a ruler for each edge incident to this point.
-         if (circuitUndir.has(draw.start)) {
-            for (let [point, axis] of circuitUndir.get(draw.start)) {
-               if (!snapAxes.includes(axis)) {
-                  addRuler(draw.start, draw.end, axis)
-                  addRuler(draw.start, draw.end, axis.scaleBy(-1))
+      } else {
+         move.points.push(move.start)
+      }
+      // Create the rulers relevant to this move operation.
+      let rulersPerAxis: DefaultMap<Axis, Set<Ruler>> = new DefaultMap(
+         () => new Set()
+      )
+      let axisIsCommon: DefaultMap<Axis, boolean> = new DefaultMap(() => true)
+      for (let point of move.points) {
+         let axisIsStillCommon: DefaultMap<Axis, boolean> = new DefaultMap(
+            () => false
+         )
+         for (let [origin, edgeAxis] of circuitUndir.get(point)) {
+            if (!axisIsCommon.get(edgeAxis)) continue
+            axisIsStillCommon.set(edgeAxis, true)
+            let rulersForAxis = rulersPerAxis.get(edgeAxis)
+            let rulerFound = false
+            for (let ruler of rulersForAxis) {
+               let geometry = ruler.geometry
+               // Check if the two origins are on the same axis. If so,
+               // we don't need a new ruler.
+               let axisBetweenOrigins = tryRoundingToExistingAxis(
+                  Axis.fromVector(geometry.origin.displacementFrom(origin))
+               )
+               if (axisBetweenOrigins === edgeAxis) {
+                  // Rulers that are needed by two or more points should
+                  // be solid lines, rather than rays.
+                  if (geometry instanceof Ray) {
+                     ruler.geometry = new Line(
+                        geometry.origin,
+                        Axis.fromVector(geometry.direction)
+                     )
+                  }
+                  rulerFound = true
+                  break
                }
             }
-         }
-         function addRuler(dragStart: Point, dragEnd: Point, axis: Axis) {
-            let distance = new Ray(dragStart, axis).distanceFrom(dragEnd)
-            // Taper the opacity at small drag distances.
-            let dragDistance = dragEnd.distanceFrom(dragStart)
-            let taper = Math.min(dragDistance / rulerTransparencyTaper, 1)
-            const od = taper * rulerOpaqueDistance
-            const td = taper * rulerTransparentDistance
-            let opacity =
-               taper === 0 ? 0 : taper * (1 - (distance - od) / (td - od))
-            let end = dragStart.displaceBy(axis.scaleBy(4000)) // Hack.
-            if (opacity > 0) {
-               rulers.push({ start: dragStart, end, opacity })
+            if (!rulerFound) {
+               rulersForAxis.add({
+                  geometry: new Ray(origin, edgeAxis),
+                  opacity: 1,
+                  reference: point,
+               })
             }
+         }
+         axisIsCommon = axisIsStillCommon
+      }
+      // Use these rulers.
+      activeRulers = new Set()
+      for (let [axis, rulersForAxis] of rulersPerAxis) {
+         if (axisIsCommon.get(axis)) {
+            for (let ruler of rulersForAxis) activeRulers.add(ruler)
          }
       }
    }
-   // ----- Compute the endpoint of the move operation underway -----
-   $: {
+   // ----- Compute the state of an in-progress move operation -----
+   $: /* On a change to 'move' or 'mouse' */ {
       if (move) {
-         // Snap the dragging to an axis if possible.
-         function* axes() {
-            //for (let axis of circuitAxes.keys()) yield axis
-            for (let axis of snapAxes) yield axis
-         }
-         move.end = trySnappingToAxes(mouse, move.start, axes())
          move.vectors = new DefaultMap(() => Vector.zero)
+         // The active ruler set uses move.points[0] as its origin.
+         // Therefore, try snapping move.points[0] to one of these rulers.
+         // If it snaps, shift move.end accordingly.
+         let d = move.points[0].displacementFrom(move.start)
+         let m = mouse.displaceBy(d)
+         move.end = trySnappingToRulers(m, true).displaceBy(d.scaleBy(-1))
          let moveVector = move.end.displacementFrom(move.start)
 
          // Data we will need to maintain in the upcoming traversal.
@@ -248,9 +347,9 @@
          }
          // If we're grabbing a point with only one edge, alter the move vector
          // so that the edge will be resized instead of "pushed".
-         let grabbed0 = pointData.get(pointsGrabbed[0])
-         if (pointsGrabbed.length === 1 && grabbed0.loneEdge) {
-            move.vectors.set(pointsGrabbed[0], moveVector)
+         let grabbed0 = pointData.get(move.points[0])
+         if (move.points.length === 1 && grabbed0.loneEdge) {
+            move.vectors.set(move.points[0], moveVector)
             grabbed0.finalized = true
             let [nextPoint, nextAxis] = grabbed0.loneEdge
             // Only propagate the orthogonal component of the move vector.
@@ -258,10 +357,18 @@
             propagateMovement(nextPoint, nextAxis)
          } else {
             // Move each grabbed point.
-            for (let point of pointsGrabbed) {
+            for (let point of move.points) {
                propagateMovement(point, null)
             }
          }
+         // Update the opacity of rulers.
+         for (let ruler of activeRulers) {
+            let ref = ruler.reference as Point
+            let refDisplaced = ref.displaceBy(move.vectors.get(ref))
+            ruler.opacity = rulerOpacity(ruler, refDisplaced)
+         }
+         activeRulers = activeRulers // Tell Svelte the state has changed.
+
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
             edgeAxis: Axis | null // The axis of the edge we just followed.
@@ -314,22 +421,14 @@
          }
       }
    }
-   function isDrawStart(event: MouseEvent) {
-      // Left mouse button without the Shift key
-      return event.button === 0 && !event.getModifierState("Shift")
-   }
-   function isDrawEnd(event: MouseEvent) {
-      return event.button === 0
-   }
-   function isMoveStart(event: MouseEvent) {
-      // Right mouse button, or left mouse button with the shift key
-      return (
-         event.button === 2 ||
-         (event.button === 0 && event.getModifierState("Shift"))
-      )
-   }
-   function isMoveEnd(event: MouseEvent) {
-      return event.button === 0 || event.button === 2
+   function endMove() {
+      if (!move) return
+      // Commit the movement.
+      for (let point of circuitUndir.keys()) {
+         point.moveBy(move.vectors.get(point))
+      }
+      move = null
+      activeRulers = new Set()
    }
 </script>
 
@@ -344,72 +443,57 @@
    }}
    on:pointerdown={(event) => {
       let clickPosition = new Point(event.clientX, event.clientY)
-
-      if (isDrawStart(event)) {
-         draw = { start: clickPosition, end: clickPosition, axis: Axis.zero }
-         draw.start = trySnappingToPoints(clickPosition)
-         if (draw.start === clickPosition) {
-            ;[draw.start] = trySnappingToSegments(draw.start)
-         }
-      } else if (isMoveStart(event)) {
-         move = {
-            start: clickPosition,
-            end: clickPosition,
-            vectors: new DefaultMap(() => Vector.zero),
-         }
-         pointsGrabbed = []
-         move.start = trySnappingToPoints(clickPosition)
-         if (move.start === clickPosition) {
-            let segment
-            ;[move.start, segment] = trySnappingToSegments(move.start)
-            if (segment) {
-               pointsGrabbed.push(segment.start, segment.end)
-            }
-         } else {
-            pointsGrabbed.push(move.start)
-         }
-      }
+      if (
+         // Left mouse button
+         event.button === 0 &&
+         !event.getModifierState("Shift")
+      )
+         beginDraw(clickPosition)
+      else if (
+         // Right mouse button, or shift + left mouse button
+         event.button === 2 ||
+         (event.getModifierState("Shift") && event.button === 0)
+      )
+         beginMove(clickPosition)
    }}
    on:pointerup={(event) => {
-      // Note: if draw.start or draw.end have been chosen as the result of
-      // snapping, then they will refer to existing Point objects. This is
-      // crucial to ensuring that the circuit Maps and Sets accurately reflect
-      // the circuit topology.
-      if (isDrawEnd(event) && draw) {
-         if (
-            draw.start.distanceFrom(draw.end) >= minimumSegmentLength &&
-            !connected(draw.start, draw.end)
-         ) {
-            circuitAxes.update(draw.axis, (c) => c + 1)
-            // Update the directed circuit.
-            circuitDir.get(draw.start).add([draw.end, draw.axis])
-            circuitDir = circuitDir
-            // Update the undirected circuit.
-            circuitUndir.get(draw.start).add([draw.end, draw.axis])
-            circuitUndir.get(draw.end).add([draw.start, draw.axis])
-            circuitUndir = circuitUndir
-         }
-         // Reset the drawing state.
-         draw = null
-      } else if (isMoveEnd(event) && move) {
-         // Commit the movement.
-         for (let point of circuitUndir.keys()) {
-            point.moveBy(move.vectors.get(point))
-         }
-         move = null
-      }
+      if (event.button === 0) endDraw()
+      if (event.button === 0 || event.button === 2) endMove()
    }}
 >
    <g>
-      {#each rulers as ruler}
-         <line
-            class="ruler"
-            x1={ruler.start.x}
-            y1={ruler.start.y}
-            x2={ruler.end.x}
-            y2={ruler.end.y}
-            opacity={ruler.opacity}
-         />
+      {#each [...activeRulers] as ruler}
+         {#if ruler.geometry instanceof Ray}
+            <line
+               class="ruler"
+               x1={ruler.geometry.origin.x}
+               y1={ruler.geometry.origin.y}
+               x2={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.direction.scaleBy(4000)
+               ).x}
+               y2={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.direction.scaleBy(4000)
+               ).y}
+               opacity={ruler.opacity}
+            />
+         {:else}
+            <line
+               class="ruler"
+               x1={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.axis.scaleBy(-4000)
+               ).x}
+               y1={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.axis.scaleBy(-4000)
+               ).y}
+               x2={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.axis.scaleBy(4000)
+               ).x}
+               y2={ruler.geometry.origin.displaceBy(
+                  ruler.geometry.axis.scaleBy(4000)
+               ).y}
+               opacity={ruler.opacity}
+            />
+         {/if}
       {/each}
    </g>
 
@@ -425,6 +509,7 @@
             />
             {#each [...new Segment(st, end).points(0)] as p}
                <circle
+                  class="endPoint"
                   cx={p.x + move.vectors.get(p).x}
                   cy={p.y + move.vectors.get(p).y}
                   r={4}
@@ -433,7 +518,7 @@
          {:else}
             <line class="wire" x1={st.x} y1={st.y} x2={end.x} y2={end.y} />
             {#each [...new Segment(st, end).points(0)] as p}
-               <circle cx={p.x} cy={p.y} r={4} />
+               <circle class="endPoint" cx={p.x} cy={p.y} r={4} />
             {/each}
          {/if}
       {/each}
@@ -447,6 +532,14 @@
          x2={draw.end.x}
          y2={draw.end.y}
       />
+      <!-- {#each [...Array(60).keys()].map((i) => i - 30) as i}
+         <circle
+            class="snapPoint"
+            cx={draw.start.displaceBy(draw.axis.scaleBy(60 * (i + 1))).x}
+            cy={draw.start.displaceBy(draw.axis.scaleBy(60 * (i + 1))).y}
+            r={4}
+         />
+      {/each} -->
    {/if}
 </svg>
 
@@ -458,14 +551,18 @@
    svg {
       width: 100%;
       height: 100%;
-      fill: green;
-   }
-   circle {
-      fill: black;
    }
    .wire {
       stroke: rgb(106, 2, 167);
       stroke-width: 2px;
+   }
+   .endPoint {
+      fill: black;
+   }
+   .snapPoint {
+      stroke-width: 1px;
+      stroke: black;
+      fill: rgb(225, 225, 225);
    }
    .ruler {
       stroke: rgb(225, 225, 225);

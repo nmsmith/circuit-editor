@@ -108,38 +108,58 @@ export class Point extends VectorBase {
    }
 }
 
-// A line with one endpoint.
+// A line of infinite length.
+export class Line {
+   readonly origin: Point
+   readonly axis: Axis
+   constructor(origin: Point, axis: Vector) {
+      this.origin = origin
+      this.axis = axis
+   }
+   sqDistanceFrom(point: Point): number {
+      let d = point.displacementFrom(this.origin)
+      return d.sub(d.projectionOnto(this.axis)).sqLength()
+   }
+   distanceFrom(point: Point): number {
+      return Math.sqrt(this.sqDistanceFrom(point))
+   }
+}
+
+// A line that extends infinitely in (only) one direction.
 export class Ray {
    readonly origin: Point
-   readonly dir: Vector
+   readonly direction: Vector
    constructor(origin: Point, dir: Vector) {
       this.origin = origin
-      this.dir = dir
+      this.direction = dir
    }
    intersection(target: Segment): Point | null {
       return genericIntersection(
          target.start,
          target.end,
          this.origin,
-         this.origin.displaceBy(this.dir),
+         this.origin.displaceBy(this.direction),
          true
       )
    }
-   distanceFrom(point: Point): number {
-      let v = point.displacementFrom(this.origin)
-      let projection = v.projectionOnto(this.dir)
+   sqDistanceFrom(point: Point): number {
+      let d = point.displacementFrom(this.origin)
+      let projection = d.projectionOnto(this.direction)
       if (
-         Math.sign(projection.x) === Math.sign(this.dir.x) &&
-         Math.sign(projection.y) === Math.sign(this.dir.y)
+         Math.sign(projection.x) === Math.sign(this.direction.x) &&
+         Math.sign(projection.y) === Math.sign(this.direction.y)
       ) {
-         return v.sub(projection).length()
+         return d.sub(projection).sqLength()
       } else {
-         return Math.sqrt(projection.sqLength() + v.sub(projection).sqLength())
+         return projection.sqLength() + d.sub(projection).sqLength()
       }
+   }
+   distanceFrom(point: Point): number {
+      return Math.sqrt(this.sqDistanceFrom(point))
    }
 }
 
-// A line with two endpoints.
+// A line segment.
 export class Segment {
    readonly start: Point
    readonly end: Point
