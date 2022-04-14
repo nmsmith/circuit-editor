@@ -3,7 +3,8 @@
    import { DefaultMap } from "./utilities"
    import Wire from "./Wire.svelte"
    import Endpoint from "./Endpoint.svelte"
-   import RulerLine from "./RulerLine.svelte"
+   import RulerHTML from "./Ruler.svelte"
+   import { Ruler } from "./Ruler.svelte"
    // Math constants
    const tau = 2 * Math.PI
    // Configurable constants
@@ -17,9 +18,7 @@
    const sqMinLengthForRulerSnap = 2 * sqMaxSnapDistance
    const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
    // Ruler constants
-   const rulerOpaqueDistance = maxSnapDistance // Max distance at which opaque
-   const rulerTransparentDistance = 60 // Min distance at which transparent
-   const rulerTaperDistance = rulerTransparentDistance * Math.SQRT2
+
    // The default axes used for snapping (ordered by priority)
    const snapAxes = [
       Axis.horizontal,
@@ -228,42 +227,6 @@
       }
    }
    // Rulers that act as a visual indicator of snapping behaviour
-   class Ruler {
-      readonly line: Line
-      render: "line" | "ray" | "none"
-      opacity: number
-      rayDirection?: "forward" | "backward"
-      constructor(origin: Point, axis: Axis, render: "line" | "ray" | "none") {
-         this.line = new Line(origin, axis)
-         this.render = render
-         this.opacity = 1
-      }
-      setOpacity(refPoint: Point): void {
-         let distance = this.line.distanceFrom(refPoint)
-         if (this.render === "line") {
-            const od = rulerOpaqueDistance
-            const td = rulerTransparentDistance
-            this.opacity = 1 - (distance - od) / (td - od)
-         } else {
-            // Figure out which way the ray should be pointing.
-            let ray = new Ray(this.line.origin, this.line.axis)
-            this.rayDirection = ray.shadowedBy(refPoint)
-               ? "forward"
-               : "backward"
-            // Taper the opacity when the cursor is close to the origin.
-            // This prevents too many rays from appearing.
-            let originDistance = refPoint.distanceFrom(this.line.origin)
-            if (originDistance === 0) {
-               this.opacity = 0
-            } else {
-               let taper = Math.min(originDistance / rulerTaperDistance, 1)
-               const od = taper * rulerOpaqueDistance
-               const td = taper * rulerTransparentDistance
-               this.opacity = taper * (1 - (distance - od) / (td - od))
-            }
-         }
-      }
-   }
    let activeRulers: Set<Ruler> = new Set()
 
    function beginDraw(clickPosition: Point) {
@@ -602,18 +565,8 @@
    }}
 >
    <g>
-      {#each [...activeRulers] as { line, render, rayDirection, opacity }}
-         {@const pos = line.origin.displaceBy(line.axis.scaleBy(+9001))}
-         {@const neg = line.origin.displaceBy(line.axis.scaleBy(-9001))}
-         {#if render === "line"}
-            <RulerLine start={neg} end={pos} {opacity} />
-         {:else if render === "ray"}
-            {#if rayDirection === "forward"}
-               <RulerLine start={line.origin} end={pos} {opacity} />
-            {:else}
-               <RulerLine start={line.origin} end={neg} {opacity} />
-            {/if}
-         {/if}
+      {#each [...activeRulers] as ruler}
+         <RulerHTML {ruler} />
       {/each}
    </g>
    {#each [...segments] as segment}
