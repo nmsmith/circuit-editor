@@ -1,6 +1,9 @@
 <script lang="ts">
    import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
    import { DefaultMap } from "./utilities"
+   import Wire from "./Wire.svelte"
+   import Endpoint from "./Endpoint.svelte"
+   import RulerLine from "./RulerLine.svelte"
    // Math constants
    const tau = 2 * Math.PI
    // Configurable constants
@@ -90,11 +93,12 @@
       point: Point,
       stretchAxis?: Axis
    ): [Point, Segment | undefined] {
-      for (let { start, end } of segments) {
-         if (start === draw?.start || end === draw?.start) continue
+      for (let target of segments) {
+         if (target.start === draw?.start || target.end === draw?.start)
+            continue
          // Use coordinates relative to one endpoint of the segment.
-         let p = point.displacementFrom(start)
-         let t = end.displacementFrom(start)
+         let p = point.displacementFrom(target.start)
+         let t = target.end.displacementFrom(target.start)
          let sqLength = t.sqLength()
          let dot = p.dot(t)
          // Only try snapping if the point's projection lies on the segment.
@@ -106,7 +110,6 @@
          if (rejection.sqLength() > sqMaxSnapDistance) continue
          // If we have been given an axis, attempt to snap by stretching along
          // that axis. Otherwise, snap in the direction of the projection.
-         let target = new Segment(start, end)
          if (stretchAxis) {
             // Only snap if the angle is not too narrow.
             let cosAngle = t.dot(stretchAxis) / t.length()
@@ -116,7 +119,7 @@
             let intersection =
                forward.intersection(target) || backward.intersection(target)
             if (intersection) return [intersection, target]
-         } else return [start.displaceBy(projection), target]
+         } else return [target.start.displaceBy(projection), target]
       }
       return [point, undefined]
    }
@@ -190,21 +193,49 @@
    let reference: { segment: Segment; length: number } | null = null
    // Input state
    let mouse: Point = Point.zero
-   $: [_, segmentUnderMouse] = trySnappingToSegments(mouse)
    let draw: {
       start: Point
+      startIsNew: boolean
       startSegment?: Segment
       end: Point
+      endIsNew: boolean
       endSegment?: Segment
       axis: Axis
    } | null = null
    let move: {
       points: Point[]
+      segments: Segment[]
       start: Point
       end: Point
       vectors: DefaultMap<Point, Vector>
       rulerGenerators: DefaultMap<Ruler, Point>
    } | null = null
+   let highlighted: Set<Point | Segment>
+   let highlightedForDeletion: Segment | null
+   $: {
+      highlighted = new Set()
+      highlightedForDeletion = null
+      if (draw) {
+         if (!draw.startIsNew) highlighted.add(draw.start)
+         if (!draw.endIsNew) highlighted.add(draw.end)
+         if (draw.startSegment) highlighted.add(draw.startSegment)
+         if (draw.endSegment) highlighted.add(draw.endSegment)
+      } else if (move) {
+         for (let point of move.points) highlighted.add(point)
+         for (let segment of move.segments) highlighted.add(segment)
+      } else {
+         let p = trySnappingToPoints(mouse)
+         if (p === mouse) {
+            let s = trySnappingToSegments(mouse)[1]
+            if (s) {
+               highlighted.add(s)
+               highlightedForDeletion = s
+            }
+         } else {
+            highlighted.add(p)
+         }
+      }
+   }
    // Rulers that act as a visual indicator of snapping behaviour
    class Ruler {
       readonly line: Line
@@ -247,11 +278,14 @@
    function beginDraw(clickPosition: Point) {
       draw = {
          start: trySnappingToPoints(clickPosition),
+         startIsNew: false,
          end: clickPosition, // Updated elsewhere
+         endIsNew: false,
          axis: Axis.zero, // Updated elsewhere
       }
       // If we couldn't snap to a point, try snapping to a segment.
       if (draw.start === clickPosition) {
+         draw.startIsNew = true
          ;[draw.start, draw.startSegment] = trySnappingToSegments(draw.start)
       }
       let r: Set<Ruler> = new Set()
@@ -273,8 +307,10 @@
    $: /* On a change to 'draw' or 'mouse' */ {
       if (draw) {
          draw.end = trySnappingToPoints(mouse)
+         draw.endIsNew = false
          draw.endSegment = undefined
          if (draw.end === mouse) {
+            draw.endIsNew = true
             if (mouse.sqDistanceFrom(draw.start) >= sqMinLengthForRulerSnap) {
                draw.end = trySnappingToFirstRuler(mouse)
             }
@@ -334,6 +370,7 @@
    function beginMove(clickPosition: Point) {
       move = {
          points: [],
+         segments: [],
          start: trySnappingToPoints(clickPosition),
          end: clickPosition, // Updated elsewhere
          vectors: new DefaultMap(() => Vector.zero), // Updated elsewhere
@@ -344,6 +381,7 @@
          ;[move.start, segment] = trySnappingToSegments(move.start)
          if (segment) {
             move.points.push(segment.start, segment.end)
+            move.segments.push(segment)
          } else {
             move = null
             return
@@ -534,9 +572,8 @@
 <svelte:window
    on:keydown={(event) => {
       if (event.key === "Backspace" || event.key === "Delete") {
-         if (segmentUnderMouse) {
-            deleteSegment(segmentUnderMouse)
-            segmentUnderMouse = undefined
+         if (highlightedForDeletion) {
+            deleteSegment(highlightedForDeletion)
          }
       }
    }}
@@ -572,88 +609,38 @@
 >
    <g>
       {#each [...activeRulers] as { line, render, rayDirection, opacity }}
+         {@const pos = line.origin.displaceBy(line.axis.scaleBy(+9001))}
+         {@const neg = line.origin.displaceBy(line.axis.scaleBy(-9001))}
          {#if render === "line"}
-            <line
-               class="ruler"
-               x1={line.origin.displaceBy(line.axis.scaleBy(-4000)).x}
-               y1={line.origin.displaceBy(line.axis.scaleBy(-4000)).y}
-               x2={line.origin.displaceBy(line.axis.scaleBy(4000)).x}
-               y2={line.origin.displaceBy(line.axis.scaleBy(4000)).y}
-               {opacity}
-            />
+            <RulerLine start={neg} end={pos} {opacity} />
          {:else if render === "ray"}
             {#if rayDirection === "forward"}
-               <line
-                  class="ruler"
-                  x1={line.origin.x}
-                  y1={line.origin.y}
-                  x2={line.origin.displaceBy(line.axis.scaleBy(4000)).x}
-                  y2={line.origin.displaceBy(line.axis.scaleBy(4000)).y}
-                  {opacity}
-               />
+               <RulerLine start={line.origin} end={pos} {opacity} />
             {:else}
-               <line
-                  class="ruler"
-                  x1={line.origin.x}
-                  y1={line.origin.y}
-                  x2={line.origin.displaceBy(line.axis.scaleBy(-4000)).x}
-                  y2={line.origin.displaceBy(line.axis.scaleBy(-4000)).y}
-                  {opacity}
-               />
+               <RulerLine start={line.origin} end={neg} {opacity} />
             {/if}
          {/if}
       {/each}
    </g>
-   {#if segmentUnderMouse && !draw && !move}
-      <line
-         class="wireHighlight"
-         x1={segmentUnderMouse.start.x}
-         y1={segmentUnderMouse.start.y}
-         x2={segmentUnderMouse.end.x}
-         y2={segmentUnderMouse.end.y}
-      />
-   {/if}
-   {#each [...segments] as { start, end }}
-      {#if move}
-         <line
-            class="wire"
-            x1={start.x + move.vectors.get(start).x}
-            y1={start.y + move.vectors.get(start).y}
-            x2={end.x + move.vectors.get(end).x}
-            y2={end.y + move.vectors.get(end).y}
-         />
-         {#each [...new Segment(start, end).points(0)] as p}
-            <circle
-               class="endPoint"
-               cx={p.x + move.vectors.get(p).x}
-               cy={p.y + move.vectors.get(p).y}
-               r={4}
-            />
-         {/each}
-      {:else}
-         <line class="wire" x1={start.x} y1={start.y} x2={end.x} y2={end.y} />
-         {#each [...new Segment(start, end).points(0)] as p}
-            <circle class="endPoint" cx={p.x} cy={p.y} r={4} />
-         {/each}
-      {/if}
+   {#each [...segments] as segment}
+      {@const start = move
+         ? segment.start.displaceBy(move.vectors.get(segment.start))
+         : segment.start}
+      {@const end = move
+         ? segment.end.displaceBy(move.vectors.get(segment.end))
+         : segment.end}
+      <Wire {start} {end} highlighted={highlighted.has(segment)} />
+      <Endpoint position={start} highlighted={highlighted.has(segment.start)} />
+      <Endpoint position={end} highlighted={highlighted.has(segment.end)} />
    {/each}
 
    {#if draw}
-      <line
-         class="wire"
-         x1={draw.start.x}
-         y1={draw.start.y}
-         x2={draw.end.x}
-         y2={draw.end.y}
+      <Wire start={draw.start} end={draw.end} />
+      <Endpoint
+         position={draw.start}
+         highlighted={highlighted.has(draw.start)}
       />
-      <!-- {#each [...Array(60).keys()].map((i) => i - 30) as i}
-         <circle
-            class="snapPoint"
-            cx={draw.start.displaceBy(draw.axis.scaleBy(60 * (i + 1))).x}
-            cy={draw.start.displaceBy(draw.axis.scaleBy(60 * (i + 1))).y}
-            r={4}
-         />
-      {/each} -->
+      <Endpoint position={draw.end} highlighted={highlighted.has(draw.end)} />
    {/if}
 </svg>
 
@@ -662,28 +649,13 @@
       height: 100%;
       margin: 0px;
    }
+   :global(.highlight) {
+      /* used by multiple components */
+      fill: rgb(255, 215, 0);
+      stroke: rgb(255, 215, 0);
+   }
    svg {
       width: 100%;
       height: 100%;
-   }
-   .wire {
-      stroke: rgb(106, 2, 167);
-      stroke-width: 2px;
-   }
-   .wireHighlight {
-      stroke: rgb(255, 220, 0);
-      stroke-width: 6px;
-   }
-   .endPoint {
-      fill: black;
-   }
-   .snapPoint {
-      stroke-width: 1px;
-      stroke: black;
-      fill: rgb(225, 225, 225);
-   }
-   .ruler {
-      stroke: rgb(225, 225, 225);
-      stroke-width: 6px;
    }
 </style>
