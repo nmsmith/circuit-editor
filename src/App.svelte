@@ -35,13 +35,6 @@
          if (p === draw?.start) continue
          if (p.sqDistanceFrom(point) <= sqMaxSnapDistance) return p
       }
-      // Try snapping to points along the reference segment.
-      if (reference) {
-         for (let p of reference.segment.points(reference.length - 1)) {
-            if (p === draw?.start) continue
-            if (p.sqDistanceFrom(point) <= sqMaxSnapDistance) return p
-         }
-      }
       return point
    }
    // Snap the point to the first ruler that is sufficiently close.
@@ -189,8 +182,6 @@
       }
       return false
    }
-   // The segment that defines the current metric used for drawing
-   let reference: { segment: Segment; length: number } | null = null
    // Input state
    let mouse: Point = Point.zero
    let draw: {
@@ -585,10 +576,13 @@
       return false
    }}
    on:pointermove={(event) => {
-      mouse = new Point(event.clientX, event.clientY)
+      mouse = new Point(Math.round(event.clientX), Math.round(event.clientY))
    }}
    on:pointerdown={(event) => {
-      let clickPosition = new Point(event.clientX, event.clientY)
+      let clickPosition = new Point(
+         Math.round(event.clientX),
+         Math.round(event.clientY)
+      )
       if (
          // Left mouse button
          event.button === 0 &&
@@ -647,15 +641,22 @@
 <style>
    :global(html, body, #app) {
       height: 100%;
-      margin: 0px;
+      margin: 0;
+   }
+   :global(.fluidLine) {
+      fill: blue;
+      stroke: blue;
+      stroke-width: 0;
    }
    :global(.highlight) {
-      /* used by multiple components */
       fill: rgb(255, 215, 0);
       stroke: rgb(255, 215, 0);
    }
    svg {
       width: 100%;
       height: 100%;
+      /* shift the image so that 3px lines render without aliasing */
+      transform: translate(0.5px, 0.5px);
+      background-color: rgb(193, 195, 199);
    }
 </style>

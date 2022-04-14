@@ -5,12 +5,9 @@
 </script>
 
 {#if highlighted}
-   <circle class="highlight" cx={position.x} cy={position.y} r={7} />
+   <circle class="highlight" cx={position.x} cy={position.y} r={8} />
 {/if}
-<circle class="endpoint" cx={position.x} cy={position.y} r={4} />
+<circle class="fluidLine" cx={position.x} cy={position.y} r={6} />
 
 <style>
-   .endpoint {
-      fill: black;
-   }
 </style>
