@@ -98,8 +98,8 @@
          let sqLength = t.sqLength()
          let dot = p.dot(t)
          // Only try snapping if the point's projection lies on the segment.
-         // This occurs iff the dot product is in [0, lenSq].
-         if (dot < 0 || dot > sqLength) continue
+         // This occurs iff the dot product is in [0, sqLength).
+         if (dot < 0 || dot >= sqLength) continue
          // Only snap if the point is sufficiently close to the segment.
          let projection = t.scaleBy(dot / sqLength)
          let rejection = p.sub(projection)
@@ -157,6 +157,16 @@
             segments.delete(seg)
             break
          }
+      }
+      // Delete from "circuitAxes"
+      let axis = tryRoundingToExistingAxis(
+         Axis.fromVector(start.displacementFrom(end))
+      )
+      let count = circuitAxes.get(axis)
+      if (count > 1) {
+         circuitAxes.set(axis, count - 1)
+      } else {
+         circuitAxes.delete(axis)
       }
       circuit = circuit
       segments = segments
@@ -263,6 +273,7 @@
    $: /* On a change to 'draw' or 'mouse' */ {
       if (draw) {
          draw.end = trySnappingToPoints(mouse)
+         draw.endSegment = undefined
          if (draw.end === mouse) {
             if (mouse.sqDistanceFrom(draw.start) >= sqMinLengthForRulerSnap) {
                draw.end = trySnappingToFirstRuler(mouse)
@@ -291,10 +302,10 @@
          !connected(draw.start, draw.end)
       ) {
          // Add the new segment
-         circuitAxes.update(draw.axis, (c) => c + 1)
          circuit.get(draw.start).add([draw.end, draw.axis])
          circuit.get(draw.end).add([draw.start, draw.axis])
          segments.add(new Segment(draw.start, draw.end))
+         circuitAxes.update(draw.axis, (c) => c + 1)
          // Bifurcate existing segments if necessary
          if (draw.startSegment) bifurcate(draw.startSegment, draw.start)
          if (draw.endSegment) bifurcate(draw.endSegment, draw.end)
@@ -310,6 +321,7 @@
             circuit.get(bifurcationPoint).add([end, axis])
             circuit.get(end).add([bifurcationPoint, axis])
             segments.add(new Segment(bifurcationPoint, end))
+            circuitAxes.update(axis, (c) => c + 2)
          }
          // Let Svelte know the circuit has changed
          circuit = circuit
