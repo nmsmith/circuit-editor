@@ -16,7 +16,6 @@ abstract class VectorBase {
 }
 
 export class Vector extends VectorBase {
-   static readonly zero = new Vector(0, 0)
    sqLength(): number {
       return this.x * this.x + this.y * this.y
    }
@@ -25,6 +24,9 @@ export class Vector extends VectorBase {
    }
    scaleBy(s: number): Vector {
       return new Vector(s * this.x, s * this.y)
+   }
+   normalize(): Vector {
+      return this.scaleBy(1 / this.length())
    }
    add(v: Vector): Vector {
       return new Vector(this.x + v.x, this.y + v.y)
@@ -47,20 +49,23 @@ function mod(x: number, y: number) {
    return ((x % y) + y) % y
 }
 
-// We encode an axis as a unit vector with an angle between 0 and 180.
+// We encode an axis as a unit vector with an angle in [-90, 90).
 export class Axis extends Vector {
    static readonly horizontal = new Axis(1, 0)
-   static readonly vertical = new Axis(0, 1)
+   static readonly vertical = new Axis(0, -1)
    private constructor(x: number, y: number) {
       super(x, y)
    }
    static fromAngle(radians: number): Axis {
-      // Ensure the angle is between 0 and 180.
-      radians = mod(radians, Math.PI)
+      // Ensure the angle is in [-90, 90).
+      const quarterTurn = Math.PI / 2
+      radians = mod(radians + quarterTurn, Math.PI) - quarterTurn
       return new Axis(Math.cos(radians), Math.sin(radians))
    }
-   static fromVector(vec: Vector): Axis {
-      if (vec.y >= 0) {
+   static fromVector(vec: Vector): Axis | undefined {
+      if (vec.x === 0 && vec.y === 0) {
+         return undefined
+      } else if (vec.x > 0 || (vec.x === 0 && vec.y < 0)) {
          let v = vec.scaleBy(1 / vec.length())
          return new Axis(v.x, v.y)
       } else {
