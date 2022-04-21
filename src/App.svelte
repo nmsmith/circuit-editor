@@ -10,7 +10,6 @@
    const zeroVector = new Vector(0, 0)
    // Configurable constants
    const sqMinSegmentLength = 15 * 15
-   const cosMinimumSnapAngle = Math.cos(tau / 25) // When snapping to a segment
    // The error ratio (between 0 and 1) at which two axes should be considered
    // parallel. A non-zero tolerance is required to circumvent numerical error.
    const axisErrorTolerance = 0.004
@@ -27,9 +26,12 @@
       Axis.fromAngle(0.125 * tau), // 45 degrees
       Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
+   function canSnap(source: Point, target: Point): boolean {
+      return source.sqDistanceFrom(target) < sqSnapRadius
+   }
    // If the target is close enough, snap to it.
    function snapToTarget(source: Point, target?: Point): Point | undefined {
-      if (target && source.sqDistanceFrom(target) < sqSnapRadius) {
+      if (target && canSnap(source, target)) {
          return target
       } else return undefined
    }
@@ -102,64 +104,44 @@
       }
       return closest
    }
-   // Find the closest segment to the given point that satisfies all of the
-   // criteria for snapping/easing to be possible. (These functions are more
-   // complicated than the other "closest X" functions, because the closest
-   // segment is not necessarily the segment that should be eased towards.)
-   function closestSnappableSegment(
+   // Find the closest segment to the given point (if any).
+   function closestSegment(
       point: Point,
-      stretchAxis?: Axis
-   ): { segment: Segment; point: Point } | undefined {
-      let s = closestEasableSegment(point, stretchAxis)
-      if (s && point.sqDistanceFrom(s.point) < sqSnapRadius) return s
-      else return undefined
-   }
-   function closestEasableSegment(
-      point: Point,
-      stretchAxis?: Axis
+      alongAxis?: Axis
    ): { segment: Segment; point: Point } | undefined {
       let closest:
          | { segment: Segment; point: Point; sqDistance: number }
          | undefined
       for (let segment of segments) {
-         if (segment.start === draw?.start || segment.end === draw?.start)
-            continue
-         // Use coordinates relative to one endpoint of the segment.
          let p = point.displacementFrom(segment.start)
-         let t = segment.end.displacementFrom(segment.start)
-         let sqLength = t.sqLength()
-         let dot = p.dot(t)
+         let s = segment.end.displacementFrom(segment.start)
+         let sqLength = s.sqLength()
+         let dot = p.dot(s)
          // Only consider the segment if the point's projection lies on it.
          // This occurs iff the dot product is in [0, sqLength).
          if (dot < 0 || dot >= sqLength) continue
-         // Only consider the segment if the point is sufficiently close to it.
-         let projection = t.scaleBy(dot / sqLength)
-         let sqDistance = p.sub(projection).sqLength()
-         if (sqDistance >= sqEaseRadius) continue
-         if (closest && sqDistance >= closest.sqDistance) continue
-         // If we have been given an axis, find the closest point along that
-         // axis. Otherwise, treat the projection as the closest point.
-         if (stretchAxis) {
-            // Only consider the segment if the angle is not too narrow.
-            let cosAngle = t.dot(stretchAxis) / t.length()
-            if (Math.abs(cosAngle) > cosMinimumSnapAngle) continue
-            let forward = new Ray(point, stretchAxis)
-            let backward = new Ray(point, stretchAxis.scaleBy(-1))
+         let rejection = s.scaleBy(dot / sqLength).sub(p)
+         let current
+         if (alongAxis && rejection.sqLength() > 0.001) {
+            let forward = new Ray(point, alongAxis)
+            let backward = new Ray(point, alongAxis.scaleBy(-1))
             let intersection =
                forward.intersection(segment) || backward.intersection(segment)
-            if (
-               intersection &&
-               point.sqDistanceFrom(intersection) < sqEaseRadius
-            ) {
-               closest = { segment, point: intersection, sqDistance }
+            if (intersection) {
+               let sqDistance = point.sqDistanceFrom(intersection)
+               current = { segment, point: intersection, sqDistance }
             }
          } else {
-            closest = {
+            current = {
                segment,
-               point: segment.start.displaceBy(projection),
-               sqDistance,
+               point: point.displaceBy(rejection),
+               sqDistance: rejection.sqLength(),
             }
          }
+         closest =
+            current && (!closest || current.sqDistance < closest.sqDistance)
+               ? current
+               : closest
       }
       return closest
    }
@@ -226,6 +208,7 @@
       return subject
    }
    function connected(p1: Point, p2: Point) {
+      if (!circuit.has(p1)) return false
       for (let [p, _] of circuit.get(p1)) {
          if (p === p2) return true
       }
@@ -268,8 +251,8 @@
          if (p) {
             highlighted.add(p)
          } else {
-            let s = closestSnappableSegment(mouse)
-            if (s) {
+            let s = closestSegment(mouse)
+            if (s && canSnap(mouse, s.point)) {
                highlighted.add(s.segment)
                highlightedForDeletion = s.segment
             }
@@ -290,13 +273,22 @@
          }
       } else {
          // If we couldn't snap to an endpoint, try snapping to a segment.
-         let s = closestSnappableSegment(clickPosition)
-         draw = {
-            start: s ? s.point : clickPosition,
-            startIsNew: true,
-            startSegment: s?.segment,
-            end: s ? s.point : clickPosition, // Updated elsewhere
-            endIsNew: false,
+         let s = closestSegment(clickPosition)
+         if (s && canSnap(clickPosition, s.point)) {
+            draw = {
+               start: s.point,
+               startIsNew: true,
+               startSegment: s.segment,
+               end: s.point, // Updated elsewhere
+               endIsNew: true,
+            }
+         } else {
+            draw = {
+               start: clickPosition,
+               startIsNew: true,
+               end: clickPosition, // Updated elsewhere
+               endIsNew: true,
+            }
          }
       }
       let r: Set<Ruler> = new Set()
@@ -327,24 +319,33 @@
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
          } else {
-            // Ease out of zero length.
             draw.end =
+               // Ease out of zero length.
                mouse.sqDistanceFrom(draw.start) < sqEaseRadius
                   ? easeToTarget(mouse, draw.start).point
                   : easeToEndpoint.point
-            draw.end = easeToTarget(
+            let easeToRuler = easeToTarget(
                draw.end,
                closestRuler(draw.end)?.point
-            ).point
+            )
+            draw.end = easeToRuler.point
+            let s =
+               // If snapped to a ruler, ease along the ruler's axis.
+               easeToRuler.outcome === "snapped"
+                  ? closestSegment(
+                       draw.end,
+                       Axis.fromVector(draw.end.displacementFrom(draw.start))
+                    )
+                  : closestSegment(draw.end)
+            if (s) {
+               let ease = easeToTarget(draw.end, s.point)
+               draw.end = ease.point
+               if (ease.outcome === "snapped") draw.endSegment = s.segment
+            }
             draw.endIsNew = true
             draw.axis = tryRoundingToExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
-            let s = closestEasableSegment(draw.end, draw.axis)
-            let ease = easeToTarget(draw.end, s?.point)
-            let snap = snapToTarget(draw.end, s?.point)
-            if (ease) draw.end = ease.point
-            if (snap) draw.endSegment = s?.segment
          }
          // Update the opacity of rulers.
          for (let ruler of activeRulers) ruler.setOpacity(draw.end)
@@ -356,7 +357,14 @@
       if (
          draw.start.sqDistanceFrom(draw.end) >= sqMinSegmentLength &&
          draw.axis &&
-         !connected(draw.start, draw.end)
+         !connected(draw.start, draw.end) &&
+         (!draw.startSegment ||
+            (draw.startSegment !== draw.endSegment &&
+               draw.startSegment.start !== draw.end &&
+               draw.startSegment.end !== draw.end)) &&
+         (!draw.endSegment ||
+            (draw.endSegment.start !== draw.start &&
+               draw.endSegment.end !== draw.start))
       ) {
          // Add the new segment
          circuit.get(draw.start).add([draw.end, draw.axis])
@@ -403,8 +411,8 @@
             rulerGenerators: new DefaultMap(() => Point.zero),
          }
       } else {
-         let s = closestSnappableSegment(clickPosition)
-         if (s) {
+         let s = closestSegment(clickPosition)
+         if (s && canSnap(clickPosition, s.point)) {
             move = {
                points: [s.segment.start, s.segment.end],
                segments: [s.segment],
@@ -478,8 +486,8 @@
    $: /* On a change to 'move' or 'mouse' */ {
       if (move) {
          move.vectors = new DefaultMap(() => zeroVector)
-         // Ease out of zero movement.
          move.end =
+            // Ease out of zero movement.
             mouse.sqDistanceFrom(move.start) < sqEaseRadius
                ? easeToTarget(mouse, move.start).point
                : mouse
