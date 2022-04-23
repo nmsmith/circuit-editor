@@ -1,6 +1,6 @@
 <script lang="ts">
    import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
-   import { DefaultMap } from "./utilities"
+   import { DefaultMap, ToggleSet } from "./utilities"
    import Wire from "./Wire.svelte"
    import Endpoint from "./Endpoint.svelte"
    import RulerHTML from "./Ruler.svelte"
@@ -28,12 +28,6 @@
    ]
    function canSnap(source: Point, target: Point): boolean {
       return source.sqDistanceFrom(target) < sqSnapRadius
-   }
-   // If the target is close enough, snap to it.
-   function snapToTarget(source: Point, target?: Point): Point | undefined {
-      if (target && canSnap(source, target)) {
-         return target
-      } else return undefined
    }
    // ✨ A magical easing function for aesthetically-pleasing snapping. We
    // displace the source from its true position as it approaches the target.
@@ -216,23 +210,34 @@
    }
    // Input state
    let mouse: Point = Point.zero
-   let draw: {
-      start: Point
-      startIsNew: boolean
-      startSegment?: Segment
-      end: Point
-      endIsNew: boolean
-      endSegment?: Segment
-      axis?: Axis
-   } | null = null
-   let move: {
-      points: Point[]
-      segments: Segment[]
-      start: Point
-      end: Point
-      vectors: DefaultMap<Point, Vector>
-      rulerGenerators: DefaultMap<Ruler, Point>
-   } | null = null
+   let cursor: "auto" | "grab" | "grabbing" | "cell"
+   $: {
+      if (move) {
+         cursor = "grabbing"
+      } else {
+         cursor = "auto"
+         let near: Point | Segment | undefined
+         let point = closestEndpoint(mouse)
+         if (point && canSnap(mouse, point)) {
+            near = point
+         } else {
+            let s = closestSegment(mouse)
+            if (s && canSnap(mouse, s.point)) {
+               near = s.segment
+            }
+         }
+         if (near) {
+            if (selected.has(near)) {
+               cursor = waitingForDrag ? "grabbing" : "grab"
+            } else if (selected.size > 0) {
+               cursor = "cell"
+            }
+         } else {
+            cursor = "auto"
+         }
+      }
+   }
+   let waitingForDrag: Point | null = null
    let highlighted: Set<Point | Segment>
    let highlightedForDeletion: Segment | null
    $: {
@@ -243,13 +248,10 @@
          if (!draw.endIsNew) highlighted.add(draw.end)
          if (draw.startSegment) highlighted.add(draw.startSegment)
          if (draw.endSegment) highlighted.add(draw.endSegment)
-      } else if (move) {
-         for (let point of move.points) highlighted.add(point)
-         for (let segment of move.segments) highlighted.add(segment)
-      } else {
-         let p = snapToTarget(mouse, closestEndpoint(mouse))
-         if (p) {
-            highlighted.add(p)
+      } else if (!move) {
+         let endpoint = closestEndpoint(mouse)
+         if (endpoint && canSnap(mouse, endpoint)) {
+            highlighted.add(endpoint)
          } else {
             let s = closestSegment(mouse)
             if (s && canSnap(mouse, s.point)) {
@@ -259,37 +261,44 @@
          }
       }
    }
+   let selected: ToggleSet<Point | Segment> = new ToggleSet()
+   let pointsToMove: Set<Point>
+   $: {
+      pointsToMove = new Set()
+      for (let thing of selected) {
+         if (thing instanceof Point) {
+            pointsToMove.add(thing)
+         } else {
+            pointsToMove.add(thing.start)
+            pointsToMove.add(thing.end)
+         }
+      }
+   }
+   let draw: {
+      start: Point
+      startIsNew: boolean
+      startSegment?: Segment
+      end: Point
+      endIsNew: boolean
+      endSegment?: Segment
+      axis?: Axis
+   } | null = null
+   let move: {
+      start: Point
+      end: Point
+      vectors: DefaultMap<Point, Vector>
+      rulerGenerators: DefaultMap<Ruler, Point>
+   } | null = null
    // Rulers that act as a visual indicator of snapping behaviour
    let activeRulers: Set<Ruler> = new Set()
 
-   function beginDraw(clickPosition: Point) {
-      let start = snapToTarget(clickPosition, closestEndpoint(clickPosition))
-      if (start) {
-         draw = {
-            start,
-            startIsNew: false,
-            end: start, // Updated elsewhere
-            endIsNew: false,
-         }
-      } else {
-         // If we couldn't snap to an endpoint, try snapping to a segment.
-         let s = closestSegment(clickPosition)
-         if (s && canSnap(clickPosition, s.point)) {
-            draw = {
-               start: s.point,
-               startIsNew: true,
-               startSegment: s.segment,
-               end: s.point, // Updated elsewhere
-               endIsNew: true,
-            }
-         } else {
-            draw = {
-               start: clickPosition,
-               startIsNew: true,
-               end: clickPosition, // Updated elsewhere
-               endIsNew: true,
-            }
-         }
+   function beginDraw(start: Point, startSegment?: Segment) {
+      draw = {
+         start,
+         startIsNew: !circuit.has(start),
+         startSegment,
+         end: start, // Updated elsewhere
+         endIsNew: !circuit.has(start),
       }
       let r: Set<Ruler> = new Set()
       // Create a ruler for each of the "standard" axes.
@@ -398,41 +407,20 @@
       draw = null
       activeRulers = new Set()
    }
-   function beginMove(clickPosition: Point) {
-      let start = snapToTarget(clickPosition, closestEndpoint(clickPosition))
-      if (start) {
-         move = {
-            points: [start],
-            segments: [],
-            start,
-            // Updated elsewhere:
-            end: start,
-            vectors: new DefaultMap(() => zeroVector),
-            rulerGenerators: new DefaultMap(() => Point.zero),
-         }
-      } else {
-         let s = closestSegment(clickPosition)
-         if (s && canSnap(clickPosition, s.point)) {
-            move = {
-               points: [s.segment.start, s.segment.end],
-               segments: [s.segment],
-               start: s.point,
-               // Updated elsewhere:
-               end: s.point,
-               vectors: new DefaultMap(() => zeroVector),
-               rulerGenerators: new DefaultMap(() => Point.zero),
-            }
-         } else {
-            move = null
-            return
-         }
+   function beginMove(start: Point) {
+      move = {
+         start,
+         // Updated elsewhere:
+         end: start,
+         vectors: new DefaultMap(() => zeroVector),
+         rulerGenerators: new DefaultMap(() => Point.zero),
       }
       // Create the rulers relevant to this move operation.
       let rulersPerAxis: DefaultMap<Axis, Set<Ruler>> = new DefaultMap(
          () => new Set()
       )
       let axisIsCommon: DefaultMap<Axis, boolean> = new DefaultMap(() => true)
-      for (let point of move.points) {
+      for (let point of pointsToMove) {
          let axisIsStillCommon: DefaultMap<Axis, boolean> = new DefaultMap(
             () => false
          )
@@ -462,7 +450,7 @@
                if (edges.size > 1 && circuit.get(origin).size === 1) {
                   // Some edge-cases to make rendering less noisy.
                   ruler =
-                     move.points.length > 1
+                     pointsToMove.size > 1
                         ? new Ruler(origin, edgeAxis, "none")
                         : new Ruler(origin, edgeAxis, "line")
                } else {
@@ -491,13 +479,18 @@
             mouse.sqDistanceFrom(move.start) < sqEaseRadius
                ? easeToTarget(mouse, move.start).point
                : mouse
-         // Try easing move.points[0] towards one of the rulers it has
-         // generated. Then, shift move.end accordingly.
-         let d = move.points[0].displacementFrom(move.start)
+         // Try easing one of the points being moved towards one of the rulers
+         // it has generated. Then, shift move.end accordingly.
+         let firstPoint: Point = Point.zero
+         for (let point of pointsToMove) {
+            firstPoint = point
+            break
+         }
+         let d = firstPoint.displacementFrom(move.start)
          let m = move.end.displaceBy(d)
          move.end = easeToTarget(
             m,
-            closestRuler(m, move.points[0])?.point
+            closestRuler(m, firstPoint)?.point
          ).point.displaceBy(d.scaleBy(-1))
          let moveVector = move.end.displacementFrom(move.start)
 
@@ -528,9 +521,9 @@
          }
          // If we're grabbing a point with only one edge, alter the move vector
          // so that the edge will be resized instead of "pushed".
-         let grabbed0 = pointData.get(move.points[0])
-         if (move.points.length === 1 && grabbed0.loneEdge) {
-            move.vectors.set(move.points[0], moveVector)
+         let grabbed0 = pointData.get(firstPoint)
+         if (pointsToMove.size === 1 && grabbed0.loneEdge) {
+            move.vectors.set(firstPoint, moveVector)
             grabbed0.finalized = true
             let [nextPoint, nextAxis] = grabbed0.loneEdge
             // Only propagate the orthogonal component of the move vector.
@@ -538,7 +531,7 @@
             propagateMovement(nextPoint, nextAxis)
          } else {
             // Move each grabbed point.
-            for (let point of move.points) {
+            for (let point of pointsToMove) {
                propagateMovement(point, null)
             }
          }
@@ -623,37 +616,75 @@
    }}
 />
 <svg
+   style="cursor: {cursor}"
    on:contextmenu={(event) => {
       // Disable the context menu.
       event.preventDefault()
       return false
    }}
-   on:pointermove={(event) => {
-      mouse = new Point(Math.round(event.clientX), Math.round(event.clientY))
+   on:mousemove={(event) => {
+      mouse = new Point(event.clientX, event.clientY)
+      // Check if the mouse has moved enough to trigger an event.
+      if (waitingForDrag && mouse.sqDistanceFrom(waitingForDrag) > 16) {
+         let endpoint = closestEndpoint(waitingForDrag)
+         if (endpoint && canSnap(waitingForDrag, endpoint)) {
+            if (selected.has(endpoint)) {
+               beginMove(endpoint)
+            } else if (selected.size === 0) {
+               beginDraw(endpoint)
+            }
+         } else {
+            let s = closestSegment(waitingForDrag)
+            if (s && canSnap(waitingForDrag, s.point)) {
+               if (selected.has(s.segment)) {
+                  beginMove(s.point)
+               } else if (selected.size === 0) {
+                  beginDraw(s.point, s.segment)
+               }
+            } else {
+               selected = new ToggleSet()
+               beginDraw(waitingForDrag)
+            }
+         }
+         waitingForDrag = null
+      }
    }}
-   on:pointerdown={(event) => {
-      let clickPosition = new Point(
-         Math.round(event.clientX),
-         Math.round(event.clientY)
-      )
-      if (
-         // Left mouse button
-         event.button === 0 &&
-         !event.getModifierState("Shift")
-      )
-         beginDraw(clickPosition)
-      else if (
-         // Right mouse button, or shift + left mouse button
-         event.button === 2 ||
-         (event.getModifierState("Shift") && event.button === 0)
-      )
-         beginMove(clickPosition)
+   on:mousedown={(event) => {
+      if (event.button === 0 /* Left mouse button */) {
+         waitingForDrag = new Point(event.clientX, event.clientY)
+      }
    }}
-   on:pointerup={(event) => {
-      if (event.button === 0) endDraw()
-      if (event.button === 0 || event.button === 2) endMove()
+   on:mouseup={(event) => {
+      if (waitingForDrag) {
+         waitingForDrag = null
+         // A click happened.
+         let endpoint = closestEndpoint(mouse)
+         if (endpoint && canSnap(mouse, endpoint)) {
+            selected.toggle(endpoint)
+         } else {
+            let s = closestSegment(mouse)
+            if (s && canSnap(mouse, s.point)) {
+               selected.toggle(s.segment)
+            } else {
+               selected.clear()
+            }
+         }
+         selected = selected
+      } else {
+         endDraw()
+         endMove()
+      }
    }}
 >
+   <!-- <defs>
+      <filter id="blur" filterUnits="userSpaceOnUse">
+         <feGaussianBlur stdDeviation="3" />
+      </filter>
+      <filter id="shadow" filterUnits="userSpaceOnUse">
+         <feOffset result="offOut" in="SourceAlpha" dx="2" dy="2" />
+         <feGaussianBlur stdDeviation="2" />
+      </filter>
+   </defs> -->
    <g>
       {#each [...activeRulers] as ruler}
          <RulerHTML {ruler} />
@@ -666,9 +697,22 @@
       {@const end = move
          ? segment.end.displaceBy(move.vectors.get(segment.end))
          : segment.end}
-      <Wire {start} {end} highlighted={highlighted.has(segment)} />
-      <Endpoint position={start} highlighted={highlighted.has(segment.start)} />
-      <Endpoint position={end} highlighted={highlighted.has(segment.end)} />
+      <Wire
+         {start}
+         {end}
+         highlighted={highlighted.has(segment)}
+         selected={selected.has(segment)}
+      />
+      <Endpoint
+         position={start}
+         highlighted={highlighted.has(segment.start)}
+         selected={selected.has(segment.start)}
+      />
+      <Endpoint
+         position={end}
+         highlighted={highlighted.has(segment.end)}
+         selected={selected.has(segment.end)}
+      />
    {/each}
 
    {#if draw}
@@ -691,10 +735,20 @@
       stroke: blue;
       stroke-width: 0;
    }
-   :global(.highlight) {
-      fill: rgb(255, 215, 0);
-      stroke: rgb(255, 215, 0);
+   :global(.highlighted) {
+      fill: rgb(0, 234, 255);
+      stroke: rgb(0, 234, 255);
    }
+   :global(.selected) {
+      fill: yellow;
+      stroke: yellow;
+      /* filter: url(#blur); */
+   }
+   /* :global(.shadow) {
+      fill: rgba(0, 0, 0, 0.6);
+      stroke: rgba(0, 0, 0, 0.6);
+      filter: url(#shadow);
+   } */
    svg {
       width: 100%;
       height: 100%;

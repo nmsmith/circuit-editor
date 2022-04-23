@@ -20,3 +20,24 @@ export class DefaultMap<K, V> extends Map<K, V> {
       this.set(key, f(this.get(key)))
    }
 }
+
+export class ToggleSet<K> extends Set<K> {
+   toggle(key: K) {
+      if (this.has(key)) {
+         this.delete(key)
+      } else {
+         this.add(key)
+      }
+   }
+   // toggleGroup(keys: K[]) {
+   //    let hasAll = true
+   //    for (let key of keys) {
+   //       hasAll &&= this.has(key)
+   //    }
+   //    if (hasAll) {
+   //       for (let key of keys) this.delete(key)
+   //    } else {
+   //       for (let key of keys) this.add(key)
+   //    }
+   // }
+}
