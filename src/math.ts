@@ -187,9 +187,15 @@ export class Ray {
 export class Segment {
    readonly start: Point
    readonly end: Point
-   constructor(start: Point, end: Point) {
+   readonly axis: Axis
+   constructor(start: Point, end: Point, axis?: Axis) {
       this.start = start
       this.end = end
+      if (axis) {
+         this.axis = axis
+      } else {
+         this.axis = Axis.fromVector(end.displacementFrom(start)) as Axis
+      }
    }
    sqLength(): number {
       return this.end.sqDistanceFrom(this.start)

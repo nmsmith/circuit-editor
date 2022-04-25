@@ -5,6 +5,7 @@
    import Endpoint from "./Endpoint.svelte"
    import RulerHTML from "./Ruler.svelte"
    import { Ruler } from "./Ruler.svelte"
+   import RectSelectBox from "./RectSelectBox.svelte"
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -141,52 +142,43 @@
    }
    // --------------- State ---------------
    // The primary encoding of the circuit is an adjacency list. This supports
-   // efficient graph traversals. Some operations need to know the Axis that
-   // an edge aligns with, so we record that as part of each edge.
-   type EdgeOut = [Point, Axis]
-   type Circuit = DefaultMap<Point, Set<EdgeOut>>
+   // efficient graph traversals. The edges are are given stable identities as
+   // Segment objects so that they can be referenced from other data structures.
+   type OutgoingSegment = [Point, Segment]
+   type Circuit = DefaultMap<Point, Set<OutgoingSegment>>
    let circuit: Circuit = new DefaultMap(() => new Set())
-   // As a supplementary encoding, we encode each segment directly. This
-   // supports operations that need to query segments.
+   // For operations that only care about Segments, we store them directly.
    let segments: Set<Segment> = new Set()
    // We store the multiplicity of every axis in the circuit, so that if all
-   // the edges aligned to a given axis are removed, the axis is forgotten.
+   // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
 
-   function deleteSegment({ start, end }: Segment): void {
+   function deleteSegment(segment: Segment): void {
       // Delete from "circuit"
-      let startEdges = circuit.get(start)
+      let startEdges = circuit.get(segment.start)
       for (let edge of startEdges) {
-         if (edge[0] === end) {
+         if (edge[1] === segment) {
             startEdges.delete(edge)
-            if (startEdges.size === 0) circuit.delete(start)
-         }
-      }
-      let endEdges = circuit.get(end)
-      for (let edge of endEdges) {
-         if (edge[0] === start) {
-            endEdges.delete(edge)
-            if (endEdges.size === 0) circuit.delete(end)
-         }
-      }
-      // Delete from "segments"
-      for (let seg of segments) {
-         if (seg.start === start && seg.end === end) {
-            segments.delete(seg)
+            if (startEdges.size === 0) circuit.delete(segment.start)
             break
          }
       }
-      // Delete from "circuitAxes"
-      let axis = tryRoundingToExistingAxis(
-         Axis.fromVector(start.displacementFrom(end))
-      )
-      if (axis) {
-         let count = circuitAxes.get(axis)
-         if (count > 1) {
-            circuitAxes.set(axis, count - 1)
-         } else {
-            circuitAxes.delete(axis)
+      let endEdges = circuit.get(segment.end)
+      for (let edge of endEdges) {
+         if (edge[1] === segment) {
+            endEdges.delete(edge)
+            if (endEdges.size === 0) circuit.delete(segment.end)
+            break
          }
+      }
+      // Delete from "segments"
+      segments.delete(segment)
+      // Delete from "circuitAxes"
+      let count = circuitAxes.get(segment.axis)
+      if (count > 1) {
+         circuitAxes.set(segment.axis, count - 1)
+      } else {
+         circuitAxes.delete(segment.axis)
       }
       circuit = circuit
       segments = segments
@@ -196,14 +188,14 @@
       for (let axis of snapAxes) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
       }
-      for (let [axis, _] of circuitAxes) {
+      for (let axis of circuitAxes.keys()) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
       }
       return subject
    }
    function connected(p1: Point, p2: Point) {
       if (!circuit.has(p1)) return false
-      for (let [p, _] of circuit.get(p1)) {
+      for (let [p] of circuit.get(p1)) {
          if (p === p2) return true
       }
       return false
@@ -239,15 +231,15 @@
    }
    let waitingForDrag: Point | null = null
    let highlighted: Set<Point | Segment>
-   let highlightedForDeletion: Segment | null
    $: {
       highlighted = new Set()
-      highlightedForDeletion = null
       if (draw) {
          if (!draw.startIsNew) highlighted.add(draw.start)
          if (!draw.endIsNew) highlighted.add(draw.end)
          if (draw.startSegment) highlighted.add(draw.startSegment)
          if (draw.endSegment) highlighted.add(draw.endSegment)
+      } else if (rectSelect) {
+         highlighted = new Set(rectSelect.highlighted)
       } else if (!move) {
          let endpoint = closestEndpoint(mouse)
          if (endpoint && canSnap(mouse, endpoint)) {
@@ -256,7 +248,6 @@
             let s = closestSegment(mouse)
             if (s && canSnap(mouse, s.point)) {
                highlighted.add(s.segment)
-               highlightedForDeletion = s.segment
             }
          }
       }
@@ -289,6 +280,11 @@
       vectors: DefaultMap<Point, Vector>
       rulerGenerators: DefaultMap<Ruler, Point>
    } | null = null
+   let rectSelect: {
+      start: Point
+      end: Point
+      highlighted: Set<Point | Segment>
+   } | null = null
    // Rulers that act as a visual indicator of snapping behaviour
    let activeRulers: Set<Ruler> = new Set()
 
@@ -307,9 +303,9 @@
       }
       // Create a ruler for each edge incident to the starting vertex (if any).
       if (circuit.has(draw.start)) {
-         for (let [_, axis] of circuit.get(draw.start)) {
-            if (!snapAxes.includes(axis)) {
-               r.add(new Ruler(draw.start, axis, "ray"))
+         for (let [_, segment] of circuit.get(draw.start)) {
+            if (!snapAxes.includes(segment.axis)) {
+               r.add(new Ruler(draw.start, segment.axis, "ray"))
             }
          }
       }
@@ -376,9 +372,10 @@
                draw.endSegment.end !== draw.start))
       ) {
          // Add the new segment
-         circuit.get(draw.start).add([draw.end, draw.axis])
-         circuit.get(draw.end).add([draw.start, draw.axis])
-         segments.add(new Segment(draw.start, draw.end))
+         let segment = new Segment(draw.start, draw.end, draw.axis)
+         circuit.get(draw.start).add([draw.end, segment])
+         circuit.get(draw.end).add([draw.start, segment])
+         segments.add(segment)
          circuitAxes.update(draw.axis, (c) => c + 1)
          // Bifurcate existing segments if necessary
          if (draw.startSegment) bifurcate(draw.startSegment, draw.start)
@@ -390,12 +387,14 @@
             )
             if (axis) {
                deleteSegment(segment)
-               circuit.get(bifurcationPoint).add([start, axis])
-               circuit.get(start).add([bifurcationPoint, axis])
-               segments.add(new Segment(bifurcationPoint, start))
-               circuit.get(bifurcationPoint).add([end, axis])
-               circuit.get(end).add([bifurcationPoint, axis])
-               segments.add(new Segment(bifurcationPoint, end))
+               let segStart = new Segment(bifurcationPoint, start, axis)
+               circuit.get(bifurcationPoint).add([start, segStart])
+               circuit.get(start).add([bifurcationPoint, segStart])
+               segments.add(segStart)
+               let segEnd = new Segment(bifurcationPoint, end, axis)
+               circuit.get(bifurcationPoint).add([end, segEnd])
+               circuit.get(end).add([bifurcationPoint, segEnd])
+               segments.add(segEnd)
                circuitAxes.update(axis, (c) => c + 2)
             }
          }
@@ -425,11 +424,11 @@
             () => false
          )
          let edges = circuit.get(point)
-         for (let [origin, edgeAxis] of edges) {
-            // Ignore edges that aren't common to all grabbed points.
-            if (!axisIsCommon.get(edgeAxis)) continue
-            axisIsStillCommon.set(edgeAxis, true)
-            let rulersForAxis = rulersPerAxis.get(edgeAxis)
+         for (let [origin, segment] of edges) {
+            // Ignore axes that aren't common to all grabbed points.
+            if (!axisIsCommon.get(segment.axis)) continue
+            axisIsStillCommon.set(segment.axis, true)
+            let rulersForAxis = rulersPerAxis.get(segment.axis)
             let rulerFound = false
             for (let ruler of rulersForAxis) {
                // Check if the two origins are on the same axis. If so,
@@ -437,7 +436,7 @@
                let axisBetweenOrigins = tryRoundingToExistingAxis(
                   Axis.fromVector(ruler.line.origin.displacementFrom(origin))
                )
-               if (axisBetweenOrigins === edgeAxis) {
+               if (axisBetweenOrigins === segment.axis) {
                   // Rulers that are needed by two or more points should
                   // be solid lines, rather than rays.
                   ruler.render = "line"
@@ -451,10 +450,10 @@
                   // Some edge-cases to make rendering less noisy.
                   ruler =
                      pointsToMove.size > 1
-                        ? new Ruler(origin, edgeAxis, "none")
-                        : new Ruler(origin, edgeAxis, "line")
+                        ? new Ruler(origin, segment.axis, "none")
+                        : new Ruler(origin, segment.axis, "line")
                } else {
-                  ruler = new Ruler(origin, edgeAxis, "ray")
+                  ruler = new Ruler(origin, segment.axis, "ray")
                }
                rulersForAxis.add(ruler)
                move.rulerGenerators.set(ruler, point)
@@ -500,7 +499,7 @@
                // Whether the point's movement has been determined yet.
                finalized: false as boolean | Axis,
                // Whether the point has only one edge.
-               loneEdge: null as null | EdgeOut,
+               loneEdge: null as null | OutgoingSegment,
                // If a Point's edges are aligned with exactly two Axes, we
                // treat the Axes as a vector basis, which we use to move points
                // according to a "rectangle/polygon resizing" algorithm.
@@ -513,8 +512,8 @@
             let axes: Axis[] = []
             let edge = null
             for (edge of edges) {
-               let [_, axis] = edge
-               if (!axes.includes(axis)) axes.push(axis)
+               let [_, segment] = edge
+               if (!axes.includes(segment.axis)) axes.push(segment.axis)
             }
             if (edges.size === 1) pointData.get(point).loneEdge = edge
             else if (axes.length === 2) pointData.get(point).basis = axes
@@ -525,7 +524,8 @@
          if (pointsToMove.size === 1 && grabbed0.loneEdge) {
             move.vectors.set(firstPoint, moveVector)
             grabbed0.finalized = true
-            let [nextPoint, nextAxis] = grabbed0.loneEdge
+            let [nextPoint, nextSegment] = grabbed0.loneEdge
+            let nextAxis = nextSegment.axis
             // Only propagate the orthogonal component of the move vector.
             moveVector = moveVector.sub(moveVector.projectionOnto(nextAxis))
             propagateMovement(nextPoint, nextAxis)
@@ -579,7 +579,8 @@
                moveLoneEdge = moveVector
             }
             let nextEdges = circuit.get(currentPoint)
-            for (let [nextPoint, nextEdgeAxis] of nextEdges) {
+            for (let [nextPoint, nextSegment] of nextEdges) {
+               let nextEdgeAxis = nextSegment.axis
                let next = pointData.get(nextPoint)
                if (next.finalized === true || next.finalized === nextEdgeAxis) {
                   continue
@@ -604,14 +605,62 @@
       move = null
       activeRulers = new Set()
    }
+   function beginRectSelect(start: Point) {
+      rectSelect = {
+         start,
+         end: start, // Updated elsewhere
+         highlighted: new Set(),
+      }
+   }
+   $: /* On a change to 'rectSelect' or 'mouse' */ {
+      if (rectSelect) {
+         rectSelect.end = mouse
+         rectSelect.highlighted = new Set()
+         let x1 = Math.min(rectSelect.start.x, rectSelect.end.x)
+         let x2 = Math.max(rectSelect.start.x, rectSelect.end.x)
+         let y1 = Math.min(rectSelect.start.y, rectSelect.end.y)
+         let y2 = Math.max(rectSelect.start.y, rectSelect.end.y)
+         for (let [start, edges] of circuit) {
+            function inRange(x: number, low: number, high: number) {
+               return low <= x && x <= high
+            }
+            if (inRange(start.x, x1, x2) && inRange(start.y, y1, y2)) {
+               let segmentAdded = false
+               for (let [end, segment] of edges) {
+                  if (inRange(end.x, x1, x2) && inRange(end.y, y1, y2)) {
+                     rectSelect.highlighted.add(segment)
+                     segmentAdded = true
+                  }
+               }
+               if (!segmentAdded) {
+                  rectSelect.highlighted.add(start)
+               }
+            }
+         }
+         // Don't highlight points if their segment is already selected.
+         for (let thing of selected) {
+            if (thing instanceof Segment) {
+               rectSelect.highlighted.delete(thing.start)
+               rectSelect.highlighted.delete(thing.end)
+            }
+         }
+      }
+   }
+   function endRectSelect() {
+      if (!rectSelect) return
+      for (let thing of rectSelect.highlighted) selected.add(thing)
+      selected = selected
+      rectSelect = null
+   }
 </script>
 
 <svelte:window
    on:keydown={(event) => {
       if (event.key === "Backspace" || event.key === "Delete") {
-         if (highlightedForDeletion) {
-            deleteSegment(highlightedForDeletion)
+         for (let thing of selected) {
+            if (thing instanceof Segment) deleteSegment(thing)
          }
+         selected = new ToggleSet()
       }
    }}
 />
@@ -624,26 +673,30 @@
    }}
    on:mousemove={(event) => {
       mouse = new Point(event.clientX, event.clientY)
-      // Check if the mouse has moved enough to trigger an event.
+      // Check if the mouse has moved enough to trigger an action.
       if (waitingForDrag && mouse.sqDistanceFrom(waitingForDrag) > 16) {
          let endpoint = closestEndpoint(waitingForDrag)
-         if (endpoint && canSnap(waitingForDrag, endpoint)) {
-            if (selected.has(endpoint)) {
-               beginMove(endpoint)
-            } else if (selected.size === 0) {
-               beginDraw(endpoint)
-            }
+         if (event.getModifierState("Shift")) {
+            beginRectSelect(mouse)
          } else {
-            let s = closestSegment(waitingForDrag)
-            if (s && canSnap(waitingForDrag, s.point)) {
-               if (selected.has(s.segment)) {
-                  beginMove(s.point)
+            if (endpoint && canSnap(waitingForDrag, endpoint)) {
+               if (selected.has(endpoint)) {
+                  beginMove(endpoint)
                } else if (selected.size === 0) {
-                  beginDraw(s.point, s.segment)
+                  beginDraw(endpoint)
                }
             } else {
-               selected = new ToggleSet()
-               beginDraw(waitingForDrag)
+               let s = closestSegment(waitingForDrag)
+               if (s && canSnap(waitingForDrag, s.point)) {
+                  if (selected.has(s.segment)) {
+                     beginMove(s.point)
+                  } else if (selected.size === 0) {
+                     beginDraw(s.point, s.segment)
+                  }
+               } else {
+                  selected = new ToggleSet()
+                  beginDraw(waitingForDrag)
+               }
             }
          }
          waitingForDrag = null
@@ -673,6 +726,7 @@
       } else {
          endDraw()
          endMove()
+         endRectSelect()
       }
    }}
 >
@@ -686,43 +740,56 @@
       </filter>
    </defs> -->
    <g>
+      <!-- Bottom layer -->
       {#each [...activeRulers] as ruler}
          <RulerHTML {ruler} />
       {/each}
    </g>
-   {#each [...segments] as segment}
-      {@const start = move
-         ? segment.start.displaceBy(move.vectors.get(segment.start))
-         : segment.start}
-      {@const end = move
-         ? segment.end.displaceBy(move.vectors.get(segment.end))
-         : segment.end}
-      <Wire
-         {start}
-         {end}
-         highlighted={highlighted.has(segment)}
-         selected={selected.has(segment)}
-      />
-      <Endpoint
-         position={start}
-         highlighted={highlighted.has(segment.start)}
-         selected={selected.has(segment.start)}
-      />
-      <Endpoint
-         position={end}
-         highlighted={highlighted.has(segment.end)}
-         selected={selected.has(segment.end)}
-      />
-   {/each}
+   <g>
+      <!-- Middle layer -->
+      {#each [...segments] as segment}
+         {@const start = move
+            ? segment.start.displaceBy(move.vectors.get(segment.start))
+            : segment.start}
+         {@const end = move
+            ? segment.end.displaceBy(move.vectors.get(segment.end))
+            : segment.end}
+         <Wire
+            {start}
+            {end}
+            highlighted={highlighted.has(segment)}
+            selected={selected.has(segment)}
+         />
+         <Endpoint
+            position={start}
+            highlighted={highlighted.has(segment.start)}
+            selected={selected.has(segment.start)}
+         />
+         <Endpoint
+            position={end}
+            highlighted={highlighted.has(segment.end)}
+            selected={selected.has(segment.end)}
+         />
+      {/each}
 
-   {#if draw}
-      <Wire start={draw.start} end={draw.end} />
-      <Endpoint
-         position={draw.start}
-         highlighted={highlighted.has(draw.start)}
-      />
-      <Endpoint position={draw.end} highlighted={highlighted.has(draw.end)} />
-   {/if}
+      {#if draw}
+         <Wire start={draw.start} end={draw.end} />
+         <Endpoint
+            position={draw.start}
+            highlighted={highlighted.has(draw.start)}
+         />
+         <Endpoint
+            position={draw.end}
+            highlighted={highlighted.has(draw.end)}
+         />
+      {/if}
+   </g>
+   <g>
+      <!-- Top layer -->
+      {#if rectSelect}
+         <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
+      {/if}
+   </g>
 </svg>
 
 <style>
