@@ -140,6 +140,36 @@
       }
       return closest
    }
+   type NoSnap = {
+      endpoint?: Point
+      segment?: Segment
+      point?: Point
+      isSelected?: boolean
+   }
+   type SnapResult =
+      | (NoSnap & { endpoint: Point; point: Point; isSelected: boolean })
+      | (NoSnap & { segment: Segment; point: Point; isSelected: boolean })
+      | NoSnap
+   function trySnapping(point: Point): SnapResult {
+      let endpoint = closestEndpoint(point)
+      if (endpoint && canSnap(point, endpoint)) {
+         return {
+            endpoint,
+            point: endpoint,
+            isSelected: selected.has(endpoint),
+         }
+      } else {
+         let s = closestSegment(point)
+         if (s && canSnap(point, s.point)) {
+            return {
+               segment: s.segment,
+               point: s.point,
+               isSelected: selected.has(s.segment),
+            }
+         }
+      }
+      return {}
+   }
    // --------------- State ---------------
    // The primary encoding of the circuit is an adjacency list. This supports
    // efficient graph traversals. The edges are are given stable identities as
@@ -208,24 +238,10 @@
          cursor = "grabbing"
       } else {
          cursor = "auto"
-         let near: Point | Segment | undefined
-         let point = closestEndpoint(mouse)
-         if (point && canSnap(mouse, point)) {
-            near = point
-         } else {
-            let s = closestSegment(mouse)
-            if (s && canSnap(mouse, s.point)) {
-               near = s.segment
-            }
-         }
-         if (near) {
-            if (selected.has(near)) {
-               cursor = waitingForDrag ? "grabbing" : "grab"
-            } else if (selected.size > 0) {
-               cursor = "cell"
-            }
-         } else {
-            cursor = "auto"
+         let snap = trySnapping(mouse)
+         let near = snap.endpoint || snap.segment
+         if (tool === "select & move" && near && selected.has(near)) {
+            cursor = waitingForDrag ? "grabbing" : "grab"
          }
       }
    }
@@ -241,15 +257,9 @@
       } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
       } else if (!move) {
-         let endpoint = closestEndpoint(mouse)
-         if (endpoint && canSnap(mouse, endpoint)) {
-            highlighted.add(endpoint)
-         } else {
-            let s = closestSegment(mouse)
-            if (s && canSnap(mouse, s.point)) {
-               highlighted.add(s.segment)
-            }
-         }
+         let snap = trySnapping(mouse)
+         if (snap.endpoint) highlighted.add(snap.endpoint)
+         else if (snap.segment) highlighted.add(snap.segment)
       }
    }
    let selected: ToggleSet<Point | Segment> = new ToggleSet()
@@ -265,6 +275,7 @@
          }
       }
    }
+   let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
       start: Point
       startIsNew: boolean
@@ -646,9 +657,13 @@
          }
       }
    }
-   function endRectSelect() {
+   function endRectSelect(shift: boolean, alt: boolean) {
       if (!rectSelect) return
-      for (let thing of rectSelect.highlighted) selected.add(thing)
+
+      if (!shift && !alt) selected.clear()
+      if (alt) for (let thing of rectSelect.highlighted) selected.delete(thing)
+      else for (let thing of rectSelect.highlighted) selected.add(thing)
+
       selected = selected
       rectSelect = null
    }
@@ -656,11 +671,22 @@
 
 <svelte:window
    on:keydown={(event) => {
-      if (event.key === "Backspace" || event.key === "Delete") {
-         for (let thing of selected) {
-            if (thing instanceof Segment) deleteSegment(thing)
-         }
-         selected = new ToggleSet()
+      switch (event.key) {
+         case "s":
+         case "S":
+            tool = "select & move"
+            break
+         case "f":
+         case "F":
+            tool = "hydraulic line"
+            break
+         case "Backspace":
+         case "Delete":
+            for (let thing of selected) {
+               if (thing instanceof Segment) deleteSegment(thing)
+            }
+            selected = new ToggleSet()
+            break
       }
    }}
 />
@@ -675,29 +701,18 @@
       mouse = new Point(event.clientX, event.clientY)
       // Check if the mouse has moved enough to trigger an action.
       if (waitingForDrag && mouse.sqDistanceFrom(waitingForDrag) > 16) {
-         let endpoint = closestEndpoint(waitingForDrag)
-         if (event.getModifierState("Shift")) {
-            beginRectSelect(mouse)
-         } else {
-            if (endpoint && canSnap(waitingForDrag, endpoint)) {
-               if (selected.has(endpoint)) {
-                  beginMove(endpoint)
-               } else if (selected.size === 0) {
-                  beginDraw(endpoint)
-               }
-            } else {
-               let s = closestSegment(waitingForDrag)
-               if (s && canSnap(waitingForDrag, s.point)) {
-                  if (selected.has(s.segment)) {
-                     beginMove(s.point)
-                  } else if (selected.size === 0) {
-                     beginDraw(s.point, s.segment)
-                  }
+         let snap = trySnapping(waitingForDrag)
+         switch (tool) {
+            case "select & move":
+               if (snap.point && snap.isSelected) {
+                  beginMove(snap.point)
                } else {
-                  selected = new ToggleSet()
-                  beginDraw(waitingForDrag)
+                  beginRectSelect(waitingForDrag)
                }
-            }
+               break
+            case "hydraulic line":
+               beginDraw(snap.point ? snap.point : waitingForDrag, snap.segment)
+               break
          }
          waitingForDrag = null
       }
@@ -708,25 +723,35 @@
       }
    }}
    on:mouseup={(event) => {
+      let shift = event.getModifierState("Shift")
+      let alt = event.getModifierState("Alt")
       if (waitingForDrag) {
          waitingForDrag = null
          // A click happened.
-         let endpoint = closestEndpoint(mouse)
-         if (endpoint && canSnap(mouse, endpoint)) {
-            selected.toggle(endpoint)
-         } else {
-            let s = closestSegment(mouse)
-            if (s && canSnap(mouse, s.point)) {
-               selected.toggle(s.segment)
-            } else {
-               selected.clear()
-            }
+         let snap = trySnapping(mouse)
+         let thingUnderMouse = snap.endpoint || snap.segment
+         switch (tool) {
+            case "select & move":
+               if (!thingUnderMouse) selected.clear()
+               else if (shift) selected.toggle(thingUnderMouse)
+               else if (alt) selected.delete(thingUnderMouse)
+               else selected = new ToggleSet([thingUnderMouse])
+               selected = selected
+               break
+            case "hydraulic line":
+               break
          }
-         selected = selected
       } else {
          endDraw()
          endMove()
-         endRectSelect()
+         endRectSelect(shift, alt)
+      }
+   }}
+   on:mouseenter={(event) => {
+      // If we're (re-)entering the window and the left mouse button isn't
+      // down, cancel any drag-based operation that may be in progress.
+      if ((event.buttons & 0b1) === 0) {
+         draw = move = rectSelect = null
       }
    }}
 >
@@ -785,6 +810,7 @@
       {/if}
    </g>
    <g>
+      <text class="toolText" x="8" y="24">{tool}</text>
       <!-- Top layer -->
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
@@ -822,5 +848,9 @@
       /* shift the image so that 3px lines render without aliasing */
       transform: translate(-0.5px, -0.5px);
       background-color: rgb(193, 195, 199);
+   }
+   .toolText {
+      user-select: none;
+      font: 20px sans-serif;
    }
 </style>
