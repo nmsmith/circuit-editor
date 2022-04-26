@@ -391,24 +391,6 @@
          // Bifurcate existing segments if necessary
          if (draw.startSegment) bifurcate(draw.startSegment, draw.start)
          if (draw.endSegment) bifurcate(draw.endSegment, draw.end)
-         function bifurcate(segment: Segment, bifurcationPoint: Point) {
-            let { start, end } = segment
-            let axis = tryRoundingToExistingAxis(
-               Axis.fromVector(start.displacementFrom(end))
-            )
-            if (axis) {
-               deleteSegment(segment)
-               let segStart = new Segment(bifurcationPoint, start, axis)
-               circuit.get(bifurcationPoint).add([start, segStart])
-               circuit.get(start).add([bifurcationPoint, segStart])
-               segments.add(segStart)
-               let segEnd = new Segment(bifurcationPoint, end, axis)
-               circuit.get(bifurcationPoint).add([end, segEnd])
-               circuit.get(end).add([bifurcationPoint, segEnd])
-               segments.add(segEnd)
-               circuitAxes.update(axis, (c) => c + 2)
-            }
-         }
          // Let Svelte know the circuit has changed
          circuit = circuit
          segments = segments
@@ -416,6 +398,25 @@
       // Reset the drawing state.
       draw = null
       activeRulers = new Set()
+
+      function bifurcate(segment: Segment, bifurcationPoint: Point) {
+         let { start, end } = segment
+         let axis = tryRoundingToExistingAxis(
+            Axis.fromVector(start.displacementFrom(end))
+         )
+         if (axis) {
+            deleteSegment(segment)
+            let segStart = new Segment(bifurcationPoint, start, axis)
+            circuit.get(bifurcationPoint).add([start, segStart])
+            circuit.get(start).add([bifurcationPoint, segStart])
+            segments.add(segStart)
+            let segEnd = new Segment(bifurcationPoint, end, axis)
+            circuit.get(bifurcationPoint).add([end, segEnd])
+            circuit.get(end).add([bifurcationPoint, segEnd])
+            segments.add(segEnd)
+            circuitAxes.update(axis, (c) => c + 2)
+         }
+      }
    }
    function beginMove(start: Point) {
       move = {
