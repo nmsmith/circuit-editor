@@ -140,21 +140,15 @@
       }
       return closest
    }
-   type NoSnap = {
-      endpoint?: Point
-      segment?: Segment
-      point?: Point
-      isSelected?: boolean
-   }
    type SnapResult =
-      | (NoSnap & { endpoint: Point; point: Point; isSelected: boolean })
-      | (NoSnap & { segment: Segment; point: Point; isSelected: boolean })
-      | NoSnap
+      | { target: Point; point: Point; isSelected: boolean }
+      | { target: Segment; point: Point; isSelected: boolean }
+      | { target: undefined }
    function trySnapping(point: Point): SnapResult {
       let endpoint = closestEndpoint(point)
       if (endpoint && canSnap(point, endpoint)) {
          return {
-            endpoint,
+            target: endpoint,
             point: endpoint,
             isSelected: selected.has(endpoint),
          }
@@ -162,13 +156,13 @@
          let s = closestSegment(point)
          if (s && canSnap(point, s.point)) {
             return {
-               segment: s.segment,
+               target: s.segment,
                point: s.point,
                isSelected: selected.has(s.segment),
             }
          }
       }
-      return {}
+      return { target: undefined }
    }
    // --------------- State ---------------
    // The primary encoding of the circuit is an adjacency list. This supports
@@ -232,6 +226,7 @@
    }
    // Input state
    let mouse: Point = Point.zero
+   let [shift, alt, cmd] = [false, false, false]
    let cursor: "auto" | "grab" | "grabbing" | "cell"
    $: {
       if (move) {
@@ -239,8 +234,13 @@
       } else {
          cursor = "auto"
          let snap = trySnapping(mouse)
-         let near = snap.endpoint || snap.segment
-         if (tool === "select & move" && near && selected.has(near)) {
+         if (
+            tool === "select & move" &&
+            snap.target &&
+            !shift &&
+            !alt &&
+            !cmd
+         ) {
             cursor = waitingForDrag ? "grabbing" : "grab"
          }
       }
@@ -258,23 +258,23 @@
          highlighted = new Set(rectSelect.highlighted)
       } else if (!move) {
          let snap = trySnapping(mouse)
-         if (snap.endpoint) highlighted.add(snap.endpoint)
-         else if (snap.segment) highlighted.add(snap.segment)
+         if (snap.target) highlighted.add(snap.target)
       }
    }
    let selected: ToggleSet<Point | Segment> = new ToggleSet()
-   let pointsToMove: Set<Point>
-   $: {
-      pointsToMove = new Set()
+   function selectedPoints(): Set<Point> {
+      let s = new Set<Point>()
       for (let thing of selected) {
          if (thing instanceof Point) {
-            pointsToMove.add(thing)
+            s.add(thing)
          } else {
-            pointsToMove.add(thing.start)
-            pointsToMove.add(thing.end)
+            s.add(thing.start)
+            s.add(thing.end)
          }
       }
+      return s
    }
+   $: pointsToMove = selectedPoints()
    let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
       start: Point
@@ -658,7 +658,7 @@
          }
       }
    }
-   function endRectSelect(shift: boolean, alt: boolean) {
+   function endRectSelect() {
       if (!rectSelect) return
 
       if (!shift && !alt) selected.clear()
@@ -672,6 +672,9 @@
 
 <svelte:window
    on:keydown={(event) => {
+      shift = event.getModifierState("Shift")
+      alt = event.getModifierState("Alt")
+      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
       switch (event.key) {
          case "s":
          case "S":
@@ -690,6 +693,14 @@
             break
       }
    }}
+   on:keyup={(event) => {
+      shift = event.getModifierState("Shift")
+      alt = event.getModifierState("Alt")
+      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
+   }}
+   on:blur={(event) => {
+      shift = alt = cmd = false
+   }}
 />
 <svg
    style="cursor: {cursor}"
@@ -705,14 +716,16 @@
          let snap = trySnapping(waitingForDrag)
          switch (tool) {
             case "select & move":
-               if (snap.point && snap.isSelected) {
-                  beginMove(snap.point)
-               } else {
-                  beginRectSelect(waitingForDrag)
-               }
+               beginRectSelect(waitingForDrag)
                break
             case "hydraulic line":
-               beginDraw(snap.point ? snap.point : waitingForDrag, snap.segment)
+               if (snap.target) {
+                  if (snap.target instanceof Point) {
+                     beginDraw(snap.point)
+                  } else {
+                     beginDraw(snap.point, snap.target)
+                  }
+               } else beginDraw(waitingForDrag)
                break
          }
          waitingForDrag = null
@@ -720,23 +733,38 @@
    }}
    on:mousedown={(event) => {
       if (event.button === 0 /* Left mouse button */) {
-         waitingForDrag = new Point(event.clientX, event.clientY)
+         let clickPoint = new Point(event.clientX, event.clientY)
+         switch (tool) {
+            case "select & move": {
+               let snap = trySnapping(clickPoint)
+               if (snap.target && !shift && !alt && !cmd) {
+                  if (!snap.isSelected) {
+                     selected = new ToggleSet([snap.target])
+                  }
+                  // We have to update this reactive variable manually here,
+                  // because Svelte won't update it until next render.
+                  pointsToMove = selectedPoints()
+                  beginMove(snap.point)
+               } else waitingForDrag = clickPoint
+               break
+            }
+            case "hydraulic line":
+               waitingForDrag = clickPoint
+               break
+         }
       }
    }}
    on:mouseup={(event) => {
-      let shift = event.getModifierState("Shift")
-      let alt = event.getModifierState("Alt")
       if (waitingForDrag) {
          waitingForDrag = null
          // A click happened.
          let snap = trySnapping(mouse)
-         let thingUnderMouse = snap.endpoint || snap.segment
          switch (tool) {
             case "select & move":
-               if (!thingUnderMouse) selected.clear()
-               else if (shift) selected.toggle(thingUnderMouse)
-               else if (alt) selected.delete(thingUnderMouse)
-               else selected = new ToggleSet([thingUnderMouse])
+               if (!snap.target) selected.clear()
+               else if (shift) selected.toggle(snap.target)
+               else if (alt) selected.delete(snap.target)
+               else selected = new ToggleSet([snap.target])
                selected = selected
                break
             case "hydraulic line":
@@ -745,7 +773,7 @@
       } else {
          endDraw()
          endMove()
-         endRectSelect(shift, alt)
+         endRectSelect()
       }
    }}
    on:mouseenter={(event) => {
