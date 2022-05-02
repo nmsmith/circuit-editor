@@ -73,18 +73,12 @@
    // If "generatingPoint" is given, only consider rulers that are generated
    // by the given point (as defined elsewhere).
    function closestRuler(
-      point: Point,
-      generatingPoint?: Point
+      point: Point
    ): { ruler: Ruler; point: Point } | undefined {
       let closest:
          | { ruler: Ruler; point: Point; sqDistance: number }
          | undefined
       for (let ruler of activeRulers) {
-         if (
-            generatingPoint &&
-            move?.rulerGenerators.get(ruler) !== generatingPoint
-         )
-            continue
          let d = point.displacementFrom(ruler.line.origin)
          let rejection = d.projectionOnto(ruler.line.axis).sub(d)
          let current = {
@@ -289,7 +283,6 @@
       start: Point
       end: Point
       vectors: DefaultMap<Point, Vector>
-      rulerGenerators: DefaultMap<Ruler, Point>
    } | null = null
    let rectSelect: {
       start: Point
@@ -424,61 +417,6 @@
          // Updated elsewhere:
          end: start,
          vectors: new DefaultMap(() => zeroVector),
-         rulerGenerators: new DefaultMap(() => Point.zero),
-      }
-      // Create the rulers relevant to this move operation.
-      let rulersPerAxis: DefaultMap<Axis, Set<Ruler>> = new DefaultMap(
-         () => new Set()
-      )
-      let axisIsCommon: DefaultMap<Axis, boolean> = new DefaultMap(() => true)
-      for (let point of pointsToMove) {
-         let axisIsStillCommon: DefaultMap<Axis, boolean> = new DefaultMap(
-            () => false
-         )
-         let edges = circuit.get(point)
-         for (let [origin, segment] of edges) {
-            // Ignore axes that aren't common to all grabbed points.
-            if (!axisIsCommon.get(segment.axis)) continue
-            axisIsStillCommon.set(segment.axis, true)
-            let rulersForAxis = rulersPerAxis.get(segment.axis)
-            let rulerFound = false
-            for (let ruler of rulersForAxis) {
-               // Check if the two origins are on the same axis. If so,
-               // we don't need a new ruler.
-               let axisBetweenOrigins = tryRoundingToExistingAxis(
-                  Axis.fromVector(ruler.line.origin.displacementFrom(origin))
-               )
-               if (axisBetweenOrigins === segment.axis) {
-                  // Rulers that are needed by two or more points should
-                  // be solid lines, rather than rays.
-                  ruler.render = "line"
-                  rulerFound = true
-                  break
-               }
-            }
-            if (!rulerFound) {
-               let ruler
-               if (edges.size > 1 && circuit.get(origin).size === 1) {
-                  // Some edge-cases to make rendering less noisy.
-                  ruler =
-                     pointsToMove.size > 1
-                        ? new Ruler(origin, segment.axis, "none")
-                        : new Ruler(origin, segment.axis, "line")
-               } else {
-                  ruler = new Ruler(origin, segment.axis, "ray")
-               }
-               rulersForAxis.add(ruler)
-               move.rulerGenerators.set(ruler, point)
-            }
-         }
-         axisIsCommon = axisIsStillCommon
-      }
-      // Use these rulers.
-      activeRulers = new Set()
-      for (let [axis, rulersForAxis] of rulersPerAxis) {
-         if (axisIsCommon.get(axis)) {
-            for (let ruler of rulersForAxis) activeRulers.add(ruler)
-         }
       }
    }
    // ----- Compute the state of an in-progress move operation -----
@@ -490,19 +428,6 @@
             mouse.sqDistanceFrom(move.start) < sqEaseRadius
                ? easeToTarget(mouse, move.start).point
                : mouse
-         // Try easing one of the points being moved towards one of the rulers
-         // it has generated. Then, shift move.end accordingly.
-         let firstPoint: Point = Point.zero
-         for (let point of pointsToMove) {
-            firstPoint = point
-            break
-         }
-         let d = firstPoint.displacementFrom(move.start)
-         let m = move.end.displaceBy(d)
-         move.end = easeToTarget(
-            m,
-            closestRuler(m, firstPoint)?.point
-         ).point.displaceBy(d.scaleBy(-1))
          let moveVector = move.end.displacementFrom(move.start)
 
          // Data we will need to maintain in the upcoming traversal.
@@ -547,14 +472,6 @@
                propagateMovement(point, null)
             }
          }
-         // Update the opacity of rulers.
-         for (let ruler of activeRulers) {
-            let generator = move.rulerGenerators.get(ruler)
-            let refPoint = generator.displaceBy(move.vectors.get(generator))
-            ruler.setOpacity(refPoint)
-         }
-         activeRulers = activeRulers // Tell Svelte the state has changed.
-
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
             edgeAxis: Axis | null // The axis of the edge we just followed.
@@ -615,7 +532,6 @@
          point.moveBy(move.vectors.get(point))
       }
       move = null
-      activeRulers = new Set()
    }
    function beginRectSelect(start: Point) {
       rectSelect = {
@@ -784,15 +700,6 @@
       }
    }}
 >
-   <!-- <defs>
-      <filter id="blur" filterUnits="userSpaceOnUse">
-         <feGaussianBlur stdDeviation="3" />
-      </filter>
-      <filter id="shadow" filterUnits="userSpaceOnUse">
-         <feOffset result="offOut" in="SourceAlpha" dx="2" dy="2" />
-         <feGaussianBlur stdDeviation="2" />
-      </filter>
-   </defs> -->
    <g>
       <!-- Bottom layer -->
       {#each [...activeRulers] as ruler}
@@ -864,13 +771,7 @@
    :global(.selected) {
       fill: yellow;
       stroke: yellow;
-      /* filter: url(#blur); */
    }
-   /* :global(.shadow) {
-      fill: rgba(0, 0, 0, 0.6);
-      stroke: rgba(0, 0, 0, 0.6);
-      filter: url(#shadow);
-   } */
    svg {
       width: 100%;
       height: 100%;
