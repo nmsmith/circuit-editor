@@ -1,9 +1,10 @@
 <script lang="ts">
-   import type { Point } from "./math"
-   export let start: Point
-   export let end: Point
+   import type { Point, Segment } from "./math"
+   export let segment: Segment
    export let highlighted: boolean = false
    export let selected: boolean = false
+   $: start = segment.start
+   $: end = segment.end
    let flair: string
    $: {
       flair = ""

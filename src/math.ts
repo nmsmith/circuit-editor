@@ -34,6 +34,26 @@ export class Vector extends VectorBase {
    sub(v: Vector): Vector {
       return new Vector(this.x - v.x, this.y - v.y)
    }
+   // Rotate the vector by the given angle.
+   // The angle can either be provided as radians, or as an Axis object.
+   addRotation(angle: number | Axis): Vector {
+      let [cos, sin] =
+         angle instanceof Axis
+            ? [angle.x, angle.y]
+            : [Math.cos(angle), Math.sin(angle)]
+      let x = this.x
+      let y = this.y
+      return new Vector(cos * x - sin * y, sin * x + cos * y)
+   }
+   subRotation(angle: number | Axis): Vector {
+      let [cos, sin] =
+         angle instanceof Axis
+            ? [angle.x, angle.y]
+            : [Math.cos(angle), Math.sin(angle)]
+      let x = this.x
+      let y = this.y
+      return new Vector(cos * x + sin * y, -sin * x + cos * y)
+   }
    dot(v: Vector): number {
       return this.x * v.x + this.y * v.y
    }
@@ -49,7 +69,7 @@ function mod(x: number, y: number) {
    return ((x % y) + y) % y
 }
 
-// We encode an axis as a unit vector with an angle in [-90, 90).
+// We encode an axis as a unit vector with an angle in [-90°, 90°).
 export class Axis extends Vector {
    static readonly horizontal = new Axis(1, 0)
    static readonly vertical = new Axis(0, -1)
@@ -57,7 +77,7 @@ export class Axis extends Vector {
       super(x, y)
    }
    static fromAngle(radians: number): Axis {
-      // Ensure the angle is in [-90, 90).
+      // Ensure the angle is in [-90°, 90°).
       const quarterTurn = Math.PI / 2
       radians = mod(radians + quarterTurn, Math.PI) - quarterTurn
       return new Axis(Math.cos(radians), Math.sin(radians))
@@ -103,9 +123,9 @@ export class Point extends VectorBase {
    // These "move" operations are the only operations that mutate points.
    // If we have these operations, we can implement circuit manipulations such
    // as dragging without having to mutate the circuit data structure itself.
-   moveTo(x: number, y: number): void {
-      ;(this.x as number) = x
-      ;(this.y as number) = y
+   moveTo(p: Point): void {
+      ;(this.x as number) = p.x
+      ;(this.y as number) = p.y
    }
    moveBy(v: Vector): void {
       ;(this.x as number) += v.x
@@ -213,9 +233,16 @@ export class Segment {
          .dot(this.end.displacementFrom(this.start))
       return dot >= 0 && dot <= this.sqLength()
    }
+   // Returns the point that is the given fraction of the way along the
+   // segment, where 0 is segment.start and 1 is segment.end.
+   pointAt(frac: number): Point {
+      return this.start.displaceBy(
+         this.end.displacementFrom(this.start).scaleBy(frac)
+      )
+   }
    // Returns the endpoints of the segment, plus the specified number of
    // interior points (equally spaced).
-   *points(interiorPoints: number) {
+   *points(interiorPoints: number): Generator<Point> {
       yield this.start
       if (interiorPoints > 0) {
          let d = this.end
@@ -268,4 +295,73 @@ function genericIntersection(
       let y = p1.y - dy12 * t
       return new Point(x, y)
    } else return null
+}
+
+export type Padding = {
+   left: number
+   right: number
+   top: number
+   bottom: number
+}
+export class Box {
+   origin: Point
+   direction: Vector
+   padding: Padding
+   constructor(origin: Point, axis: Axis, padding: Padding) {
+      this.origin = origin
+      this.direction = axis
+      this.padding = padding
+   }
+   static fromPaddedPoint(origin: Point, axis: Axis, padding: Padding): Box {
+      return new Box(origin, axis, padding)
+   }
+   static fromPaddedSegment(segment: Segment, padding: Padding) {
+      let length = segment.length()
+      let pointPadding = {
+         left: padding.left + length / 2,
+         right: padding.right + length / 2,
+         top: padding.top,
+         bottom: padding.bottom,
+      }
+      return new Box(segment.pointAt(0.5), segment.axis, pointPadding)
+   }
+   *corners() {
+      let cos = this.direction.x
+      let sin = this.direction.y
+      // top left
+      yield this.origin.displaceBy(
+         new Vector(
+            cos * -this.padding.left - sin * -this.padding.top,
+            sin * -this.padding.left + cos * -this.padding.top
+         )
+      )
+      // top right
+      yield this.origin.displaceBy(
+         new Vector(
+            cos * this.padding.right - sin * -this.padding.top,
+            sin * this.padding.right + cos * -this.padding.top
+         )
+      )
+      // bottom right
+      yield this.origin.displaceBy(
+         new Vector(
+            cos * this.padding.right - sin * this.padding.bottom,
+            sin * this.padding.right + cos * this.padding.bottom
+         )
+      )
+      // bottom left
+      yield this.origin.displaceBy(
+         new Vector(
+            cos * -this.padding.left - sin * this.padding.bottom,
+            sin * -this.padding.left + cos * this.padding.bottom
+         )
+      )
+   }
+   *sides() {
+      let [tl, tr, br, bl] = this.corners()
+      yield new Segment(tl, tr)
+      yield new Segment(tr, br)
+      yield new Segment(br, bl)
+      yield new Segment(bl, tl)
+   }
 }

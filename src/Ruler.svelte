@@ -4,7 +4,7 @@
    const rulerOpaqueDistance = 15 // Max distance at which opaque
    const rulerTransparentDistance = 60 // Min distance at which transparent
    const rulerTaperDistance = rulerTransparentDistance * Math.SQRT2
-   // Model
+   // Abstract model
    export class Ruler {
       readonly line: Line
       render: "line" | "ray" | "none"
