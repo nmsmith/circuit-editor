@@ -206,7 +206,9 @@
       circuit = circuit
       segments = segments
    }
-   function tryRoundingToExistingAxis(subject?: Axis): Axis | undefined {
+   // Find an existing Axis object in the circuit that is equivalent to the
+   // given Axis. If no such Axis exists, return the original axis.
+   function findExistingAxis(subject?: Axis): Axis | undefined {
       if (!subject) return
       for (let axis of snapAxes) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
@@ -285,6 +287,7 @@
       axis?: Axis
    } | null = null
    let move: {
+      grabbedAxis: Axis
       start: Point
       end: Point
       originalPositions: DefaultMap<Point, Point>
@@ -329,7 +332,7 @@
          if (easeToEndpoint.outcome === "snapped") {
             draw.end = easeToEndpoint.point
             draw.endIsNew = false
-            draw.axis = tryRoundingToExistingAxis(
+            draw.axis = findExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
          } else {
@@ -357,7 +360,7 @@
                if (ease.outcome === "snapped") draw.endSegment = s.segment
             }
             draw.endIsNew = true
-            draw.axis = tryRoundingToExistingAxis(
+            draw.axis = findExistingAxis(
                Axis.fromVector(draw.end.displacementFrom(draw.start))
             )
          }
@@ -399,7 +402,7 @@
 
       function bifurcate(segment: Segment, bifurcationPoint: Point) {
          let { start, end } = segment
-         let axis = tryRoundingToExistingAxis(
+         let axis = findExistingAxis(
             Axis.fromVector(start.displacementFrom(end))
          )
          if (axis) {
@@ -416,7 +419,20 @@
          }
       }
    }
-   function beginMove(start: Point) {
+   function beginMove(thingGrabbed: Point | Segment, start: Point) {
+      // Find the Axis that the moved objects should snap along & orthogonal to.
+      let grabbedAxis
+      if (thingGrabbed instanceof Segment) {
+         grabbedAxis = thingGrabbed.axis
+      } else {
+         let axis = Axis.horizontal
+         for (let [_, segment] of circuit.get(thingGrabbed)) {
+            axis = segment.axis
+            // Prefer horizontal and vertical axes.
+            if (axis === Axis.horizontal || axis === Axis.vertical) break
+         }
+         grabbedAxis = axis
+      }
       // Make a copy of every Point in the circuit prior to movement.
       // We need to use these copies as a reference, because we will be
       // mutating the Point objects over the course of the movement.
@@ -425,6 +441,7 @@
          originalPositions.set(point, point.clone())
       }
       move = {
+         grabbedAxis,
          start: start.clone(),
          end: start.clone(),
          originalPositions,
@@ -483,29 +500,29 @@
          doMove()
 
          // ----- PART 2: Attempt to snap the movement to nearby objects. -----
-
+         let snapAxis1 = move.grabbedAxis
+         let snapAxis2 = findExistingAxis(move.grabbedAxis.orthogonalAxis())
          // To start with, compute relevant info about each segment.
-         let [axis1, axis2] = [Axis.horizontal, Axis.vertical]
          let snapInfo = new Map()
          for (let seg of segments) {
             let start = Point.zero.displaceBy(
-               seg.start.displacementFrom(Point.zero).subRotation(axis1)
+               seg.start.displacementFrom(Point.zero).subRotation(snapAxis1)
             )
             let end = Point.zero.displaceBy(
-               seg.end.displacementFrom(Point.zero).subRotation(axis1)
+               seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
             )
             let s = pointInfo.get(seg.start)
             let e = pointInfo.get(seg.end)
             let sMovesX, sMovesY, eMovesX, eMovesY
             sMovesX = sMovesY = s.moveType === "full move"
             if (s.moveType instanceof Axis) {
-               sMovesX = (s.moveType === seg.axis) !== (seg.axis === axis1)
-               sMovesY = (s.moveType === seg.axis) !== (seg.axis === axis2)
+               sMovesX = (s.moveType === seg.axis) !== (seg.axis === snapAxis1)
+               sMovesY = (s.moveType === seg.axis) !== (seg.axis === snapAxis2)
             }
             eMovesX = eMovesY = e.moveType === "full move"
             if (e.moveType instanceof Axis) {
-               eMovesX = (e.moveType === seg.axis) !== (seg.axis === axis1)
-               eMovesY = (e.moveType === seg.axis) !== (seg.axis === axis2)
+               eMovesX = (e.moveType === seg.axis) !== (seg.axis === snapAxis1)
+               eMovesY = (e.moveType === seg.axis) !== (seg.axis === snapAxis2)
             }
             let [x1, x2, x1Moves, x2Moves] =
                start.x <= end.x
@@ -523,10 +540,10 @@
          let minXSnap = Number.POSITIVE_INFINITY
          let minYSnap = Number.POSITIVE_INFINITY
          for (let segA of segments) {
-            if (segA.axis !== axis1 && segA.axis !== axis2) continue
+            if (segA.axis !== snapAxis1 && segA.axis !== snapAxis2) continue
             let a = snapInfo.get(segA)
             for (let segB of segments) {
-               if (segB.axis !== axis1 && segB.axis !== axis2) continue
+               if (segB.axis !== snapAxis1 && segB.axis !== snapAxis2) continue
                let b = snapInfo.get(segB)
                let notEq = segA !== segB ? 1 : -1
                // If overlapping vertically, consider the distance horizontally.
@@ -564,7 +581,9 @@
          } else if (Math.abs(minYSnap) >= snapRadius /* ease toward snap */) {
             minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
          }
-         moveVector = moveVector.add(new Vector(minXSnap, minYSnap))
+         moveVector = moveVector.add(
+            new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
+         )
          // Clear the old movement state.
          for (let info of pointInfo.values()) {
             info.moveVector = zeroVector
@@ -780,7 +799,7 @@
                   // We have to update this reactive variable manually here,
                   // because Svelte won't update it until next render.
                   pointsToMove = selectedPoints()
-                  beginMove(snap.point)
+                  beginMove(snap.target, snap.point)
                } else waitingForDrag = clickPoint
                break
             }

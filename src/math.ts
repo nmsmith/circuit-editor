@@ -93,6 +93,9 @@ export class Axis extends Vector {
          return new Axis(v.x, v.y)
       }
    }
+   orthogonalAxis(): Axis {
+      return this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
+   }
    approxEquals(a: this, errorRatio: number): boolean {
       return (
          super.approxEquals(a, errorRatio) ||
