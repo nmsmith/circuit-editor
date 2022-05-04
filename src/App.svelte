@@ -18,6 +18,7 @@
    // Snapping constants
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
+   const gapSelectError = 1 // diff from standardGap acceptable to gap select
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
    const snapRadius = 15 // dist btw mouse & snap point at which snapping occurs
    const snapJump = 5 // the distance things move at the moment they snap
@@ -257,9 +258,71 @@
          if (draw.endSegment) highlighted.add(draw.endSegment)
       } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
+      } else if (bulkHighlighted.size > 0) {
+         for (let s of bulkHighlighted) highlighted.add(s)
       } else if (!move) {
          let snap = trySnapping(mouse)
          if (snap.target) highlighted.add(snap.target)
+      }
+   }
+   let bulkHighlighted: Set<Segment>
+   $: /* When activated, highlight all objects which are standardGap apart.*/ {
+      if (cmd) {
+         bulkHighlighted = new Set()
+         let s = closestSegment(mouse)
+         if (s && s.point.sqDistanceFrom(mouse) < sqSnapRadius) {
+            // Do bulk highlighting (and later, selection) along the axis
+            // orthogonal to the segment's axis. To achieve this, we
+            // re-coordinatize every object that has the same orientation as
+            // the segment as an AABB, and search along the resultant y-axis.
+            let selectAxis = s.segment.axis
+            let orthAxis = findExistingAxis(selectAxis.orthogonalAxis())
+            type SegmentInfo = {
+               segment: Segment
+               x: number[]
+               y: number[]
+               visited: boolean
+            }
+            let info = new Map<Segment, SegmentInfo>()
+            for (let seg of segments) {
+               if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
+               let start = Point.zero.displaceBy(
+                  seg.start.displacementFrom(Point.zero).subRotation(selectAxis)
+               )
+               let end = Point.zero.displaceBy(
+                  seg.end.displacementFrom(Point.zero).subRotation(selectAxis)
+               )
+               let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
+               let y = start.y <= end.y ? [start.y, end.y] : [end.y, start.y]
+               info.set(seg, { segment: seg, x, y, visited: false })
+            }
+            let [front, back] =
+               s.point.displacementFrom(mouse).subRotation(selectAxis).y > 0
+                  ? [0, 1]
+                  : [1, 0]
+            bulkHighlighted.add(s.segment)
+            let startInfo = info.get(s.segment) as SegmentInfo
+            startInfo.visited = true
+            highlightFrom(startInfo)
+            function highlightFrom(current: SegmentInfo) {
+               for (let i of info.values()) {
+                  if (i.visited) continue
+                  let disp = (back - front) * (i.y[front] - current.y[back])
+                  if (
+                     // If the bounding boxes are touching...
+                     Math.abs(disp - standardGap) < gapSelectError &&
+                     i.x[0] <= current.x[1] + standardGap &&
+                     i.x[1] >= current.x[0] - standardGap
+                  ) {
+                     bulkHighlighted.add(i.segment)
+                     i.visited = true
+                     highlightFrom(i)
+                  }
+               }
+            }
+         }
+      } else {
+         bulkHighlighted = new Set()
       }
    }
    let selected: ToggleSet<Point | Segment> = new ToggleSet()
@@ -792,8 +855,11 @@
          switch (tool) {
             case "select & move": {
                let snap = trySnapping(clickPoint)
-               if (snap.target && !shift && !alt && !cmd) {
-                  if (!snap.isSelected) {
+               if (snap.target && !shift && !alt) {
+                  if (cmd) {
+                     selected.clear()
+                     for (let s of bulkHighlighted) selected.add(s)
+                  } else if (!snap.isSelected) {
                      selected = new ToggleSet([snap.target])
                   }
                   // We have to update this reactive variable manually here,
@@ -817,8 +883,12 @@
          switch (tool) {
             case "select & move":
                if (!snap.target) selected.clear()
-               else if (shift) selected.toggle(snap.target)
-               else if (alt) selected.delete(snap.target)
+               else if (shift && cmd)
+                  for (let s of bulkHighlighted) selected.add(s)
+               else if (shift && !cmd) selected.toggle(snap.target)
+               else if (alt && cmd)
+                  for (let s of bulkHighlighted) selected.delete(s)
+               else if (alt && !cmd) selected.delete(snap.target)
                else selected = new ToggleSet([snap.target])
                selected = selected
                break
@@ -908,6 +978,10 @@
    :global(.selected) {
       fill: yellow;
       stroke: yellow;
+   }
+   :global(.highlighted.selected) {
+      fill: rgb(120, 255, 0);
+      stroke: rgb(120, 255, 0);
    }
    svg {
       width: 100%;

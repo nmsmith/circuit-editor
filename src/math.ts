@@ -140,7 +140,7 @@ export class Point extends VectorBase {
 export class Line {
    readonly origin: Point
    readonly axis: Axis
-   constructor(origin: Point, axis: Vector) {
+   constructor(origin: Point, axis: Axis) {
       this.origin = origin
       this.axis = axis
    }
