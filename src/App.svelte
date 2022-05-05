@@ -177,13 +177,27 @@
    // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
 
-   function deleteSegment(segment: Segment): void {
+   function segmentExistsBetween(p1: Point, p2: Point) {
+      if (!circuit.has(p1)) return false
+      for (let [p] of circuit.get(p1)) {
+         if (p === p2) return true
+      }
+      return false
+   }
+   function addSegment(segment: Segment) {
+      circuit.get(segment.start).add([segment.end, segment])
+      circuit.get(segment.end).add([segment.start, segment])
+      segments.add(segment)
+      circuitAxes.update(segment.axis, (c) => c + 1)
+   }
+   function deleteSegment(segment: Segment, fuse: boolean): void {
       // Delete from "circuit"
       let startEdges = circuit.get(segment.start)
       for (let edge of startEdges) {
          if (edge[1] === segment) {
             startEdges.delete(edge)
             if (startEdges.size === 0) circuit.delete(segment.start)
+            else if (fuse && startEdges.size === 2) fuseSegments(segment.start)
             break
          }
       }
@@ -192,6 +206,7 @@
          if (edge[1] === segment) {
             endEdges.delete(edge)
             if (endEdges.size === 0) circuit.delete(segment.end)
+            else if (fuse && endEdges.size === 2) fuseSegments(segment.end)
             break
          }
       }
@@ -207,6 +222,46 @@
       circuit = circuit
       segments = segments
    }
+   function cutSegment(segment: Segment, cutPoint: Point) {
+      let { start, end } = segment
+      let axis = findExistingAxis(Axis.fromVector(start.displacementFrom(end)))
+      if (axis) {
+         deleteSegment(segment, false)
+         addSegment(new Segment(cutPoint, start, axis))
+         addSegment(new Segment(cutPoint, end, axis))
+      }
+   }
+   // If the junction is an X-junction, or a pair of colinear segments, fuse
+   // together each pair of colinear segments into a single segment.
+   function fuseSegments(junction: Point) {
+      let parts = partsOfJunction(junction)
+      for (let segs of parts) {
+         let fusedSegment = new Segment(
+            junction === segs[0].start ? segs[0].end : segs[0].start,
+            junction === segs[1].start ? segs[1].end : segs[1].start,
+            segs[0].axis
+         )
+         deleteSegment(segs[0], false)
+         deleteSegment(segs[1], false)
+         addSegment(fusedSegment)
+      }
+   }
+   // If the junction is an X-junction, or a pair of colinear segments, return
+   // each pair of colinear segments. Otherwise, return nothing.
+   function partsOfJunction(junction: Point): Set<Segment[]> {
+      let edges = circuit.get(junction)
+      if (edges.size !== 2 && edges.size !== 4) return new Set()
+      let axes = new DefaultMap<Axis, OutgoingSegment[]>(() => [])
+      for (let edge of edges) {
+         axes.get(edge[1].axis).push(edge)
+      }
+      let pairs = new Set<Segment[]>()
+      for (let edgePair of axes.values()) {
+         if (edgePair.length !== 2) return new Set()
+         pairs.add([edgePair[0][1], edgePair[1][1]])
+      }
+      return pairs
+   }
    // Find an existing Axis object in the circuit that is equivalent to the
    // given Axis. If no such Axis exists, return the original axis.
    function findExistingAxis(subject?: Axis): Axis | undefined {
@@ -218,13 +273,6 @@
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
       }
       return subject
-   }
-   function segmentExistsBetween(p1: Point, p2: Point) {
-      if (!circuit.has(p1)) return false
-      for (let [p] of circuit.get(p1)) {
-         if (p === p2) return true
-      }
-      return false
    }
    // Input state
    let mouse: Point = Point.zero
@@ -446,41 +494,20 @@
             (draw.endSegment.start !== draw.start &&
                draw.endSegment.end !== draw.start))
       ) {
-         // Add the new segment
-         let segment = new Segment(draw.start, draw.end, draw.axis)
-         circuit.get(draw.start).add([draw.end, segment])
-         circuit.get(draw.end).add([draw.start, segment])
-         segments.add(segment)
-         circuitAxes.update(draw.axis, (c) => c + 1)
-         // Bifurcate existing segments if necessary
-         if (draw.startSegment) bifurcate(draw.startSegment, draw.start)
-         if (draw.endSegment) bifurcate(draw.endSegment, draw.end)
-         // Let Svelte know the circuit has changed
+         addSegment(new Segment(draw.start, draw.end, draw.axis))
+         // If the segment extends an existing segment colinearly, fuse it.
+         if (circuit.get(draw.start).size === 2) fuseSegments(draw.start)
+         if (circuit.get(draw.end).size === 2) fuseSegments(draw.end)
+         // If drawing into/out of the middle of another segment, divide it.
+         if (draw.startSegment) cutSegment(draw.startSegment, draw.start)
+         if (draw.endSegment) cutSegment(draw.endSegment, draw.end)
+         // Let Svelte know the circuit has changed.
          circuit = circuit
          segments = segments
       }
       // Reset the drawing state.
       draw = null
       activeRulers = new Set()
-
-      function bifurcate(segment: Segment, bifurcationPoint: Point) {
-         let { start, end } = segment
-         let axis = findExistingAxis(
-            Axis.fromVector(start.displacementFrom(end))
-         )
-         if (axis) {
-            deleteSegment(segment)
-            let segStart = new Segment(bifurcationPoint, start, axis)
-            circuit.get(bifurcationPoint).add([start, segStart])
-            circuit.get(start).add([bifurcationPoint, segStart])
-            segments.add(segStart)
-            let segEnd = new Segment(bifurcationPoint, end, axis)
-            circuit.get(bifurcationPoint).add([end, segEnd])
-            circuit.get(end).add([bifurcationPoint, segEnd])
-            segments.add(segEnd)
-            circuitAxes.update(axis, (c) => c + 2)
-         }
-      }
    }
    function beginMove(thingGrabbed: Point | Segment, start: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
@@ -805,7 +832,7 @@
          case "Backspace":
          case "Delete":
             for (let thing of selected) {
-               if (thing instanceof Segment) deleteSegment(thing)
+               if (thing instanceof Segment) deleteSegment(thing, true)
             }
             selected = new ToggleSet()
             break
@@ -893,6 +920,7 @@
                selected = selected
                break
             case "hydraulic line":
+               if (snap.target instanceof Point) fuseSegments(snap.target)
                break
          }
       } else {
