@@ -190,14 +190,13 @@
       segments.add(segment)
       circuitAxes.update(segment.axis, (c) => c + 1)
    }
-   function deleteSegment(segment: Segment, fuse: boolean): void {
+   function deleteSegment(segment: Segment) {
       // Delete from "circuit"
       let startEdges = circuit.get(segment.start)
       for (let edge of startEdges) {
          if (edge[1] === segment) {
             startEdges.delete(edge)
             if (startEdges.size === 0) circuit.delete(segment.start)
-            else if (fuse && startEdges.size === 2) fuseSegments(segment.start)
             break
          }
       }
@@ -206,7 +205,6 @@
          if (edge[1] === segment) {
             endEdges.delete(edge)
             if (endEdges.size === 0) circuit.delete(segment.end)
-            else if (fuse && endEdges.size === 2) fuseSegments(segment.end)
             break
          }
       }
@@ -222,11 +220,31 @@
       circuit = circuit
       segments = segments
    }
+   function deleteSelected() {
+      let junctionsToFuse = new Set<Point>()
+      for (let thing of selected) {
+         if (thing instanceof Segment) {
+            deleteSegment(thing)
+            junctionsToFuse.add(thing.start)
+            junctionsToFuse.add(thing.end)
+         } else {
+            for (let [_, segment] of circuit.get(thing)) {
+               deleteSegment(segment)
+               junctionsToFuse.add(segment.start)
+               junctionsToFuse.add(segment.end)
+            }
+         }
+      }
+      for (let junction of junctionsToFuse) {
+         if (circuit.get(junction).size === 2) fuseSegments(junction)
+      }
+      selected = new ToggleSet()
+   }
    function cutSegment(segment: Segment, cutPoint: Point) {
       let { start, end } = segment
       let axis = findExistingAxis(Axis.fromVector(start.displacementFrom(end)))
       if (axis) {
-         deleteSegment(segment, false)
+         deleteSegment(segment)
          addSegment(new Segment(cutPoint, start, axis))
          addSegment(new Segment(cutPoint, end, axis))
       }
@@ -241,8 +259,8 @@
             junction === segs[1].start ? segs[1].end : segs[1].start,
             segs[0].axis
          )
-         deleteSegment(segs[0], false)
-         deleteSegment(segs[1], false)
+         deleteSegment(segs[0])
+         deleteSegment(segs[1])
          addSegment(fusedSegment)
       }
    }
@@ -741,14 +759,14 @@
             for (let [nextPoint, nextSegment] of nextEdges) {
                let nextEdgeAxis = nextSegment.axis
                let next = pointInfo.get(nextPoint)
-               if (
+               if (next.loneEdge) {
+                  next.moveType = current.moveType
+                  next.moveVector = current.moveVector
+               } else if (
                   next.moveType === "full move" ||
                   next.moveType === nextEdgeAxis
                ) {
                   continue
-               } else if (next.loneEdge) {
-                  next.moveType = current.moveType
-                  next.moveVector = current.moveVector
                } else if (
                   current.moveType === "full move" ||
                   current.moveType === nextEdgeAxis
@@ -830,12 +848,10 @@
             tool = "hydraulic line"
             break
          case "Backspace":
-         case "Delete":
-            for (let thing of selected) {
-               if (thing instanceof Segment) deleteSegment(thing, true)
-            }
-            selected = new ToggleSet()
+         case "Delete": {
+            deleteSelected()
             break
+         }
       }
    }}
    on:keyup={(event) => {
@@ -1020,6 +1036,8 @@
    }
    .toolText {
       user-select: none;
+      -webkit-user-select: none;
+      cursor: default;
       font: 20px sans-serif;
    }
 </style>
