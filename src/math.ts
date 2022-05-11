@@ -63,6 +63,9 @@ export class Vector extends VectorBase {
    scalarProjectionOnto(v: Vector): number {
       return this.dot(v) / v.length()
    }
+   rejectionFrom(v: Vector): Vector {
+      return this.sub(this.projectionOnto(v))
+   }
 }
 
 function mod(x: number, y: number) {

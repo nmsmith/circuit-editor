@@ -318,10 +318,8 @@
    $: {
       highlighted = new Set()
       if (draw) {
-         if (!draw.startIsNew) highlighted.add(draw.start)
-         if (!draw.endIsNew) highlighted.add(draw.end)
-         if (draw.startSegment) highlighted.add(draw.startSegment)
-         if (draw.endSegment) highlighted.add(draw.endSegment)
+         if (draw.startObject) highlighted.add(draw.startObject)
+         if (draw.endObject) highlighted.add(draw.endObject)
       } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
       } else if (bulkHighlighted.size > 0) {
@@ -407,13 +405,9 @@
    $: pointsToMove = selectedPoints()
    let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
-      start: Point
-      startIsNew: boolean
-      startSegment?: Segment
-      end: Point
-      endIsNew: boolean
-      endSegment?: Segment
-      axis?: Axis
+      segment: Segment
+      startObject?: Point | Segment
+      endObject?: Point | Segment
    } | null = null
    let move: {
       grabbedAxis: Axis
@@ -429,103 +423,93 @@
    // Rulers that act as a visual indicator of snapping behaviour
    let activeRulers: Set<Ruler> = new Set()
 
-   function beginDraw(start: Point, startSegment?: Segment) {
-      draw = {
-         start,
-         startIsNew: !circuit.has(start),
-         startSegment,
-         end: start, // Updated elsewhere
-         endIsNew: !circuit.has(start),
-      }
-      let r: Set<Ruler> = new Set()
+   function beginDraw(start: Point, axis: Axis, startObject?: Point | Segment) {
+      // Add the line being drawn to the circuit.
+      let end = start.clone()
+      let segment = new Segment(start, end, axis)
+      addSegment(segment)
+      if (startObject instanceof Segment) cutSegment(startObject, start)
+      draw = { segment, startObject }
+      // Configure the endpoint of the line to be dragged as the mouse moves.
+      selected = new ToggleSet([end])
+      beginMove(end, end)
       // Create a ruler for each of the "standard" axes.
-      for (let axis of snapAxes) {
-         r.add(new Ruler(draw.start, axis, "ray"))
-      }
+      let rulers: Set<Ruler> = new Set()
+      for (let a of snapAxes) rulers.add(new Ruler(start, a, "ray"))
       // Create a ruler for each edge incident to the starting vertex (if any).
-      if (circuit.has(draw.start)) {
-         for (let [_, segment] of circuit.get(draw.start)) {
-            if (!snapAxes.includes(segment.axis)) {
-               r.add(new Ruler(draw.start, segment.axis, "ray"))
+      if (circuit.has(start)) {
+         for (let [_, seg] of circuit.get(start)) {
+            if (!snapAxes.includes(seg.axis)) {
+               rulers.add(new Ruler(start, seg.axis, "ray"))
             }
          }
       }
-      activeRulers = r
+      activeRulers = rulers
    }
    // ----- Compute the state of an in-progress draw operation -----
-   $: /* On a change to 'draw' or 'mouse' */ {
-      if (draw) {
-         draw.endSegment = undefined
-         let easeToEndpoint = easeToTarget(mouse, closestEndpoint(mouse))
-         // Prioritize endpoint snapping over everything else.
-         if (easeToEndpoint.outcome === "snapped") {
-            draw.end = easeToEndpoint.point
-            draw.endIsNew = false
-            draw.axis = findExistingAxis(
-               Axis.fromVector(draw.end.displacementFrom(draw.start))
-            )
-         } else {
-            draw.end =
-               // Ease out of zero length.
-               mouse.sqDistanceFrom(draw.start) < sqEaseRadius
-                  ? easeToTarget(mouse, draw.start).point
-                  : easeToEndpoint.point
-            let easeToRuler = easeToTarget(
-               draw.end,
-               closestRuler(draw.end)?.point
-            )
-            draw.end = easeToRuler.point
-            let s =
-               // If snapped to a ruler, ease along the ruler's axis.
-               easeToRuler.outcome === "snapped"
-                  ? closestSegment(
-                       draw.end,
-                       Axis.fromVector(draw.end.displacementFrom(draw.start))
-                    )
-                  : closestSegment(draw.end)
-            if (s) {
-               let ease = easeToTarget(draw.end, s.point)
-               draw.end = ease.point
-               if (ease.outcome === "snapped") draw.endSegment = s.segment
-            }
-            draw.endIsNew = true
-            draw.axis = findExistingAxis(
-               Axis.fromVector(draw.end.displacementFrom(draw.start))
-            )
-         }
-         // Update the opacity of rulers.
-         for (let ruler of activeRulers) ruler.setOpacity(draw.end)
-         activeRulers = activeRulers // Tell Svelte the state has changed.
-      }
-   }
+   // $: /* On a change to 'draw' or 'mouse' */ {
+   //    if (draw) {
+   //       draw.endObject = undefined
+   //       let easeToEndpoint = easeToTarget(mouse, closestEndpoint(mouse))
+   //       let easeAxis = findExistingAxis(
+   //          Axis.fromVector(easeToEndpoint.point.displacementFrom(draw.start))
+   //       )
+   //       // Prioritize endpoint snapping over everything else.
+   //       if (
+   //          easeToEndpoint.outcome === "snapped" &&
+   //          // TODO; Remove this special logic for connecting to a vertex that
+   //          // JUST HAPPENS to sit on a ruler, and replace it with the more
+   //          // general logic of "attracting" vertices toward the ruler!
+   //          (alt || (easeAxis && snapAxes.includes(easeAxis)))
+   //       ) {
+   //          draw.end = easeToEndpoint.point
+   //          draw.endIsNew = false
+   //          draw.axisOld = easeAxis
+   //       } else {
+   //          if (mouse.sqDistanceFrom(draw.start) < sqEaseRadius) {
+   //             // Ease out of zero length.
+   //             draw.end = easeToTarget(mouse, draw.start).point
+   //          } else if (alt) {
+   //             draw.end = mouse
+   //          } else draw.end = easeToEndpoint.point
+   //          // Unless in the alt. draw mode, snap to one of the standard axes.
+   //          let ruler = closestRuler(draw.end)
+   //          if (ruler && !alt) draw.end = ruler.point
+   //          // Try easing toward a nearby segment.
+   //          let s = alt
+   //             ? closestSegment(draw.end)
+   //             : closestSegment(
+   //                  draw.end,
+   //                  Axis.fromVector(draw.end.displacementFrom(draw.start))
+   //               )
+   //          if (s) {
+   //             let ease = easeToTarget(draw.end, s.point)
+   //             draw.end = ease.point
+   //             if (ease.outcome === "snapped") draw.endSegment = s.segment
+   //          }
+   //          draw.endIsNew = true
+   //          draw.axisOld = findExistingAxis(
+   //             Axis.fromVector(draw.end.displacementFrom(draw.start))
+   //          )
+   //       }
+   //       // Update the opacity of rulers.
+   //       for (let ruler of activeRulers) ruler.setOpacity(draw.end)
+   //       activeRulers = activeRulers // Tell Svelte the state has changed.
+   //    }
+   // }
    function endDraw() {
       if (!draw) return
-      if (
-         draw.start.sqDistanceFrom(draw.end) >= sqMinSegmentLength &&
-         draw.axis &&
-         !segmentExistsBetween(draw.start, draw.end) &&
-         (!draw.startSegment ||
-            (draw.startSegment !== draw.endSegment &&
-               draw.startSegment.start !== draw.end &&
-               draw.startSegment.end !== draw.end)) &&
-         (!draw.endSegment ||
-            (draw.endSegment.start !== draw.start &&
-               draw.endSegment.end !== draw.start))
-      ) {
-         addSegment(new Segment(draw.start, draw.end, draw.axis))
-         // If the segment extends an existing segment colinearly, fuse it.
-         if (circuit.get(draw.start).size === 2) fuseSegments(draw.start)
-         if (circuit.get(draw.end).size === 2) fuseSegments(draw.end)
-         // If drawing into/out of the middle of another segment, divide it.
-         if (draw.startSegment) cutSegment(draw.startSegment, draw.start)
-         if (draw.endSegment) cutSegment(draw.endSegment, draw.end)
-         // Let Svelte know the circuit has changed.
-         circuit = circuit
-         segments = segments
-      }
+      endMove()
+      if (draw.segment.sqLength() >= sqMinSegmentLength) {
+         // If the end of the drawn line intersects another segment,
+         // convert it into a T-junction.
+         if (draw.endObject instanceof Segment)
+            cutSegment(draw.endObject, draw.segment.end)
+      } else deleteSelected()
       // Reset the drawing state.
       draw = null
       activeRulers = new Set()
+      selected = new ToggleSet()
    }
    function beginMove(thingGrabbed: Point | Segment, start: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
@@ -559,7 +543,7 @@
    $: /* On a change to 'move' or 'mouse' */ {
       if (move) {
          move.end = mouse
-         let moveVector = move.end.displacementFrom(move.start)
+         let fullMoveVector = move.end.displacementFrom(move.start)
          // Information we will need to maintain in the upcoming traversal.
          let pointInfo = new DefaultMap(() => {
             return {
@@ -586,9 +570,8 @@
             if (edges.size === 1) pointInfo.get(point).loneEdge = edge
             else if (axes.length === 2) pointInfo.get(point).basis = axes
          }
-         // If we're _only_ grabbing the endpoints of a bunch of lone edges,
-         // and they are all on the same axis, use a simpler movement algorithm
-         // that merely resizes the edges.
+         // If we're _only_ grabbing the endpoints of a bunch of lone edges, and
+         // they are all on the same axis, use a slightly different algorithm.
          let allLonersOnAxis: Axis | false | undefined
          for (let thing of selected) {
             if (thing instanceof Point) {
@@ -606,6 +589,21 @@
          }
          // ----- PART 1: Move in accordance with the mouse. -----
          doMove()
+
+         // ----- TODO: (Put this somewhere.) If drawing, snap draw.end to
+         // points and segments, except for these exceptional cases:
+         if (
+            draw &&
+            !segmentExistsBetween(draw.segment.start, draw.segment.end) &&
+            (!(draw.startObject instanceof Segment) ||
+               (draw.startObject !== draw.endObject &&
+                  draw.startObject.start !== draw.segment.end &&
+                  draw.startObject.end !== draw.segment.end)) &&
+            (!(draw.endObject instanceof Segment) ||
+               (draw.endObject.start !== draw.segment.start &&
+                  draw.endObject.end !== draw.segment.start))
+         ) {
+         }
 
          // ----- PART 2: Attempt to snap the movement to nearby objects. -----
          let snapAxis1 = move.grabbedAxis
@@ -689,7 +687,7 @@
          } else if (Math.abs(minYSnap) >= snapRadius /* ease toward snap */) {
             minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
          }
-         moveVector = moveVector.add(
+         fullMoveVector = fullMoveVector.add(
             new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
          )
          // Clear the old movement state.
@@ -702,21 +700,17 @@
 
          function doMove() {
             if (allLonersOnAxis) {
-               // Restrict the movement of each loner such that only a simple
-               // resize occurs. But the movement is considered a "full move"
-               // for the purposes of the snapping logic.
+               let moveVector = fullMoveVector.rejectionFrom(allLonersOnAxis)
                for (let thing of selected) {
-                  if (thing instanceof Point) {
-                     let info = pointInfo.get(thing)
-                     info.moveType = "full move"
-                     info.moveVector =
-                        moveVector.projectionOnto(allLonersOnAxis)
-                  }
+                  let info = pointInfo.get(thing as Point)
+                  info.moveType = "full move"
+                  info.moveVector = fullMoveVector
+                  for (let [point, _] of circuit.get(thing as Point))
+                     propagateMovement(point, null, moveVector)
                }
             } else {
-               // Move each grabbed point.
                for (let point of pointsToMove) {
-                  propagateMovement(point, null)
+                  propagateMovement(point, null, fullMoveVector)
                }
             }
             // Commit the movement.
@@ -732,7 +726,8 @@
          }
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
-            edgeAxis: Axis | null // The axis of the edge we just followed.
+            edgeAxis: Axis | null, // The axis of the edge we just followed.
+            moveVector: Vector // The movement to propagate.
          ) {
             let current = pointInfo.get(currentPoint)
             if (edgeAxis && current.basis && current.moveType === "no move") {
@@ -759,7 +754,7 @@
             for (let [nextPoint, nextSegment] of nextEdges) {
                let nextEdgeAxis = nextSegment.axis
                let next = pointInfo.get(nextPoint)
-               if (next.loneEdge) {
+               if (next.loneEdge && next.moveType !== "full move") {
                   next.moveType = current.moveType
                   next.moveVector = current.moveVector
                } else if (
@@ -771,7 +766,7 @@
                   current.moveType === "full move" ||
                   current.moveType === nextEdgeAxis
                ) {
-                  propagateMovement(nextPoint, nextEdgeAxis)
+                  propagateMovement(nextPoint, nextEdgeAxis, moveVector)
                }
             }
          }
@@ -873,23 +868,29 @@
    on:mousemove={(event) => {
       mouse = new Point(event.clientX, event.clientY)
       // Check if the mouse has moved enough to trigger an action.
-      if (waitingForDrag && mouse.sqDistanceFrom(waitingForDrag) > 16) {
-         let snap = trySnapping(waitingForDrag)
+      if (waitingForDrag) {
+         let d = mouse.displacementFrom(waitingForDrag)
          switch (tool) {
             case "select & move":
-               beginRectSelect(waitingForDrag)
+               if (d.sqLength() > 16) {
+                  beginRectSelect(waitingForDrag)
+                  waitingForDrag = null
+               }
                break
             case "hydraulic line":
-               if (snap.target) {
-                  if (snap.target instanceof Point) {
-                     beginDraw(snap.point)
-                  } else {
-                     beginDraw(snap.point, snap.target)
-                  }
-               } else beginDraw(waitingForDrag)
+               if (d.sqLength() > sqSnapRadius) {
+                  let drawAxis =
+                     Math.abs(d.x) >= Math.abs(d.y)
+                        ? Axis.horizontal
+                        : Axis.vertical
+                  let snap = trySnapping(waitingForDrag)
+                  if (snap.target) {
+                     beginDraw(snap.point, drawAxis, snap.target)
+                  } else beginDraw(waitingForDrag, drawAxis, undefined)
+                  waitingForDrag = null
+               }
                break
          }
-         waitingForDrag = null
       }
    }}
    on:mousedown={(event) => {
@@ -960,9 +961,11 @@
             <Padding {segment} />
          {/if}
       {/each}
-      {#each [...activeRulers] as ruler}
-         <RulerHTML {ruler} />
-      {/each}
+      <!-- {#if !(draw && alt)}
+         {#each [...activeRulers] as ruler}
+            <RulerHTML {ruler} />
+         {/each}
+      {/if} -->
    </g>
    <g>
       <!-- Middle layer -->
@@ -983,18 +986,6 @@
             selected={selected.has(segment.end)}
          />
       {/each}
-
-      {#if draw}
-         <Wire segment={new Segment(draw.start, draw.end)} />
-         <Endpoint
-            position={draw.start}
-            highlighted={highlighted.has(draw.start)}
-         />
-         <Endpoint
-            position={draw.end}
-            highlighted={highlighted.has(draw.end)}
-         />
-      {/if}
    </g>
    <g>
       <text class="toolText" x="8" y="24">{tool}</text>
