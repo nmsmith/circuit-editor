@@ -708,13 +708,14 @@
                let { point, edge } = looseEndEdgeCase
                let [neighbour, { axis }] = edge
                moveInfo.set(point, fullMove)
-               propagateMovement(neighbour, null, {
+               let pseudoFull: MoveInfo = {
                   moveType: "full move",
                   vector: fullMove.vector.rejectionFrom(axis),
-               })
+               }
+               propagateMovement(neighbour, null, pseudoFull, pseudoFull)
             } else {
                for (let point of pointsToMove) {
-                  propagateMovement(point, null, fullMove)
+                  propagateMovement(point, null, fullMove, fullMove)
                }
             }
             // Commit the movement.
@@ -729,47 +730,49 @@
             segments = segments
          }
          function propagateMovement(
-            currentPoint: Point, // The point we are moving.
-            edgeAxis: Axis | null, // The axis of the edge we just followed.
-            info: MoveInfo // The movement info being propagated.
+            currentPoint: Point, // The Point we are moving.
+            edgeAxis: Axis | null, // The Axis of the edge we just followed.
+            proposed: MoveInfo, // The movement being proposed at this Point.
+            full: MoveInfo // The full movement.
          ) {
-            let current = moveInfo.get(currentPoint)
-            let axes = pointAxes.get(currentPoint)
-            if (edgeAxis && axes.length == 2 && current.moveType == "no move") {
-               // Keep only one component of the movement vector. This allows
-               // parts of the circuit to stretch and contract as it is moved.
-               current.moveType = edgeAxis
-               let otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
-               // This is (part of) the formula for expressing a vector in
-               // terms of a new basis. We express moveVector in terms of
-               // (edgeAxis, otherAxis), but we only keep the 2nd component.
-               current.vector = otherAxis.scaleBy(
-                  (edgeAxis.x * info.vector.y - edgeAxis.y * info.vector.x) /
-                     (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
-               )
-            } else {
-               // Move rigidly.
-               current.moveType = info.moveType
-               current.vector = info.vector
-            }
+            let prior: MoveInfo = moveInfo.get(currentPoint)
+            let adopted: MoveInfo
+            if (prior.moveType === "no move") {
+               let axes = pointAxes.get(currentPoint)
+               if (
+                  proposed.moveType === "full move" &&
+                  edgeAxis &&
+                  axes.length === 2
+               ) {
+                  // Keep only one component of the movement vector. This allows
+                  // parts of the circuit to stretch & contract as it is moved.
+                  let otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
+                  adopted = {
+                     moveType: otherAxis,
+                     // This is (part of) the formula for expressing a vector in
+                     // terms of a new basis. We express full.vector in terms of
+                     // (edgeAxis, otherAxis), but only keep the 2nd component.
+                     vector: otherAxis.scaleBy(
+                        (edgeAxis.x * full.vector.y -
+                           edgeAxis.y * full.vector.x) /
+                           (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
+                     ),
+                  }
+               } else adopted = proposed
+            } else adopted = full
+            moveInfo.set(currentPoint, adopted)
+            // Propagate the adopted movement to the current Point's neighbours.
             for (let [nextPoint, nextSegment] of circuit.get(currentPoint)) {
-               let nextEdgeAxis = nextSegment.axis
                let next = moveInfo.get(nextPoint)
-               let loneEdge = circuit.get(nextPoint).size === 1
-               if (loneEdge && next.moveType !== "full move") {
-                  next.moveType = current.moveType
-                  next.vector = current.vector
-               } else if (
+               if (
                   next.moveType === "full move" ||
-                  next.moveType === nextEdgeAxis
+                  next.moveType === adopted.moveType ||
+                  (next.moveType === "no move" &&
+                     nextSegment.axis === adopted.moveType)
                ) {
                   continue
-               } else if (
-                  current.moveType === "full move" ||
-                  current.moveType === nextEdgeAxis
-               ) {
-                  propagateMovement(nextPoint, nextEdgeAxis, info)
-               }
+               } else
+                  propagateMovement(nextPoint, nextSegment.axis, adopted, full)
             }
          }
       }
