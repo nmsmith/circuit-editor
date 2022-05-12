@@ -242,8 +242,9 @@
    }
    function cutSegment(segment: Segment, cutPoint: Point) {
       let { start, end } = segment
-      let axis = findExistingAxis(Axis.fromVector(start.displacementFrom(end)))
+      let axis = Axis.fromVector(start.displacementFrom(end))
       if (axis) {
+         axis = findExistingAxis(axis)
          deleteSegment(segment)
          addSegment(new Segment(cutPoint, start, axis))
          addSegment(new Segment(cutPoint, end, axis))
@@ -282,8 +283,7 @@
    }
    // Find an existing Axis object in the circuit that is equivalent to the
    // given Axis. If no such Axis exists, return the original axis.
-   function findExistingAxis(subject?: Axis): Axis | undefined {
-      if (!subject) return
+   function findExistingAxis(subject: Axis): Axis {
       for (let axis of snapAxes) {
          if (subject.approxEquals(axis, axisErrorTolerance)) return axis
       }
@@ -402,7 +402,6 @@
       }
       return s
    }
-   $: pointsToMove = selectedPoints()
    let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
       segment: Segment
@@ -543,49 +542,26 @@
    $: /* On a change to 'move' or 'mouse' */ {
       if (move) {
          move.end = mouse
-         let fullMoveVector = move.end.displacementFrom(move.start)
-         // Information we will need to maintain in the upcoming traversal.
-         let pointInfo = new DefaultMap(() => {
-            return {
-               // The kind of movement (full or restricted) the point has made.
-               moveType: "no move" as "full move" | Axis | "no move",
-               // The actual movement vector.
-               moveVector: zeroVector,
-               // Whether the point has only one edge.
-               loneEdge: null as null | OutgoingSegment,
-               // If a Point's edges are aligned with exactly two Axes, we
-               // treat the Axes as a vector basis, which we use to move points
-               // according to a "rectangle/polygon resizing" algorithm.
-               basis: null as null | Axis[],
-            }
-         })
-         // Gather some prerequisite information.
-         for (let [point, edges] of circuit) {
-            let axes: Axis[] = []
-            let edge = null
-            for (edge of edges) {
-               let [_, segment] = edge
-               if (!axes.includes(segment.axis)) axes.push(segment.axis)
-            }
-            if (edges.size === 1) pointInfo.get(point).loneEdge = edge
-            else if (axes.length === 2) pointInfo.get(point).basis = axes
+         let pointsToMove = selectedPoints()
+         // The movement information that we will compute and propagate.
+         type MoveInfo = {
+            moveType: "no move" | Axis | "full move"
+            vector: Vector
+            absorbAxis?: Axis
          }
-         // If we're _only_ grabbing the endpoints of a bunch of lone edges, and
-         // they are all on the same axis, use a slightly different algorithm.
-         let allLonersOnAxis: Axis | false | undefined
-         for (let thing of selected) {
-            if (thing instanceof Point) {
-               let current = pointInfo.get(thing)
-               if (current.loneEdge) {
-                  let axis = current.loneEdge[1].axis
-                  if (!allLonersOnAxis || allLonersOnAxis === axis) {
-                     allLonersOnAxis = axis
-                     continue
-                  }
-               }
-            }
-            allLonersOnAxis = false
-            break
+         let moveInfo = new DefaultMap<Point, MoveInfo>(() => {
+            return { moveType: "no move", vector: zeroVector }
+         })
+         let fullMove: MoveInfo = {
+            moveType: "full move",
+            vector: move.end.displacementFrom(move.start),
+         }
+         // Record the Axes incident to each Point.
+         let pointAxes = new Map<Point, Axis[]>()
+         for (let [point, edges] of circuit) {
+            let a: Axis[] = []
+            for (let [_, s] of edges) if (!a.includes(s.axis)) a.push(s.axis)
+            pointAxes.set(point, a)
          }
          // ----- PART 1: Move in accordance with the mouse. -----
          doMove()
@@ -617,8 +593,8 @@
             let end = Point.zero.displaceBy(
                seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
             )
-            let s = pointInfo.get(seg.start)
-            let e = pointInfo.get(seg.end)
+            let s = moveInfo.get(seg.start)
+            let e = moveInfo.get(seg.end)
             let sMovesX, sMovesY, eMovesX, eMovesY
             sMovesX = sMovesY = s.moveType === "full move"
             if (s.moveType instanceof Axis) {
@@ -687,38 +663,34 @@
          } else if (Math.abs(minYSnap) >= snapRadius /* ease toward snap */) {
             minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
          }
-         fullMoveVector = fullMoveVector.add(
+         fullMove.vector = fullMove.vector.add(
             new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
          )
-         // Clear the old movement state.
-         for (let info of pointInfo.values()) {
-            info.moveVector = zeroVector
-            info.moveType = "no move"
-         }
          // And finally: enact the new, perturbed movement.
+         moveInfo.clear()
          doMove()
 
-         function doMove() {
-            if (allLonersOnAxis) {
-               let moveVector = fullMoveVector.rejectionFrom(allLonersOnAxis)
-               for (let thing of selected) {
-                  let info = pointInfo.get(thing as Point)
-                  info.moveType = "full move"
-                  info.moveVector = fullMoveVector
-                  for (let [point, _] of circuit.get(thing as Point))
-                     propagateMovement(point, null, moveVector)
-               }
+         if (draw) {
+            // TODO: This code is temporary!
+            let s = closestSegment(draw.segment.end, draw.segment.axis)
+            if (s && canSnap(draw.segment.end, s.point)) {
+               draw.segment.end.moveTo(s.point)
+               draw.endObject = s.segment
             } else {
-               for (let point of pointsToMove) {
-                  propagateMovement(point, null, fullMoveVector)
-               }
+               draw.endObject = undefined
+            }
+         }
+
+         function doMove() {
+            for (let point of pointsToMove) {
+               propagateMovement(point, null, fullMove)
             }
             // Commit the movement.
             for (let point of circuit.keys()) {
                point.moveTo(
                   move!.originalPositions
                      .get(point)
-                     .displaceBy(pointInfo.get(point).moveVector)
+                     .displaceBy(moveInfo.get(point).vector)
                )
             }
             circuit = circuit
@@ -727,46 +699,54 @@
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
             edgeAxis: Axis | null, // The axis of the edge we just followed.
-            moveVector: Vector // The movement to propagate.
+            propagated: MoveInfo // The movement info being propagated.
          ) {
-            let current = pointInfo.get(currentPoint)
-            if (edgeAxis && current.basis && current.moveType === "no move") {
-               // Move in accordance with "rectangle/polygon resizing".
-               let axis0 = current.basis[0]
-               let axis1 = current.basis[1]
-               let otherAxis = edgeAxis === axis0 ? axis1 : axis0
-               // This is (part of) the formula for expressing a vector in
-               // terms of a new basis. We need it to determine how the (x,y)
-               // move vector can be expressed in terms of (edgeAxis,
-               // otherAxis). This tells us which way the point needs to move.
-               let movementAlongOtherAxis = otherAxis.scaleBy(
-                  (edgeAxis.x * moveVector.y - edgeAxis.y * moveVector.x) /
-                     (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
-               )
-               current.moveType = edgeAxis
-               current.moveVector = movementAlongOtherAxis
+            let current = moveInfo.get(currentPoint)
+            if (
+               propagated.moveType === "full move" &&
+               current.moveType === "no move" &&
+               edgeAxis
+            ) {
+               // Keep only one component of the movement vector. This allows
+               // parts of the circuit to stretch and contract as it is moved.
+               current.absorbAxis = edgeAxis
+               let axes = pointAxes.get(currentPoint)
+               if (axes?.length === 2) {
+                  let otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
+                  // This is (part of) the formula for expressing a vector in
+                  // terms of a new basis. We express moveVector in terms of
+                  // (edgeAxis, otherAxis), but we only keep the 2nd component.
+                  current.moveType = otherAxis
+                  current.vector = otherAxis.scaleBy(
+                     (edgeAxis.x * propagated.vector.y -
+                        edgeAxis.y * propagated.vector.x) /
+                        (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
+                  )
+               } else {
+                  // Keep only the component orthogonal to edgeAxis.
+                  current.moveType = findExistingAxis(edgeAxis.orthogonalAxis())
+                  current.vector = propagated.vector.rejectionFrom(edgeAxis)
+               }
             } else {
-               // Move rigidly.
-               current.moveType = "full move"
-               current.moveVector = moveVector
+               current.moveType = propagated.moveType
+               current.vector = propagated.vector
             }
-            let nextEdges = circuit.get(currentPoint)
-            for (let [nextPoint, nextSegment] of nextEdges) {
-               let nextEdgeAxis = nextSegment.axis
-               let next = pointInfo.get(nextPoint)
-               if (next.loneEdge && next.moveType !== "full move") {
-                  next.moveType = current.moveType
-                  next.moveVector = current.moveVector
-               } else if (
+            for (let [nextPoint, nextSegment] of circuit.get(currentPoint)) {
+               let next = moveInfo.get(nextPoint)
+               if (
+                  next.moveType === current.moveType ||
                   next.moveType === "full move" ||
-                  next.moveType === nextEdgeAxis
+                  nextSegment.axis === current.moveType ||
+                  nextSegment.axis === next.absorbAxis
                ) {
                   continue
-               } else if (
-                  current.moveType === "full move" ||
-                  current.moveType === nextEdgeAxis
-               ) {
-                  propagateMovement(nextPoint, nextEdgeAxis, moveVector)
+               } else {
+                  let newMove = next.moveType === "no move"
+                  propagateMovement(
+                     nextPoint,
+                     nextSegment.axis,
+                     newMove ? current : fullMove
+                  )
                }
             }
          }
@@ -879,10 +859,11 @@
                break
             case "hydraulic line":
                if (d.sqLength() > sqSnapRadius) {
-                  let drawAxis =
-                     Math.abs(d.x) >= Math.abs(d.y)
-                        ? Axis.horizontal
-                        : Axis.vertical
+                  let scores = snapAxes.map((axis) => Math.abs(d.dot(axis)))
+                  let drawAxis = snapAxes[scores.indexOf(Math.max(...scores))]
+                  // let drawAxis = Math.abs(d.x) >= Math.abs(d.y)
+                  //    ? Axis.horizontal
+                  //    : Axis.vertical
                   let snap = trySnapping(waitingForDrag)
                   if (snap.target) {
                      beginDraw(snap.point, drawAxis, snap.target)
@@ -906,9 +887,6 @@
                   } else if (!snap.isSelected) {
                      selected = new ToggleSet([snap.target])
                   }
-                  // We have to update this reactive variable manually here,
-                  // because Svelte won't update it until next render.
-                  pointsToMove = selectedPoints()
                   beginMove(snap.target, snap.point)
                } else waitingForDrag = clickPoint
                break
