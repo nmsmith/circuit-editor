@@ -409,9 +409,8 @@
       endObject?: Point | Segment
    } | null = null
    let move: {
-      grabbedAxis: Axis
       start: Point
-      end: Point
+      grabbedAxis: Axis
       originalPositions: DefaultMap<Point, Point>
    } | null = null
    let rectSelect: {
@@ -532,39 +531,25 @@
          originalPositions.set(point, point.clone())
       }
       move = {
-         grabbedAxis,
          start: start.clone(),
-         end: start.clone(),
+         grabbedAxis,
          originalPositions,
       }
+   }
+   // The type of movements that a Point can make.
+   type Move = {
+      moveType: "no move" | Axis | "full move"
+      vector: Vector
    }
    // ----- Compute the state of an in-progress move operation -----
    $: /* On a change to 'move' or 'mouse' */ {
       if (move) {
-         move.end = mouse
-         let pointsToMove = selectedPoints()
-         // The movement information that we will compute and propagate.
-         type MoveInfo = {
-            moveType: "no move" | Axis | "full move"
-            vector: Vector
-            absorbAxis?: Axis
-         }
-         let moveInfo = new DefaultMap<Point, MoveInfo>(() => {
-            return { moveType: "no move", vector: zeroVector }
-         })
-         let fullMove: MoveInfo = {
-            moveType: "full move",
-            vector: move.end.displacementFrom(move.start),
-         }
-         // Record the Axes incident to each Point.
-         let pointAxes = new Map<Point, Axis[]>()
-         for (let [point, edges] of circuit) {
-            let a: Axis[] = []
-            for (let [_, s] of edges) if (!a.includes(s.axis)) a.push(s.axis)
-            pointAxes.set(point, a)
-         }
+         let grabbedPoints = selectedPoints()
+         let freeMoveVector = mouse.displacementFrom(move.start)
+
          // ----- PART 1: Move in accordance with the mouse. -----
-         doMove()
+         let firstMoves = computeMove(grabbedPoints, freeMoveVector)
+         commitMove(firstMoves)
 
          // ----- TODO: (Put this somewhere.) If drawing, snap draw.end to
          // points and segments, except for these exceptional cases:
@@ -593,8 +578,8 @@
             let end = Point.zero.displaceBy(
                seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
             )
-            let s = moveInfo.get(seg.start)
-            let e = moveInfo.get(seg.end)
+            let s = firstMoves.get(seg.start)
+            let e = firstMoves.get(seg.end)
             let sMovesX, sMovesY, eMovesX, eMovesY
             sMovesX = sMovesY = s.moveType === "full move"
             if (s.moveType instanceof Axis) {
@@ -663,12 +648,11 @@
          } else if (Math.abs(minYSnap) >= snapRadius /* ease toward snap */) {
             minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
          }
-         fullMove.vector = fullMove.vector.add(
+         let perturbedMoveVector = freeMoveVector.add(
             new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
          )
          // And finally: enact the new, perturbed movement.
-         moveInfo.clear()
-         doMove()
+         commitMove(computeMove(grabbedPoints, perturbedMoveVector))
 
          if (draw) {
             // TODO: This code is temporary!
@@ -680,77 +664,93 @@
                draw.endObject = undefined
             }
          }
-
-         function doMove() {
-            for (let point of pointsToMove) {
-               propagateMovement(point, null, fullMove)
-            }
-            // Commit the movement.
-            for (let point of circuit.keys()) {
-               point.moveTo(
-                  move!.originalPositions
-                     .get(point)
-                     .displaceBy(moveInfo.get(point).vector)
-               )
-            }
-            circuit = circuit
-            segments = segments
-         }
-         function propagateMovement(
-            currentPoint: Point, // The point we are moving.
-            edgeAxis: Axis | null, // The axis of the edge we just followed.
-            propagated: MoveInfo // The movement info being propagated.
-         ) {
-            let current = moveInfo.get(currentPoint)
-            if (
-               propagated.moveType === "full move" &&
-               current.moveType === "no move" &&
-               edgeAxis
-            ) {
-               // Keep only one component of the movement vector. This allows
-               // parts of the circuit to stretch and contract as it is moved.
-               current.absorbAxis = edgeAxis
-               let axes = pointAxes.get(currentPoint)
+      }
+   }
+   function computeMove(
+      grabbedPoints: Set<Point>,
+      moveVector: Vector
+   ): DefaultMap<Point, Move> {
+      // Record the Axes incident to each Point.
+      let pointAxes = new Map<Point, Axis[]>()
+      for (let [point, edges] of circuit) {
+         let a: Axis[] = []
+         for (let [_, s] of edges) if (!a.includes(s.axis)) a.push(s.axis)
+         pointAxes.set(point, a)
+      }
+      // Each Point, when first visited, will propose to move along a specific
+      // Axis, rather than perform the full movement. This allows the circuit
+      // to stretch and contract as it is dragged. If the proposal conflicts
+      // with another proposal, the full movement is performed instead.
+      let hasMadeProposal = new Set<Point>()
+      let proposedMoves = new DefaultMap<Point, Move>(() => {
+         return { moveType: "no move", vector: zeroVector }
+      })
+      let fullMove: Move = { moveType: "full move", vector: moveVector }
+      let fullMovesToEnact: Point[] = []
+      // Force the grabbed points to perform a full move.
+      for (let point of grabbedPoints) {
+         hasMadeProposal.add(point)
+         fullMovesToEnact.push(point)
+      }
+      while (fullMovesToEnact.length > 0) {
+         let rejectedProposals = new Map<Point, Move>()
+         for (let fullPoint of fullMovesToEnact) {
+            proposedMoves.set(fullPoint, fullMove)
+            // Let the Point's neighbours make proposals.
+            for (let [neighbour, viaEdge] of circuit.get(fullPoint)) {
+               if (hasMadeProposal.has(neighbour)) continue
+               // Compute the proposal.
+               let proposal: Move
+               let viaAxis = viaEdge.axis
+               let axes = pointAxes.get(neighbour)
                if (axes?.length === 2) {
-                  let otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
+                  let otherAxis = viaAxis === axes[0] ? axes[1] : axes[0]
                   // This is (part of) the formula for expressing a vector in
-                  // terms of a new basis. We express moveVector in terms of
+                  // terms of a new basis. We express the movement in terms of
                   // (edgeAxis, otherAxis), but we only keep the 2nd component.
-                  current.moveType = otherAxis
-                  current.vector = otherAxis.scaleBy(
-                     (edgeAxis.x * propagated.vector.y -
-                        edgeAxis.y * propagated.vector.x) /
-                        (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
-                  )
+                  proposal = {
+                     moveType: otherAxis,
+                     vector: otherAxis.scaleBy(
+                        (viaAxis.x * moveVector.y - viaAxis.y * moveVector.x) /
+                           (viaAxis.x * otherAxis.y - viaAxis.y * otherAxis.x)
+                     ),
+                  }
                } else {
-                  // Keep only the component orthogonal to edgeAxis.
-                  current.moveType = findExistingAxis(edgeAxis.orthogonalAxis())
-                  current.vector = propagated.vector.rejectionFrom(edgeAxis)
+                  // Keep only the part of the movement orthogonal to edgeAxis.
+                  proposal = {
+                     moveType: findExistingAxis(viaAxis.orthogonalAxis()),
+                     vector: moveVector.rejectionFrom(viaAxis),
+                  }
                }
-            } else {
-               current.moveType = propagated.moveType
-               current.vector = propagated.vector
-            }
-            for (let [nextPoint, nextSegment] of circuit.get(currentPoint)) {
-               let next = moveInfo.get(nextPoint)
-               if (
-                  next.moveType === current.moveType ||
-                  next.moveType === "full move" ||
-                  nextSegment.axis === current.moveType ||
-                  nextSegment.axis === next.absorbAxis
-               ) {
-                  continue
-               } else {
-                  let newMove = next.moveType === "no move"
-                  propagateMovement(
-                     nextPoint,
-                     nextSegment.axis,
-                     newMove ? current : fullMove
-                  )
+               // Propagate the proposal via a depth-first traversal.
+               let stack: [Point, Axis][] = [[neighbour, viaAxis]]
+               while (stack.length > 0) {
+                  let [point, axis] = stack.pop() as [Point, Axis]
+                  for (let [next, _] of circuit.get(point)) {
+                     let m = proposedMoves.get(next)
+                     // TODO: ALGORITHM NEEDS FINISHING HERE!
+                  }
                }
             }
+         }
+         // Prepare for next iteration.
+         fullMovesToEnact = []
+         for (let [point, proposal] of rejectedProposals) {
+            // Erase the record so that future traversals cannot encounter it.
+            proposal.moveType = "no move"
+            proposal.vector = zeroVector
+            // Move this point fully.
+            fullMovesToEnact.push(point)
          }
       }
+      return proposedMoves
+   }
+   function commitMove(moves: DefaultMap<Point, Move>) {
+      if (!move) return
+      for (let p of circuit.keys())
+         p.moveTo(move.originalPositions.get(p).displaceBy(moves.get(p).vector))
+      circuit = circuit
+      segments = segments
    }
    function endMove() {
       move = null
