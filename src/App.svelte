@@ -89,6 +89,7 @@
          | { segment: Segment; point: Point; sqDistance: number }
          | undefined
       for (let segment of segments) {
+         if (alongAxis && segment.axis === alongAxis) continue
          if (consider && !consider(segment)) continue
          let p = point.displacementFrom(segment.start)
          let s = segment.end.displacementFrom(segment.start)
@@ -96,7 +97,9 @@
          let dot = p.dot(s)
          // Only consider the segment if the point's projection lies on it.
          // This occurs iff the dot product is in [0, sqLength).
-         if (dot < 0 || dot >= sqLength) continue
+         // To avoid intersections absurdly close to the ends, we add a buffer.
+         let buffer = alongAxis ? (halfGap - 0.001) * s.length() : 0
+         if (dot < buffer || dot > sqLength - buffer) continue
          let rejection = s.scaleBy(dot / sqLength).sub(p)
          let current
          if (alongAxis && rejection.sqLength() > 0.001) {
@@ -420,6 +423,7 @@
    let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
       segment: Segment
+      segmentIsNew: boolean
       startObject?: Point | Segment
       endObject?: Point | Segment
    } | null = null
@@ -443,7 +447,7 @@
       let segment = new Segment(start, end, axis)
       addSegment(segment)
       if (startObject instanceof Segment) cutSegment(startObject, start)
-      draw = { segment, startObject }
+      draw = { segment, segmentIsNew: true, startObject }
       // Configure the endpoint of the line to be dragged as the mouse moves.
       selected = new ToggleSet([end])
       beginMove(end, end)
@@ -475,9 +479,9 @@
          }
       } else deleteSelected()
       // Reset the drawing state.
+      if (draw.segmentIsNew) selected = new ToggleSet()
       draw = null
       activeRulers = new Set()
-      selected = new ToggleSet()
    }
    function beginMove(thingGrabbed: Point | Segment, grabLocation: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
@@ -520,6 +524,7 @@
                   addSegment(newSegment)
                   draw = {
                      segment: newSegment,
+                     segmentIsNew: false,
                      startObject: start,
                   }
                }
@@ -545,16 +550,26 @@
          // If we're drawing, try snapping the moved endpoint to a nearby Point.
          let snappedToPoint = false
          if (draw) {
-            function isStationary(p: Point) {
-               return moveInfo.get0(p).moveType === "no move"
+            function isAcceptable(point: Point) {
+               if (moveInfo.get0(point).moveType === "no move") {
+                  for (let [other, { axis }] of circuit.get0(point)) {
+                     if (axis === draw!.segment.axis) {
+                        // Reject the point if the segment being drawn would
+                        // overlap the edge being examined this iteration.
+                        let dPoint = point.distanceFrom(draw!.segment.start)
+                        let dOther = other.distanceFrom(draw!.segment.start)
+                        if (dPoint > dOther) return false
+                     }
+                  }
+                  return true
+               } else return false
             }
-            let target = closestEndpoint(draw.segment.end, isStationary)
-            let e = easeToTarget(draw.segment.end, target)
-            if (e.outcome === "snapped") {
+            let target = closestEndpoint(draw.segment.end, isAcceptable)
+            if (target && canSnap(draw.segment.end, target)) {
                snappedToPoint = true
-               let snappedMove = e.point.displacementFrom(move.grabLocation)
+               let snappedMove = target.displacementFrom(move.grabLocation)
                doMove(snappedMove)
-               draw.endObject = e.point
+               draw.endObject = target
             } else {
                draw.endObject = undefined
             }
@@ -573,20 +588,6 @@
                }
             }
          }
-         // ----- TODO: (Put this somewhere.) Handle these exceptional cases:
-         if (
-            draw &&
-            !segmentExistsBetween(draw.segment.start, draw.segment.end) &&
-            (!(draw.startObject instanceof Segment) ||
-               (draw.startObject !== draw.endObject &&
-                  draw.startObject.start !== draw.segment.end &&
-                  draw.startObject.end !== draw.segment.end)) &&
-            (!(draw.endObject instanceof Segment) ||
-               (draw.endObject.start !== draw.segment.start &&
-                  draw.endObject.end !== draw.segment.start))
-         ) {
-         }
-
          function doMove(vector: Vector) {
             moveInfo.clear()
             // Compute the movement of every Point in the circuit.
