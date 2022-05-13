@@ -179,20 +179,20 @@
 
    function segmentExistsBetween(p1: Point, p2: Point) {
       if (!circuit.has(p1)) return false
-      for (let [p] of circuit.get(p1)) {
+      for (let [p] of circuit.get0(p1)) {
          if (p === p2) return true
       }
       return false
    }
    function addSegment(segment: Segment) {
-      circuit.get(segment.start).add([segment.end, segment])
-      circuit.get(segment.end).add([segment.start, segment])
+      circuit.get0(segment.start).add([segment.end, segment])
+      circuit.get0(segment.end).add([segment.start, segment])
       segments.add(segment)
       circuitAxes.update(segment.axis, (c) => c + 1)
    }
    function deleteSegment(segment: Segment) {
       // Delete from "circuit"
-      let startEdges = circuit.get(segment.start)
+      let startEdges = circuit.get0(segment.start)
       for (let edge of startEdges) {
          if (edge[1] === segment) {
             startEdges.delete(edge)
@@ -200,7 +200,7 @@
             break
          }
       }
-      let endEdges = circuit.get(segment.end)
+      let endEdges = circuit.get0(segment.end)
       for (let edge of endEdges) {
          if (edge[1] === segment) {
             endEdges.delete(edge)
@@ -211,7 +211,7 @@
       // Delete from "segments"
       segments.delete(segment)
       // Delete from "circuitAxes"
-      let count = circuitAxes.get(segment.axis)
+      let count = circuitAxes.get0(segment.axis)
       if (count > 1) {
          circuitAxes.set(segment.axis, count - 1)
       } else {
@@ -228,7 +228,7 @@
             junctionsToFuse.add(thing.start)
             junctionsToFuse.add(thing.end)
          } else {
-            for (let [_, segment] of circuit.get(thing)) {
+            for (let [_, segment] of circuit.get0(thing)) {
                deleteSegment(segment)
                junctionsToFuse.add(segment.start)
                junctionsToFuse.add(segment.end)
@@ -236,7 +236,8 @@
          }
       }
       for (let junction of junctionsToFuse) {
-         if (circuit.get(junction).size === 2) fuseSegments(junction)
+         if (circuit.has(junction) && circuit.get0(junction).size === 2)
+            fuseSegments(junction)
       }
       selected = new ToggleSet()
    }
@@ -268,11 +269,11 @@
    // If the junction is an X-junction, or a pair of colinear segments, return
    // each pair of colinear segments. Otherwise, return nothing.
    function partsOfJunction(junction: Point): Set<Segment[]> {
-      let edges = circuit.get(junction)
+      let edges = circuit.get0(junction)
       if (edges.size !== 2 && edges.size !== 4) return new Set()
       let axes = new DefaultMap<Axis, OutgoingSegment[]>(() => [])
       for (let edge of edges) {
-         axes.get(edge[1].axis).push(edge)
+         axes.get0(edge[1].axis).push(edge)
       }
       let pairs = new Set<Segment[]>()
       for (let edgePair of axes.values()) {
@@ -437,7 +438,7 @@
       for (let a of snapAxes) rulers.add(new Ruler(start, a, "ray"))
       // Create a ruler for each edge incident to the starting vertex (if any).
       if (circuit.has(start)) {
-         for (let [_, seg] of circuit.get(start)) {
+         for (let [_, seg] of circuit.get0(start)) {
             if (!snapAxes.includes(seg.axis)) {
                rulers.add(new Ruler(start, seg.axis, "ray"))
             }
@@ -517,7 +518,7 @@
          grabbedAxis = thingGrabbed.axis
       } else {
          let axis = Axis.horizontal
-         for (let [_, segment] of circuit.get(thingGrabbed)) {
+         for (let [_, segment] of circuit.get0(thingGrabbed)) {
             axis = segment.axis
             // Prefer horizontal and vertical axes.
             if (axis === Axis.horizontal || axis === Axis.vertical) break
@@ -569,10 +570,10 @@
             | undefined
          if (pointsToMove.size === 1) {
             for (let point of pointsToMove) {
-               let edges = circuit.get(point)
+               let edges = circuit.get0(point)
                if (edges.size === 1) {
                   for (let edge of edges) {
-                     if (pointAxes.get(edge[0]).length !== 2) {
+                     if (pointAxes.get0(edge[0]).length !== 2) {
                         looseEndEdgeCase = { point, edge }
                      }
                   }
@@ -609,8 +610,8 @@
             let end = Point.zero.displaceBy(
                seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
             )
-            let s = moveInfo.get(seg.start)
-            let e = moveInfo.get(seg.end)
+            let s = moveInfo.get0(seg.start)
+            let e = moveInfo.get0(seg.end)
             let sMovesX, sMovesY, eMovesX, eMovesY
             sMovesX = sMovesY = s.moveType === "full move"
             if (s.moveType instanceof Axis) {
@@ -721,8 +722,8 @@
             for (let point of circuit.keys()) {
                point.moveTo(
                   move!.originalPositions
-                     .get(point)
-                     .displaceBy(moveInfo.get(point).vector)
+                     .get0(point)
+                     .displaceBy(moveInfo.get0(point).vector)
                )
             }
             circuit = circuit
@@ -733,8 +734,8 @@
             edgeAxis: Axis | null, // The axis of the edge we just followed.
             info: MoveInfo // The movement info being propagated.
          ) {
-            let current = moveInfo.get(currentPoint)
-            let axes = pointAxes.get(currentPoint)
+            let current = moveInfo.get0(currentPoint)
+            let axes = pointAxes.get0(currentPoint)
             if (edgeAxis && axes.length == 2 && current.moveType == "no move") {
                // Keep only one component of the movement vector. This allows
                // parts of the circuit to stretch and contract as it is moved.
@@ -752,10 +753,10 @@
                current.moveType = info.moveType
                current.vector = info.vector
             }
-            for (let [nextPoint, nextSegment] of circuit.get(currentPoint)) {
+            for (let [nextPoint, nextSegment] of circuit.get0(currentPoint)) {
                let nextEdgeAxis = nextSegment.axis
-               let next = moveInfo.get(nextPoint)
-               let loneEdge = circuit.get(nextPoint).size === 1
+               let next = moveInfo.get0(nextPoint)
+               let loneEdge = circuit.get0(nextPoint).size === 1
                if (loneEdge && next.moveType !== "full move") {
                   next.moveType = current.moveType
                   next.vector = current.vector

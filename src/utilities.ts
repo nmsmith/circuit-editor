@@ -1,15 +1,16 @@
 // A very handy extension of "Map".
 // When a DefaultMap is constructed, the user gives it a default value,
-// and if get() would fail, it returns that default value instead.
-// Thus, get() always succeeds.
+// and if get0() would fail, it returns that default value instead.
+// Thus, get0() always succeeds.
 export class DefaultMap<K, V> extends Map<K, V> {
    readonly defaultValue: () => V
    constructor(defaultValue: () => V, entries?: Iterable<[K, V]>) {
       super(entries)
       this.defaultValue = defaultValue
    }
-   // Overrides Map.get()
-   get(key: K): V {
+   // Special version of Map.get() that returns the default value
+   // if the entry doesn't exist.
+   get0(key: K): V {
       if (!this.has(key)) {
          this.set(key, this.defaultValue())
       }
@@ -17,7 +18,7 @@ export class DefaultMap<K, V> extends Map<K, V> {
    }
    // A useful new method
    update(key: K, f: (existingValue: V) => V): void {
-      this.set(key, f(this.get(key)))
+      this.set(key, f(this.get0(key)))
    }
 }
 
