@@ -589,16 +589,34 @@
             }
          }
          function doMove(vector: Vector) {
-            moveInfo.clear()
-            // Compute the movement of every Point in the circuit.
-            if (draw && drawingEdgeCase) {
-               moveInfo.set(draw.segment.end, { moveType: "full move", vector })
+            function specialMove() {
+               moveInfo.set(draw!.segment.end, {
+                  moveType: "full move",
+                  vector,
+               })
                propagateMovement(
-                  draw.segment.start,
+                  draw!.segment.start,
                   null,
-                  vector.rejectionFrom(draw.segment.axis)
+                  vector.rejectionFrom(draw!.segment.axis)
                )
+            }
+            // Compute the movement of every Point in the circuit.
+            moveInfo.clear()
+            if (draw && drawingEdgeCase) {
+               specialMove()
+            } else if (draw) {
+               // Try a normal move.
+               for (let point of move!.points) {
+                  propagateMovement(point, null, vector)
+               }
+               // If we weren't able to alter the length of the segment being
+               // drawn, resort to a special move.
+               if (moveInfo.get0(draw.segment.start).moveType === "full move") {
+                  moveInfo.clear()
+                  specialMove()
+               }
             } else {
+               // Do a normal move.
                for (let point of move!.points) {
                   propagateMovement(point, null, vector)
                }
@@ -621,11 +639,16 @@
          ) {
             let current = moveInfo.get0(currentPoint)
             let axes = axesAtPoint(currentPoint)
-            if (edgeAxis && axes.length == 2 && current.moveType == "no move") {
+            if (edgeAxis && axes.length <= 2 && current.moveType == "no move") {
                // Keep only one component of the movement vector. This allows
                // parts of the circuit to stretch and contract as it is moved.
                current.moveType = edgeAxis
-               let otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
+               let otherAxis
+               if (axes.length === 2) {
+                  otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
+               } else {
+                  otherAxis = edgeAxis.orthogonalAxis()
+               }
                // This is (part of) the formula for expressing a vector in
                // terms of a new basis. We express moveVector in terms of
                // (edgeAxis, otherAxis), but we only keep the 2nd component.
