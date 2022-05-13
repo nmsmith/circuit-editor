@@ -64,9 +64,13 @@
       } else return { outcome: "no easing", point: source }
    }
    // Find the closest endpoint to the given point (if any).
-   function closestEndpoint(point: Point): Point | undefined {
+   function closestEndpoint(
+      point: Point,
+      consider?: (p: Point) => boolean
+   ): Point | undefined {
       let closest: { point: Point; sqDistance: number } | undefined
       for (let p of circuit.keys()) {
+         if (consider && !consider(p)) continue
          let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
          closest =
             !closest || current.sqDistance < closest.sqDistance
@@ -75,39 +79,17 @@
       }
       return closest?.point
    }
-   // Find the closest ruler to the given point (if any).
-   // If "generatingPoint" is given, only consider rulers that are generated
-   // by the given point (as defined elsewhere).
-   function closestRuler(
-      point: Point
-   ): { ruler: Ruler; point: Point } | undefined {
-      let closest:
-         | { ruler: Ruler; point: Point; sqDistance: number }
-         | undefined
-      for (let ruler of activeRulers) {
-         let d = point.displacementFrom(ruler.line.origin)
-         let rejection = d.projectionOnto(ruler.line.axis).sub(d)
-         let current = {
-            ruler,
-            point: point.displaceBy(rejection),
-            sqDistance: rejection.sqLength(),
-         }
-         closest =
-            !closest || current.sqDistance < closest.sqDistance
-               ? current
-               : closest
-      }
-      return closest
-   }
    // Find the closest segment to the given point (if any).
    function closestSegment(
       point: Point,
-      alongAxis?: Axis
+      alongAxis?: Axis,
+      consider?: (s: Segment) => boolean
    ): { segment: Segment; point: Point } | undefined {
       let closest:
          | { segment: Segment; point: Point; sqDistance: number }
          | undefined
       for (let segment of segments) {
+         if (consider && !consider(segment)) continue
          let p = point.displacementFrom(segment.start)
          let s = segment.end.displacementFrom(segment.start)
          let sqLength = s.sqLength()
@@ -135,6 +117,32 @@
          }
          closest =
             current && (!closest || current.sqDistance < closest.sqDistance)
+               ? current
+               : closest
+      }
+      return closest
+   }
+   // Find the closest ruler to the given point (if any).
+   // If "generatingPoint" is given, only consider rulers that are generated
+   // by the given point (as defined elsewhere).
+   function closestRuler(
+      point: Point,
+      consider?: (r: Ruler) => boolean
+   ): { ruler: Ruler; point: Point } | undefined {
+      let closest:
+         | { ruler: Ruler; point: Point; sqDistance: number }
+         | undefined
+      for (let ruler of activeRulers) {
+         if (consider && !consider(ruler)) continue
+         let d = point.displacementFrom(ruler.line.origin)
+         let rejection = d.projectionOnto(ruler.line.axis).sub(d)
+         let current = {
+            ruler,
+            point: point.displaceBy(rejection),
+            sqDistance: rejection.sqLength(),
+         }
+         closest =
+            !closest || current.sqDistance < closest.sqDistance
                ? current
                : closest
       }
@@ -293,6 +301,12 @@
       }
       return subject
    }
+   function axesAtPoint(point: Point): Axis[] {
+      let axes: Axis[] = []
+      for (let [_, segment] of circuit.get0(point))
+         if (!axes.includes(segment.axis)) axes.push(segment.axis)
+      return axes
+   }
    // Input state
    let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
@@ -410,9 +424,9 @@
       endObject?: Point | Segment
    } | null = null
    let move: {
+      points: Set<Point>
+      grabLocation: Point
       grabbedAxis: Axis
-      start: Point
-      end: Point
       originalPositions: DefaultMap<Point, Point>
    } | null = null
    let rectSelect: {
@@ -446,80 +460,34 @@
       }
       activeRulers = rulers
    }
-   // ----- Compute the state of an in-progress draw operation -----
-   // $: /* On a change to 'draw' or 'mouse' */ {
-   //    if (draw) {
-   //       draw.endObject = undefined
-   //       let easeToEndpoint = easeToTarget(mouse, closestEndpoint(mouse))
-   //       let easeAxis = findExistingAxis(
-   //          Axis.fromVector(easeToEndpoint.point.displacementFrom(draw.start))
-   //       )
-   //       // Prioritize endpoint snapping over everything else.
-   //       if (
-   //          easeToEndpoint.outcome === "snapped" &&
-   //          // TODO; Remove this special logic for connecting to a vertex that
-   //          // JUST HAPPENS to sit on a ruler, and replace it with the more
-   //          // general logic of "attracting" vertices toward the ruler!
-   //          (alt || (easeAxis && snapAxes.includes(easeAxis)))
-   //       ) {
-   //          draw.end = easeToEndpoint.point
-   //          draw.endIsNew = false
-   //          draw.axisOld = easeAxis
-   //       } else {
-   //          if (mouse.sqDistanceFrom(draw.start) < sqEaseRadius) {
-   //             // Ease out of zero length.
-   //             draw.end = easeToTarget(mouse, draw.start).point
-   //          } else if (alt) {
-   //             draw.end = mouse
-   //          } else draw.end = easeToEndpoint.point
-   //          // Unless in the alt. draw mode, snap to one of the standard axes.
-   //          let ruler = closestRuler(draw.end)
-   //          if (ruler && !alt) draw.end = ruler.point
-   //          // Try easing toward a nearby segment.
-   //          let s = alt
-   //             ? closestSegment(draw.end)
-   //             : closestSegment(
-   //                  draw.end,
-   //                  Axis.fromVector(draw.end.displacementFrom(draw.start))
-   //               )
-   //          if (s) {
-   //             let ease = easeToTarget(draw.end, s.point)
-   //             draw.end = ease.point
-   //             if (ease.outcome === "snapped") draw.endSegment = s.segment
-   //          }
-   //          draw.endIsNew = true
-   //          draw.axisOld = findExistingAxis(
-   //             Axis.fromVector(draw.end.displacementFrom(draw.start))
-   //          )
-   //       }
-   //       // Update the opacity of rulers.
-   //       for (let ruler of activeRulers) ruler.setOpacity(draw.end)
-   //       activeRulers = activeRulers // Tell Svelte the state has changed.
-   //    }
-   // }
    function endDraw() {
       if (!draw) return
       endMove()
-      if (draw.segment.sqLength() >= sqMinSegmentLength) {
-         // If the end of the drawn line intersects another segment,
-         // convert it into a T-junction.
-         if (draw.endObject instanceof Segment)
-            cutSegment(draw.endObject, draw.segment.end)
+      let segment = draw.segment
+      if (segment.sqLength() >= sqMinSegmentLength) {
+         if (draw.endObject instanceof Point) {
+            // Create a new Segment that ends at the Point.
+            deleteSegment(segment)
+            addSegment(new Segment(segment.start, draw.endObject, segment.axis))
+         } else if (draw.endObject instanceof Segment) {
+            // Turn the intersected Segment into a T-junction.
+            cutSegment(draw.endObject, segment.end)
+         }
       } else deleteSelected()
       // Reset the drawing state.
       draw = null
       activeRulers = new Set()
       selected = new ToggleSet()
    }
-   function beginMove(thingGrabbed: Point | Segment, start: Point) {
+   function beginMove(thingGrabbed: Point | Segment, grabLocation: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
       let grabbedAxis
       if (thingGrabbed instanceof Segment) {
          grabbedAxis = thingGrabbed.axis
       } else {
+         let _
          let axis = Axis.horizontal
-         for (let [_, segment] of circuit.get0(thingGrabbed)) {
-            axis = segment.axis
+         for ([_, { axis }] of circuit.get0(thingGrabbed)) {
             // Prefer horizontal and vertical axes.
             if (axis === Axis.horizontal || axis === Axis.vertical) break
          }
@@ -533,58 +501,79 @@
          originalPositions.set(point, point.clone())
       }
       move = {
+         points: selectedPoints(),
+         grabLocation: grabLocation.clone(),
          grabbedAxis,
-         start: start.clone(),
-         end: start.clone(),
          originalPositions,
       }
-   }
-   // ----- Compute the state of an in-progress move operation -----
-   $: /* On a change to 'move' or 'mouse' */ {
-      if (move) {
-         move.end = mouse
-         let pointsToMove = selectedPoints()
-         // The movement information that we will compute and propagate.
-         type MoveInfo = {
-            moveType: "no move" | Axis | "full move"
-            vector: Vector
-         }
-         let moveInfo = new DefaultMap<Point, MoveInfo>(() => {
-            return { moveType: "no move", vector: zeroVector }
-         })
-         let fullMove: MoveInfo = {
-            moveType: "full move",
-            vector: move.end.displacementFrom(move.start),
-         }
-         // Record the Axes incident to each Point.
-         let pointAxes = new DefaultMap<Point, Axis[]>(() => [])
-         for (let [point, edges] of circuit) {
-            let a: Axis[] = []
-            for (let [_, s] of edges) if (!a.includes(s.axis)) a.push(s.axis)
-            pointAxes.set(point, a)
-         }
-         // If we're grabbing a loose endpoint of a segment whose other endpoint
-         // doesn't have two axes, tweak the algorithm. (Yes, this is a hack!)
-         let looseEndEdgeCase:
-            | { point: Point; edge: OutgoingSegment }
-            | undefined
-         if (pointsToMove.size === 1) {
-            for (let point of pointsToMove) {
-               let edges = circuit.get0(point)
-               if (edges.size === 1) {
-                  for (let edge of edges) {
-                     if (pointAxes.get0(edge[0]).length !== 2) {
-                        looseEndEdgeCase = { point, edge }
-                     }
+      // If moving a single Point which is a loose end, treat the move
+      // operation as a draw operation.
+      if (!draw && move.points.size === 1) {
+         for (let end of move.points) {
+            let edges = circuit.get0(end)
+            if (edges.size === 1) {
+               for (let [start, existingSegment] of edges) {
+                  // The existing segment may be backwards, so we should
+                  // delete it and create a new one.
+                  let newSegment = new Segment(start, end, existingSegment.axis)
+                  deleteSegment(existingSegment)
+                  addSegment(newSegment)
+                  draw = {
+                     segment: newSegment,
+                     startObject: start,
                   }
                }
             }
          }
-         // ----- PART 1: Move in accordance with the mouse. -----
-         doMove()
-
-         // ----- TODO: (Put this somewhere.) If drawing, snap draw.end to
-         // points and segments, except for these exceptional cases:
+      }
+   }
+   // ----- Compute the state of an in-progress move operation -----
+   $: /* On a change to 'draw, 'move', or 'mouse' */ {
+      if (move) {
+         let drawingEdgeCase =
+            draw && axesAtPoint(draw.segment.start).length !== 2
+         // This is a "global variable" throughout the forthcoming operations.
+         let moveInfo = new DefaultMap(() => {
+            return {
+               moveType: "no move" as "no move" | Axis | "full move",
+               vector: zeroVector,
+            }
+         })
+         // Firstly, perform a simple movement that tracks the mouse.
+         let fullMove = mouse.displacementFrom(move.grabLocation)
+         doMove(fullMove)
+         // If we're drawing, try snapping the moved endpoint to a nearby Point.
+         let snappedToPoint = false
+         if (draw) {
+            function isStationary(p: Point) {
+               return moveInfo.get0(p).moveType === "no move"
+            }
+            let target = closestEndpoint(draw.segment.end, isStationary)
+            let e = easeToTarget(draw.segment.end, target)
+            if (e.outcome === "snapped") {
+               snappedToPoint = true
+               let snappedMove = e.point.displacementFrom(move.grabLocation)
+               doMove(snappedMove)
+               draw.endObject = e.point
+            } else {
+               draw.endObject = undefined
+            }
+         }
+         if (!snappedToPoint) {
+            // Snap axis-aligned objects to a "standardGap" distance apart.
+            doMove(computeStandardGapSnap(fullMove))
+            // If we're drawing, snap the endpoint to nearby segments.
+            if (draw) {
+               let s = closestSegment(draw.segment.end, draw.segment.axis)
+               if (s && canSnap(draw.segment.end, s.point)) {
+                  draw.segment.end.moveTo(s.point)
+                  draw.endObject = s.segment
+               } else {
+                  draw.endObject = undefined
+               }
+            }
+         }
+         // ----- TODO: (Put this somewhere.) Handle these exceptional cases:
          if (
             draw &&
             !segmentExistsBetween(draw.segment.start, draw.segment.end) &&
@@ -598,127 +587,22 @@
          ) {
          }
 
-         // ----- PART 2: Attempt to snap the movement to nearby objects. -----
-         let snapAxis1 = move.grabbedAxis
-         let snapAxis2 = findExistingAxis(move.grabbedAxis.orthogonalAxis())
-         // To start with, compute relevant info about each segment.
-         let snapInfo = new Map()
-         for (let seg of segments) {
-            let start = Point.zero.displaceBy(
-               seg.start.displacementFrom(Point.zero).subRotation(snapAxis1)
-            )
-            let end = Point.zero.displaceBy(
-               seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
-            )
-            let s = moveInfo.get0(seg.start)
-            let e = moveInfo.get0(seg.end)
-            let sMovesX, sMovesY, eMovesX, eMovesY
-            sMovesX = sMovesY = s.moveType === "full move"
-            if (s.moveType instanceof Axis) {
-               sMovesX = (s.moveType === seg.axis) !== (seg.axis === snapAxis1)
-               sMovesY = (s.moveType === seg.axis) !== (seg.axis === snapAxis2)
-            }
-            eMovesX = eMovesY = e.moveType === "full move"
-            if (e.moveType instanceof Axis) {
-               eMovesX = (e.moveType === seg.axis) !== (seg.axis === snapAxis1)
-               eMovesY = (e.moveType === seg.axis) !== (seg.axis === snapAxis2)
-            }
-            // Ugly edge case logic (see definition of "looseEndEdgeCase").
-            let [sLoose, eLoose] = [false, false]
-            if (looseEndEdgeCase && seg === looseEndEdgeCase.edge[1]) {
-               sLoose = seg.start === looseEndEdgeCase.point
-               eLoose = !sLoose
-            }
-            let [x1, x2, x1Moves, x2Moves, x1Loose, x2Loose] =
-               start.x <= end.x
-                  ? [start.x, end.x, sMovesX, eMovesX, sLoose, eLoose]
-                  : [end.x, start.x, eMovesX, sMovesX, eLoose, sLoose]
-            let [y1, y2, y1Moves, y2Moves] =
-               start.y <= end.y
-                  ? [start.y, end.y, sMovesY, eMovesY]
-                  : [end.y, start.y, eMovesY, sMovesY]
-            let info = { x1, x2, y1, y2, x1Moves, x2Moves, y1Moves, y2Moves }
-            snapInfo.set(seg, { ...info, x1Loose, x2Loose })
-         }
-         // Using the pre-computed info, find the closest thing that can be
-         // snapped to in each of the axial directions.
-         let minXSnap = Number.POSITIVE_INFINITY
-         let minYSnap = Number.POSITIVE_INFINITY
-         for (let segA of segments) {
-            if (segA.axis !== snapAxis1 && segA.axis !== snapAxis2) continue
-            let a = snapInfo.get(segA)
-            for (let segB of segments) {
-               if (segB.axis !== snapAxis1 && segB.axis !== snapAxis2) continue
-               let b = snapInfo.get(segB)
-               let notEq = segA !== segB ? 1 : -1
-               // If overlapping wrt. axis X, check distance wrt. axis Y.
-               if (a.x1 <= b.x2 + standardGap && a.x2 >= b.x1 - standardGap) {
-                  if (a.y1Moves && !b.y2Moves) {
-                     let d = b.y2 - a.y1 + standardGap * notEq
-                     if (Math.abs(d) < Math.abs(minYSnap)) minYSnap = d
-                  }
-                  if (a.y2Moves && !b.y1Moves) {
-                     let d = b.y1 - a.y2 - standardGap * notEq
-                     if (Math.abs(d) < Math.abs(minYSnap)) minYSnap = d
-                  }
-               }
-               // If overlapping wrt. axis Y, check distance wrt. axis X.
-               if (a.y1 <= b.y2 + standardGap && a.y2 >= b.y1 - standardGap) {
-                  if (a.x1Loose || (!a.x2Loose && a.x1Moves && !b.x2Moves)) {
-                     let d = b.x2 - a.x1 + standardGap * notEq
-                     if (Math.abs(d) < Math.abs(minXSnap)) minXSnap = d
-                  }
-                  if (a.x2Loose || (!a.x1Loose && a.x2Moves && !b.x1Moves)) {
-                     let d = b.x1 - a.x2 - standardGap * notEq
-                     if (Math.abs(d) < Math.abs(minXSnap)) minXSnap = d
-                  }
-               }
-            }
-         }
-         // Now, perturb the move vector to implement the desired snap.
-         if (Math.abs(minXSnap) >= easeRadius /* too far to snap */) {
-            minXSnap = 0
-         } else if (Math.abs(minXSnap) >= snapRadius /* ease toward snap */) {
-            minXSnap = Math.sign(minXSnap) * easeFn(Math.abs(minXSnap))
-         }
-         if (Math.abs(minYSnap) >= easeRadius /* too far to snap */) {
-            minYSnap = 0
-         } else if (Math.abs(minYSnap) >= snapRadius /* ease toward snap */) {
-            minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
-         }
-         fullMove.vector = fullMove.vector.add(
-            new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
-         )
-         // And finally: enact the new, perturbed movement.
-         moveInfo.clear()
-         doMove()
-
-         if (draw) {
-            // TODO: This code is temporary!
-            let s = closestSegment(draw.segment.end, draw.segment.axis)
-            if (s && canSnap(draw.segment.end, s.point)) {
-               draw.segment.end.moveTo(s.point)
-               draw.endObject = s.segment
+         function doMove(vector: Vector) {
+            moveInfo.clear()
+            // Compute the movement of every Point in the circuit.
+            if (draw && drawingEdgeCase) {
+               moveInfo.set(draw.segment.end, { moveType: "full move", vector })
+               propagateMovement(
+                  draw.segment.start,
+                  null,
+                  vector.rejectionFrom(draw.segment.axis)
+               )
             } else {
-               draw.endObject = undefined
-            }
-         }
-
-         function doMove() {
-            if (looseEndEdgeCase) {
-               let { point, edge } = looseEndEdgeCase
-               let [neighbour, { axis }] = edge
-               moveInfo.set(point, fullMove)
-               propagateMovement(neighbour, null, {
-                  moveType: "full move",
-                  vector: fullMove.vector.rejectionFrom(axis),
-               })
-            } else {
-               for (let point of pointsToMove) {
-                  propagateMovement(point, null, fullMove)
+               for (let point of move!.points) {
+                  propagateMovement(point, null, vector)
                }
             }
-            // Commit the movement.
+            // Update the position of each Point.
             for (let point of circuit.keys()) {
                point.moveTo(
                   move!.originalPositions
@@ -732,10 +616,10 @@
          function propagateMovement(
             currentPoint: Point, // The point we are moving.
             edgeAxis: Axis | null, // The axis of the edge we just followed.
-            info: MoveInfo // The movement info being propagated.
+            moveVector: Vector // The movement being propagated.
          ) {
             let current = moveInfo.get0(currentPoint)
-            let axes = pointAxes.get0(currentPoint)
+            let axes = axesAtPoint(currentPoint)
             if (edgeAxis && axes.length == 2 && current.moveType == "no move") {
                // Keep only one component of the movement vector. This allows
                // parts of the circuit to stretch and contract as it is moved.
@@ -745,13 +629,13 @@
                // terms of a new basis. We express moveVector in terms of
                // (edgeAxis, otherAxis), but we only keep the 2nd component.
                current.vector = otherAxis.scaleBy(
-                  (edgeAxis.x * info.vector.y - edgeAxis.y * info.vector.x) /
+                  (edgeAxis.x * moveVector.y - edgeAxis.y * moveVector.x) /
                      (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
                )
             } else {
                // Move rigidly.
-               current.moveType = info.moveType
-               current.vector = info.vector
+               current.moveType = "full move"
+               current.vector = moveVector
             }
             for (let [nextPoint, nextSegment] of circuit.get0(currentPoint)) {
                let nextEdgeAxis = nextSegment.axis
@@ -769,9 +653,102 @@
                   current.moveType === "full move" ||
                   current.moveType === nextEdgeAxis
                ) {
-                  propagateMovement(nextPoint, nextEdgeAxis, info)
+                  propagateMovement(nextPoint, nextEdgeAxis, moveVector)
                }
             }
+         }
+         function computeStandardGapSnap(moveVector: Vector) {
+            let snapAxis1 = move!.grabbedAxis
+            let snapAxis2 = findExistingAxis(move!.grabbedAxis.orthogonalAxis())
+            // To start with, compute relevant info about each segment.
+            let snapInfo = new Map()
+            for (let seg of segments) {
+               let start = Point.zero.displaceBy(
+                  seg.start.displacementFrom(Point.zero).subRotation(snapAxis1)
+               )
+               let end = Point.zero.displaceBy(
+                  seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
+               )
+               let s = moveInfo.get0(seg.start)
+               let e = moveInfo.get0(seg.end)
+               let sMovesX, sMovesY, eMovesX, eMovesY
+               sMovesX = sMovesY = s.moveType === "full move"
+               if (s.moveType instanceof Axis) {
+                  sMovesX = (s.moveType == seg.axis) !== (seg.axis == snapAxis1)
+                  sMovesY = (s.moveType == seg.axis) !== (seg.axis == snapAxis2)
+               }
+               eMovesX = eMovesY = e.moveType === "full move"
+               if (e.moveType instanceof Axis) {
+                  eMovesX = (e.moveType == seg.axis) !== (seg.axis == snapAxis1)
+                  eMovesY = (e.moveType == seg.axis) !== (seg.axis == snapAxis2)
+               }
+               let endLoose = drawingEdgeCase && seg === draw?.segment
+               let [x1, x2, x1Moves, x2Moves, x1Loose, x2Loose] =
+                  start.x <= end.x
+                     ? [start.x, end.x, sMovesX, eMovesX, false, endLoose]
+                     : [end.x, start.x, eMovesX, sMovesX, endLoose, false]
+               let [y1, y2, y1Moves, y2Moves] =
+                  start.y <= end.y
+                     ? [start.y, end.y, sMovesY, eMovesY]
+                     : [end.y, start.y, eMovesY, sMovesY]
+               let info = { x1, x2, y1, y2, x1Moves, x2Moves, y1Moves, y2Moves }
+               snapInfo.set(seg, { ...info, x1Loose, x2Loose })
+            }
+            // Using the pre-computed info, find the closest thing that can be
+            // snapped to in each of the axial directions.
+            let minXSnap = Number.POSITIVE_INFINITY
+            let minYSnap = Number.POSITIVE_INFINITY
+            for (let segA of segments) {
+               if (segA.axis != snapAxis1 && segA.axis != snapAxis2) continue
+               let a = snapInfo.get(segA)
+               for (let segB of segments) {
+                  if (segB.axis != snapAxis1 && segB.axis != snapAxis2) continue
+                  let b = snapInfo.get(segB)
+                  let notEq = segA !== segB ? 1 : -1
+                  // If overlapping wrt. axis X, check distance wrt. axis Y.
+                  if (
+                     a.x1 <= b.x2 + standardGap &&
+                     a.x2 >= b.x1 - standardGap
+                  ) {
+                     if (a.y1Moves && !b.y2Moves) {
+                        let d = b.y2 - a.y1 + standardGap * notEq
+                        if (Math.abs(d) < Math.abs(minYSnap)) minYSnap = d
+                     }
+                     if (a.y2Moves && !b.y1Moves) {
+                        let d = b.y1 - a.y2 - standardGap * notEq
+                        if (Math.abs(d) < Math.abs(minYSnap)) minYSnap = d
+                     }
+                  }
+                  // If overlapping wrt. axis Y, check distance wrt. axis X.
+                  if (
+                     a.y1 <= b.y2 + standardGap &&
+                     a.y2 >= b.y1 - standardGap
+                  ) {
+                     if (a.x1Loose || (!a.x2Loose && a.x1Moves && !b.x2Moves)) {
+                        let d = b.x2 - a.x1 + standardGap * notEq
+                        if (Math.abs(d) < Math.abs(minXSnap)) minXSnap = d
+                     }
+                     if (a.x2Loose || (!a.x1Loose && a.x2Moves && !b.x1Moves)) {
+                        let d = b.x1 - a.x2 - standardGap * notEq
+                        if (Math.abs(d) < Math.abs(minXSnap)) minXSnap = d
+                     }
+                  }
+               }
+            }
+            // Now, perturb the move vector to implement the desired snap.
+            if (Math.abs(minXSnap) >= easeRadius /* too far to snap */) {
+               minXSnap = 0
+            } else if (Math.abs(minXSnap) >= snapRadius /* ease */) {
+               minXSnap = Math.sign(minXSnap) * easeFn(Math.abs(minXSnap))
+            }
+            if (Math.abs(minYSnap) >= easeRadius /* too far to snap */) {
+               minYSnap = 0
+            } else if (Math.abs(minYSnap) >= snapRadius /* ease */) {
+               minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
+            }
+            return moveVector.add(
+               new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
+            )
          }
       }
    }

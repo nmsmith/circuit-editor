@@ -214,14 +214,10 @@ export class Segment {
    readonly start: Point
    readonly end: Point
    readonly axis: Axis
-   constructor(start: Point, end: Point, axis?: Axis) {
+   constructor(start: Point, end: Point, axis: Axis) {
       this.start = start
       this.end = end
-      if (axis) {
-         this.axis = axis
-      } else {
-         this.axis = Axis.fromVector(end.displacementFrom(start)) as Axis
-      }
+      this.axis = axis
    }
    sqLength(): number {
       return this.end.sqDistanceFrom(this.start)
@@ -362,12 +358,5 @@ export class Box {
             sin * -this.padding.left + cos * this.padding.bottom
          )
       )
-   }
-   *sides() {
-      let [tl, tr, br, bl] = this.corners()
-      yield new Segment(tl, tr)
-      yield new Segment(tr, br)
-      yield new Segment(br, bl)
-      yield new Segment(bl, tl)
    }
 }
