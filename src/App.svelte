@@ -422,6 +422,7 @@
    }
    let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
+      mode: "strafing" | "fixed-axis rotation" | "free rotation"
       segment: Segment
       segmentIsNew: boolean
       startObject?: Point | Segment
@@ -429,8 +430,10 @@
    } | null = null
    let move: {
       points: Set<Point>
-      grabLocation: Point
-      grabbedAxis: Axis
+      locationGrabbed: Point
+      axisGrabbed: Axis
+      offset: Vector
+      distance: number
       originalPositions: DefaultMap<Point, Point>
    } | null = null
    let rectSelect: {
@@ -447,7 +450,7 @@
       let segment = new Segment(start, end, axis)
       addSegment(segment)
       if (startObject instanceof Segment) cutSegment(startObject, start)
-      draw = { segment, segmentIsNew: true, startObject }
+      draw = { mode: "strafing", segment, segmentIsNew: true, startObject }
       // Configure the endpoint of the line to be dragged as the mouse moves.
       selected = new ToggleSet([end])
       beginMove(end, end)
@@ -464,11 +467,69 @@
       }
       activeRulers = rulers
    }
-   function endDraw() {
+   $: {
+      if (draw && move) {
+         if (alt) {
+            draw.mode = shift ? "free rotation" : "fixed-axis rotation"
+         } else {
+            draw.mode = "strafing"
+         }
+         if (draw.mode === "fixed-axis rotation") {
+            // Check which axis the mouse is closest to. If the axis has
+            // changed, restart the drawing operation along the new axis.
+            let maybeAxis = Axis.fromVector(
+               mouse.displacementFrom(draw.segment.start)
+            )
+            if (maybeAxis) {
+               let newAxis = findExistingAxis(maybeAxis)
+               // Round to one of the standard axes.
+               let scores = snapAxes.map((axis) => Math.abs(newAxis.dot(axis)))
+               newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
+               if (newAxis !== draw.segment.axis) {
+                  let start = draw.segment.start
+                  let startObject = draw.startObject
+                  endDraw(true)
+                  beginDraw(start, newAxis, startObject)
+                  draw.mode = "fixed-axis rotation"
+                  if (move) move.offset = zeroVector
+               }
+            }
+         } else if (draw.mode === "free rotation") {
+            // To accommodate for the constantly-changing drawing axis, the draw
+            // operation is restarted from scratch every update. (This is a bit
+            // of a hack, but it's the simplest way to integrate "free
+            // rotation" with the other drawing modes.)
+            let target = closestEndpoint(mouse, (p) => p !== draw!.segment.end)
+            if (target && !canSnap(mouse, target)) target = undefined
+            let maybeAxis = Axis.fromVector(
+               (target ? target : mouse).displacementFrom(draw.segment.start)
+            )
+            if (maybeAxis) {
+               let newAxis = findExistingAxis(maybeAxis)
+               let start = draw.segment.start
+               let startObject = draw.startObject
+               endDraw(true)
+               beginDraw(start, newAxis, startObject)
+               draw.mode = "free rotation"
+               if (target) {
+                  draw.segment.end.moveTo(target)
+                  draw.endObject = target
+               } else {
+                  draw.segment.end.moveTo(mouse)
+               }
+            }
+            circuit = circuit
+            segments = segments
+         } else {
+            // The rest of the drawing logic is co-located with the move logic.
+         }
+      }
+   }
+   function endDraw(abort?: boolean) {
       if (!draw) return
       endMove()
       let segment = draw.segment
-      if (segment.sqLength() >= sqMinSegmentLength) {
+      if (!abort && segment.sqLength() >= sqMinSegmentLength) {
          if (draw.endObject instanceof Point) {
             // Create a new Segment that ends at the Point.
             deleteSegment(segment)
@@ -483,11 +544,11 @@
       draw = null
       activeRulers = new Set()
    }
-   function beginMove(thingGrabbed: Point | Segment, grabLocation: Point) {
+   function beginMove(thingGrabbed: Point | Segment, pointGrabbed: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
-      let grabbedAxis
+      let axisGrabbed
       if (thingGrabbed instanceof Segment) {
-         grabbedAxis = thingGrabbed.axis
+         axisGrabbed = thingGrabbed.axis
       } else {
          let _
          let axis = Axis.horizontal
@@ -495,7 +556,7 @@
             // Prefer horizontal and vertical axes.
             if (axis === Axis.horizontal || axis === Axis.vertical) break
          }
-         grabbedAxis = axis
+         axisGrabbed = axis
       }
       // Make a copy of every Point in the circuit prior to movement.
       // We need to use these copies as a reference, because we will be
@@ -506,8 +567,10 @@
       }
       move = {
          points: selectedPoints(),
-         grabLocation: grabLocation.clone(),
-         grabbedAxis,
+         locationGrabbed: pointGrabbed.clone(),
+         axisGrabbed,
+         offset: pointGrabbed.displacementFrom(mouse),
+         distance: 0,
          originalPositions,
       }
       // If moving a single Point which is a loose end, treat the move
@@ -523,6 +586,7 @@
                   deleteSegment(existingSegment)
                   addSegment(newSegment)
                   draw = {
+                     mode: "strafing",
                      segment: newSegment,
                      segmentIsNew: false,
                      startObject: start,
@@ -534,7 +598,7 @@
    }
    // ----- Compute the state of an in-progress move operation -----
    $: /* On a change to 'draw, 'move', or 'mouse' */ {
-      if (move) {
+      if (move && draw?.mode !== "free rotation") {
          let drawingEdgeCase =
             draw && axesAtPoint(draw.segment.start).length !== 2
          // This is a "global variable" throughout the forthcoming operations.
@@ -545,11 +609,19 @@
             }
          })
          // Firstly, perform a simple movement that tracks the mouse.
-         let fullMove = mouse.displacementFrom(move.grabLocation)
-         doMove(fullMove)
-         // If we're drawing, try snapping the moved endpoint to a nearby Point.
+         let fullMove = mouse.displacementFrom(move.locationGrabbed)
+         if (move.distance < 15) {
+            fullMove = fullMove.add(move.offset.scaleBy(1 - move.distance / 15))
+         }
+         if (!draw || draw.mode === "strafing") {
+            doMove(fullMove)
+         } else {
+            fullMove = fullMove.projectionOnto(draw.segment.axis)
+            movePoint(draw.segment.end, fullMove)
+         }
          let snappedToPoint = false
-         if (draw) {
+         if (draw && draw.mode === "strafing") {
+            // Try snapping the moved endpoint to a nearby Point.
             function isAcceptable(point: Point) {
                if (moveInfo.get0(point).moveType === "no move") {
                   for (let [other, { axis }] of circuit.get0(point)) {
@@ -567,7 +639,7 @@
             let target = closestEndpoint(draw.segment.end, isAcceptable)
             if (target && canSnap(draw.segment.end, target)) {
                snappedToPoint = true
-               let snappedMove = target.displacementFrom(move.grabLocation)
+               let snappedMove = target.displacementFrom(move.locationGrabbed)
                doMove(snappedMove)
                draw.endObject = target
             } else {
@@ -576,9 +648,14 @@
          }
          if (!snappedToPoint) {
             // Snap axis-aligned objects to a "standardGap" distance apart.
-            doMove(computeStandardGapSnap(fullMove))
-            // If we're drawing, snap the endpoint to nearby segments.
+            let snappedMove = fullMove.add(computeStandardGapSnap())
+            if (!draw || draw.mode === "strafing") {
+               doMove(snappedMove)
+            } else {
+               movePoint(draw.segment.end, snappedMove)
+            }
             if (draw) {
+               // Try snapping the endpoint to nearby segments.
                let s = closestSegment(draw.segment.end, draw.segment.axis)
                if (s && canSnap(draw.segment.end, s.point)) {
                   draw.segment.end.moveTo(s.point)
@@ -587,6 +664,13 @@
                   draw.endObject = undefined
                }
             }
+         }
+
+         function movePoint(point: Point, vector: Vector) {
+            moveInfo.set(point, { moveType: "full move", vector })
+            point.moveTo(move!.originalPositions.get0(point).displaceBy(vector))
+            circuit = circuit
+            segments = segments
          }
          function doMove(vector: Vector) {
             function specialMove() {
@@ -681,9 +765,9 @@
                }
             }
          }
-         function computeStandardGapSnap(moveVector: Vector) {
-            let snapAxis1 = move!.grabbedAxis
-            let snapAxis2 = findExistingAxis(move!.grabbedAxis.orthogonalAxis())
+         function computeStandardGapSnap(): Vector {
+            let snapAxis1 = move!.axisGrabbed
+            let snapAxis2 = findExistingAxis(move!.axisGrabbed.orthogonalAxis())
             // To start with, compute relevant info about each segment.
             let snapInfo = new Map()
             for (let seg of segments) {
@@ -770,9 +854,7 @@
             } else if (Math.abs(minYSnap) >= snapRadius /* ease */) {
                minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
             }
-            return moveVector.add(
-               new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
-            )
+            return new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
          }
       }
    }
@@ -830,13 +912,24 @@
       selected = selected
       rectSelect = null
    }
+   function shiftDown() {}
+   function shiftUp() {}
+   function altDown() {
+      if (draw && move) {
+         // Reset the reference information for the movement.
+         move.locationGrabbed = draw.segment.end.clone()
+         for (let point of move.originalPositions.keys()) {
+            move.originalPositions.set(point, point.clone())
+         }
+      }
+   }
+   function altUp() {}
+   function cmdDown() {}
+   function cmdUp() {}
 </script>
 
 <svelte:window
    on:keydown={(event) => {
-      shift = event.getModifierState("Shift")
-      alt = event.getModifierState("Alt")
-      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
       switch (event.key) {
          case "s":
          case "S":
@@ -851,15 +944,63 @@
             deleteSelected()
             break
          }
+         case "Shift":
+            if (!shift) {
+               shift = true
+               shiftDown()
+            }
+            break
+         case "Alt":
+            if (!alt) {
+               alt = true
+               altDown()
+            }
+            break
+         case "Control":
+         case "Meta":
+            if (!cmd) {
+               cmd = true
+               cmdDown()
+            }
+            break
       }
    }}
    on:keyup={(event) => {
-      shift = event.getModifierState("Shift")
-      alt = event.getModifierState("Alt")
-      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
+      switch (event.key) {
+         case "Shift":
+            if (shift) {
+               shift = false
+               shiftUp()
+            }
+            break
+         case "Alt":
+            if (alt) {
+               alt = false
+               altUp()
+            }
+            break
+         case "Control":
+         case "Meta":
+            if (cmd) {
+               cmd = false
+               cmdUp()
+            }
+            break
+      }
    }}
    on:blur={(event) => {
-      shift = alt = cmd = false
+      if (shift) {
+         shift = false
+         shiftUp()
+      }
+      if (alt) {
+         alt = false
+         altUp()
+      }
+      if (cmd) {
+         cmd = false
+         cmdUp()
+      }
    }}
 />
 <svg
@@ -870,7 +1011,9 @@
       return false
    }}
    on:mousemove={(event) => {
-      mouse = new Point(event.clientX, event.clientY)
+      let newMouse = new Point(event.clientX, event.clientY)
+      if (move) move.distance += newMouse.distanceFrom(mouse)
+      mouse = newMouse
       // Check if the mouse has moved enough to trigger an action.
       if (waitingForDrag) {
          let d = mouse.displacementFrom(waitingForDrag)
@@ -883,11 +1026,10 @@
                break
             case "hydraulic line":
                if (d.sqLength() > sqSnapRadius) {
-                  let scores = snapAxes.map((axis) => Math.abs(d.dot(axis)))
-                  let drawAxis = snapAxes[scores.indexOf(Math.max(...scores))]
-                  // let drawAxis = Math.abs(d.x) >= Math.abs(d.y)
-                  //    ? Axis.horizontal
-                  //    : Axis.vertical
+                  let drawAxis =
+                     Math.abs(d.x) >= Math.abs(d.y)
+                        ? Axis.horizontal
+                        : Axis.vertical
                   let snap = trySnapping(waitingForDrag)
                   if (snap.target) {
                      beginDraw(snap.point, drawAxis, snap.target)
