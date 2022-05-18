@@ -482,7 +482,7 @@
             )
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
-               // Round to one of the standard axes.
+               // Snap to the nearest standard axis.
                let scores = snapAxes.map((axis) => Math.abs(newAxis.dot(axis)))
                newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
                if (newAxis !== draw.segment.axis) {
@@ -499,7 +499,22 @@
             // operation is restarted from scratch every update. (This is a bit
             // of a hack, but it's the simplest way to integrate "free
             // rotation" with the other drawing modes.)
-            let target = closestEndpoint(mouse, (p) => p !== draw!.segment.end)
+            function isAcceptable(point: Point) {
+               let start = draw!.segment.start
+               let maybeAxis = Axis.fromVector(point.displacementFrom(start))
+               if (!maybeAxis) return false
+               let drawAxis = findExistingAxis(maybeAxis)
+               for (let [other, { axis }] of circuit.get0(point)) {
+                  // Reject if the segment being drawn would overlap this seg.
+                  if (
+                     axis === drawAxis &&
+                     point.distanceFrom(start) > other.distanceFrom(start)
+                  )
+                     return false
+               }
+               return true
+            }
+            let target = closestEndpoint(mouse, isAcceptable)
             if (target && !canSnap(mouse, target)) target = undefined
             let maybeAxis = Axis.fromVector(
                (target ? target : mouse).displacementFrom(draw.segment.start)
@@ -515,7 +530,14 @@
                   draw.segment.end.moveTo(target)
                   draw.endObject = target
                } else {
-                  draw.segment.end.moveTo(mouse)
+                  let s = closestSegment(mouse, newAxis)
+                  if (s && canSnap(mouse, s.point)) {
+                     draw.segment.end.moveTo(s.point)
+                     draw.endObject = s.segment
+                  } else {
+                     draw.segment.end.moveTo(mouse)
+                     draw.endObject = undefined
+                  }
                }
             }
             circuit = circuit
@@ -623,18 +645,17 @@
          if (draw && draw.mode === "strafing") {
             // Try snapping the moved endpoint to a nearby Point.
             function isAcceptable(point: Point) {
-               if (moveInfo.get0(point).moveType === "no move") {
-                  for (let [other, { axis }] of circuit.get0(point)) {
-                     if (axis === draw!.segment.axis) {
-                        // Reject the point if the segment being drawn would
-                        // overlap the edge being examined this iteration.
-                        let dPoint = point.distanceFrom(draw!.segment.start)
-                        let dOther = other.distanceFrom(draw!.segment.start)
-                        if (dPoint > dOther) return false
-                     }
-                  }
-                  return true
-               } else return false
+               if (moveInfo.get0(point).moveType !== "no move") return false
+               let start = draw!.segment.start
+               for (let [other, { axis }] of circuit.get0(point)) {
+                  // Reject if the segment being drawn would overlap this seg.
+                  if (
+                     axis === draw!.segment.axis &&
+                     point.distanceFrom(start) > other.distanceFrom(start)
+                  )
+                     return false
+               }
+               return true
             }
             let target = closestEndpoint(draw.segment.end, isAcceptable)
             if (target && canSnap(draw.segment.end, target)) {
