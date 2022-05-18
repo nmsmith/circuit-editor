@@ -635,11 +635,11 @@
          if (move.distance < 15) {
             fullMove = fullMove.add(move.offset.scaleBy(1 - move.distance / 15))
          }
-         if (!draw || draw.mode === "strafing") {
-            doMove(fullMove)
-         } else {
+         if (draw && draw.mode === "fixed-axis rotation") {
             fullMove = fullMove.projectionOnto(draw.segment.axis)
             movePoint(draw.segment.end, fullMove)
+         } else {
+            doMove(fullMove)
          }
          let snappedToPoint = false
          if (draw && draw.mode === "strafing") {
@@ -670,10 +670,11 @@
          if (!snappedToPoint) {
             // Snap axis-aligned objects to a "standardGap" distance apart.
             let snappedMove = fullMove.add(computeStandardGapSnap())
-            if (!draw || draw.mode === "strafing") {
-               doMove(snappedMove)
-            } else {
+            if (draw && draw.mode === "fixed-axis rotation") {
+               snappedMove = snappedMove.projectionOnto(draw.segment.axis)
                movePoint(draw.segment.end, snappedMove)
+            } else {
+               doMove(snappedMove)
             }
             if (draw) {
                // Try snapping the endpoint to nearby segments.
