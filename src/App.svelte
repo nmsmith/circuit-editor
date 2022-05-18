@@ -2,7 +2,8 @@
    import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
    import { DefaultMap, ToggleSet } from "./utilities"
    import Wire from "./Wire.svelte"
-   import Endpoint from "./Endpoint.svelte"
+   import IntersectionPoint from "./IntersectionPoint.svelte"
+   import EndpointMarker from "./EndpointMarker.svelte"
    import RulerHTML from "./Ruler.svelte"
    import { Ruler } from "./Ruler.svelte"
    import Padding from "./Padding.svelte"
@@ -195,6 +196,13 @@
       }
       return false
    }
+   function straightAt(point: Point) {
+      let edges = circuit.get0(point)
+      if (edges.size !== 2) return false
+      let axes = []
+      for (let [_, { axis }] of edges) axes.push(axis)
+      return axes[0] === axes[1]
+   }
    function addSegment(segment: Segment) {
       circuit.get0(segment.start).add([segment.end, segment])
       circuit.get0(segment.end).add([segment.start, segment])
@@ -336,7 +344,6 @@
    $: {
       highlighted = new Set()
       if (draw) {
-         if (draw.startObject) highlighted.add(draw.startObject)
          if (draw.endObject) highlighted.add(draw.endObject)
       } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
@@ -425,7 +432,6 @@
       mode: "strafing" | "fixed-axis rotation" | "free rotation"
       segment: Segment
       segmentIsNew: boolean
-      startObject?: Point | Segment
       endObject?: Point | Segment
    } | null = null
    let move: {
@@ -444,13 +450,12 @@
    // Rulers that act as a visual indicator of snapping behaviour
    let activeRulers: Set<Ruler> = new Set()
 
-   function beginDraw(start: Point, axis: Axis, startObject?: Point | Segment) {
+   function beginDraw(start: Point, axis: Axis) {
       // Add the line being drawn to the circuit.
       let end = start.clone()
       let segment = new Segment(start, end, axis)
       addSegment(segment)
-      if (startObject instanceof Segment) cutSegment(startObject, start)
-      draw = { mode: "strafing", segment, segmentIsNew: true, startObject }
+      draw = { mode: "strafing", segment, segmentIsNew: true }
       // Configure the endpoint of the line to be dragged as the mouse moves.
       selected = new ToggleSet([end])
       beginMove(end, end)
@@ -486,10 +491,8 @@
                let scores = snapAxes.map((axis) => Math.abs(newAxis.dot(axis)))
                newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
                if (newAxis !== draw.segment.axis) {
-                  let start = draw.segment.start
-                  let startObject = draw.startObject
-                  endDraw(true)
-                  beginDraw(start, newAxis, startObject)
+                  deleteSegment(draw.segment)
+                  beginDraw(draw.segment.start, newAxis)
                   draw.mode = "fixed-axis rotation"
                   if (move) move.offset = zeroVector
                }
@@ -521,10 +524,8 @@
             )
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
-               let start = draw.segment.start
-               let startObject = draw.startObject
-               endDraw(true)
-               beginDraw(start, newAxis, startObject)
+               deleteSegment(draw.segment)
+               beginDraw(draw.segment.start, newAxis)
                draw.mode = "free rotation"
                if (target) {
                   draw.segment.end.moveTo(target)
@@ -547,11 +548,11 @@
          }
       }
    }
-   function endDraw(abort?: boolean) {
+   function endDraw() {
       if (!draw) return
       endMove()
       let segment = draw.segment
-      if (!abort && segment.sqLength() >= sqMinSegmentLength) {
+      if (segment.sqLength() >= sqMinSegmentLength) {
          if (draw.endObject instanceof Point) {
             // Create a new Segment that ends at the Point.
             deleteSegment(segment)
@@ -611,7 +612,6 @@
                      mode: "strafing",
                      segment: newSegment,
                      segmentIsNew: false,
-                     startObject: start,
                   }
                }
             }
@@ -1054,8 +1054,10 @@
                         : Axis.vertical
                   let snap = trySnapping(waitingForDrag)
                   if (snap.target) {
-                     beginDraw(snap.point, drawAxis, snap.target)
-                  } else beginDraw(waitingForDrag, drawAxis, undefined)
+                     if (snap.target instanceof Segment)
+                        cutSegment(snap.target, snap.point)
+                     beginDraw(snap.point, drawAxis)
+                  } else beginDraw(waitingForDrag, drawAxis)
                   waitingForDrag = null
                }
                break
@@ -1122,11 +1124,11 @@
 >
    <g>
       <!-- Bottom layer -->
-      {#each [...segments] as segment}
+      <!-- {#each [...segments] as segment}
          {#if segment.end.sqDistanceFrom(segment.start) > 0.01}
             <Padding {segment} />
          {/if}
-      {/each}
+      {/each} -->
       <!-- {#if !(draw && alt)}
          {#each [...activeRulers] as ruler}
             <RulerHTML {ruler} />
@@ -1141,16 +1143,20 @@
             highlighted={highlighted.has(segment)}
             selected={selected.has(segment)}
          />
-         <Endpoint
-            position={segment.start}
-            highlighted={highlighted.has(segment.start)}
-            selected={selected.has(segment.start)}
-         />
-         <Endpoint
-            position={segment.end}
-            highlighted={highlighted.has(segment.end)}
-            selected={selected.has(segment.end)}
-         />
+      {/each}
+      {#each [...circuit] as [point, edges]}
+         {#if edges.size > 2}
+            <IntersectionPoint
+               position={point}
+               highlighted={highlighted.has(point)}
+               selected={selected.has(point)}
+            />
+         {:else if straightAt(point) || highlighted.has(point) || selected.has(point)}
+            <EndpointMarker
+               position={point}
+               highlighted={highlighted.has(point)}
+               selected={selected.has(point)}
+            />{/if}
       {/each}
    </g>
    <g>
@@ -1175,6 +1181,7 @@
    :global(.highlighted) {
       fill: rgb(0, 234, 255);
       stroke: rgb(0, 234, 255);
+      stroke-width: 0;
    }
    :global(.selected) {
       fill: yellow;
