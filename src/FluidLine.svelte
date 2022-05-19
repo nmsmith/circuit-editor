@@ -21,9 +21,11 @@
 <style>
    .fluidLine {
       stroke-width: 3px;
+      stroke-linecap: round;
    }
    .highlighted,
    .selected {
       stroke-width: 9px;
+      stroke-linecap: round;
    }
 </style>

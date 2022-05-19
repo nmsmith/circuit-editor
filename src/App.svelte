@@ -1,8 +1,9 @@
 <script lang="ts">
    import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
    import { DefaultMap, ToggleSet } from "./utilities"
-   import Wire from "./Wire.svelte"
-   import IntersectionPoint from "./IntersectionPoint.svelte"
+   import FluidLine from "./FluidLine.svelte"
+   import Hopover from "./Hopover.svelte"
+   import ConnectionPoint from "./ConnectionPoint.svelte"
    import EndpointMarker from "./EndpointMarker.svelte"
    import RulerHTML from "./Ruler.svelte"
    import { Ruler } from "./Ruler.svelte"
@@ -19,6 +20,7 @@
    // Snapping constants
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
+   const hopoverRadius = halfGap / 2
    const gapSelectError = 1 // diff from standardGap acceptable to gap select
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
    const snapRadius = 15 // dist btw mouse & snap point at which snapping occurs
@@ -56,11 +58,11 @@
       if (sqDistance < sqSnapRadius) {
          return { outcome: "snapped", point: target }
       } else if (sqDistance < sqEaseRadius) {
-         let easeDir = target.displacementFrom(source).normalize()
+         let easeDir = target.directionFrom(source)
          let distance = Math.sqrt(sqDistance)
          return {
             outcome: "eased",
-            point: source.displaceBy(easeDir.scaleBy(easeFn(distance))),
+            point: source.displacedBy(easeDir.scaledBy(easeFn(distance))),
          }
       } else return { outcome: "no easing", point: source }
    }
@@ -101,11 +103,11 @@
          // To avoid intersections absurdly close to the ends, we add a buffer.
          let buffer = alongAxis ? (halfGap - 0.001) * s.length() : 0
          if (dot < buffer || dot > sqLength - buffer) continue
-         let rejection = s.scaleBy(dot / sqLength).sub(p)
+         let rejection = s.scaledBy(dot / sqLength).sub(p)
          let current
          if (alongAxis && rejection.sqLength() > 0.001) {
             let forward = new Ray(point, alongAxis)
-            let backward = new Ray(point, alongAxis.scaleBy(-1))
+            let backward = new Ray(point, alongAxis.scaledBy(-1))
             let intersection =
                forward.intersection(segment) || backward.intersection(segment)
             if (intersection) {
@@ -115,7 +117,7 @@
          } else {
             current = {
                segment,
-               point: point.displaceBy(rejection),
+               point: point.displacedBy(rejection),
                sqDistance: rejection.sqLength(),
             }
          }
@@ -142,7 +144,7 @@
          let rejection = d.projectionOnto(ruler.line.axis).sub(d)
          let current = {
             ruler,
-            point: point.displaceBy(rejection),
+            point: point.displacedBy(rejection),
             sqDistance: rejection.sqLength(),
          }
          closest =
@@ -188,13 +190,103 @@
    // We store the multiplicity of every axis in the circuit, so that if all
    // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
-
-   function segmentExistsBetween(p1: Point, p2: Point) {
-      if (!circuit.has(p1)) return false
-      for (let [p] of circuit.get0(p1)) {
-         if (p === p2) return true
+   // Because the intersection point of crossing lines should show as a
+   // hopover, the set of symbols to be rendered is not defined by the topology
+   // of the circuit alone. Thus, we must do a pass to gather rendering info.
+   type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
+   let crossingToggleOrder: CrossingType[] = [
+      "H up",
+      "H down",
+      "V left",
+      "V right",
+      "no hop",
+   ]
+   let crossingTypes: DefaultMap<
+      Segment,
+      DefaultMap<Segment, CrossingType>
+   > = new DefaultMap(() => new DefaultMap(() => "H up"))
+   let crossings: DefaultMap<Segment, Map<Segment, Point>>
+   $: {
+      crossings = new DefaultMap(() => new Map())
+      for (let seg1 of segments) {
+         for (let seg2 of segments) {
+            if (segmentsConnect(seg1, seg2)) continue
+            let crossPoint = seg1.intersection(seg2)
+            if (crossPoint) {
+               crossings.get0(seg1).set(seg2, crossPoint)
+               crossings.get0(seg2).set(seg1, crossPoint)
+            }
+         }
       }
-      return false
+   }
+   type Section = Segment
+   let segmentsToDraw: Map<Segment, Section[]>
+   type Glyph =
+      | { type: "hopover"; start: Point; end: Point }
+      | { type: "connection node"; point: Point }
+      | { type: "endpoint marker"; point: Point }
+   let glyphsToDraw: Set<Glyph>
+   $: {
+      segmentsToDraw = new Map()
+      glyphsToDraw = new Set()
+      for (let segment of segments) {
+         // This array will collect the segment endpoints, and all of the
+         // points at which the hopovers should be spliced into the segment.
+         let endpoints = [segment.start, segment.end]
+         for (let [other, crossPoint] of crossings.get0(segment)) {
+            // Determine which segment is the "horizontal" one.
+            let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
+            let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
+            let hSegment: Segment
+            if (Math.abs(segReject) < Math.abs(otherReject)) {
+               hSegment = segment
+            } else if (Math.abs(segReject) > Math.abs(otherReject)) {
+               hSegment = other
+            } else {
+               hSegment = segReject < otherReject ? segment : other
+            }
+            // Determine which segment will hop over the other.
+            let type = crossingTypes.get0(segment).get0(other)
+            if (
+               (hSegment === segment && (type == "H up" || type == "H down")) ||
+               (hSegment === other && (type == "V left" || type == "V right"))
+            ) {
+               let [start, end] = [
+                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
+                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
+               ]
+               endpoints.push(start, end)
+               glyphsToDraw.add({ type: "hopover", start, end })
+            }
+         }
+         // Compute the sections that need to be drawn.
+         let distanceOf = (p: Point) => p.sqDistanceFrom(segment.start)
+         endpoints.sort((a, b) => distanceOf(a) - distanceOf(b))
+         let sections: Section[] = []
+         for (let i = 0; i < endpoints.length; i += 2) {
+            sections.push(
+               new Segment(endpoints[i], endpoints[i + 1], segment.axis)
+            )
+         }
+         segmentsToDraw.set(segment, sections)
+      }
+      // Determine the other glyphs that need to be drawn at endpoints.
+      for (let [p, edges] of circuit) {
+         if (edges.size > 2) {
+            glyphsToDraw.add({ type: "connection node", point: p })
+         } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
+            glyphsToDraw.add({ type: "endpoint marker", point: p })
+         }
+      }
+   }
+
+   function segmentsConnect(s1: Segment, s2: Segment) {
+      return (
+         s1.start === s2.start ||
+         s1.start === s2.end ||
+         s1.end === s2.start ||
+         s1.end === s2.end
+      )
    }
    function straightAt(point: Point) {
       let edges = circuit.get0(point)
@@ -365,7 +457,7 @@
             // re-coordinatize every object that has the same orientation as
             // the segment as an AABB, and search along the resultant y-axis.
             let selectAxis = s.segment.axis
-            let orthAxis = findExistingAxis(selectAxis.orthogonalAxis())
+            let orthAxis = findExistingAxis(selectAxis.orthogonal())
             type SegmentInfo = {
                segment: Segment
                x: number[]
@@ -375,10 +467,10 @@
             let info = new Map<Segment, SegmentInfo>()
             for (let seg of segments) {
                if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
-               let start = Point.zero.displaceBy(
+               let start = Point.zero.displacedBy(
                   seg.start.displacementFrom(Point.zero).subRotation(selectAxis)
                )
-               let end = Point.zero.displaceBy(
+               let end = Point.zero.displacedBy(
                   seg.end.displacementFrom(Point.zero).subRotation(selectAxis)
                )
                let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
@@ -633,7 +725,9 @@
          // Firstly, perform a simple movement that tracks the mouse.
          let fullMove = mouse.displacementFrom(move.locationGrabbed)
          if (move.distance < 15) {
-            fullMove = fullMove.add(move.offset.scaleBy(1 - move.distance / 15))
+            fullMove = fullMove.add(
+               move.offset.scaledBy(1 - move.distance / 15)
+            )
          }
          if (draw && draw.mode === "fixed-axis rotation") {
             fullMove = fullMove.projectionOnto(draw.segment.axis)
@@ -688,9 +782,9 @@
             }
          }
 
-         function movePoint(point: Point, vector: Vector) {
-            moveInfo.set(point, { moveType: "full move", vector })
-            point.moveTo(move!.originalPositions.get0(point).displaceBy(vector))
+         function movePoint(p: Point, vector: Vector) {
+            moveInfo.set(p, { moveType: "full move", vector })
+            p.moveTo(move!.originalPositions.get0(p).displacedBy(vector))
             circuit = circuit
             segments = segments
          }
@@ -732,7 +826,7 @@
                point.moveTo(
                   move!.originalPositions
                      .get0(point)
-                     .displaceBy(moveInfo.get0(point).vector)
+                     .displacedBy(moveInfo.get0(point).vector)
                )
             }
             circuit = circuit
@@ -753,12 +847,12 @@
                if (axes.length === 2) {
                   otherAxis = edgeAxis === axes[0] ? axes[1] : axes[0]
                } else {
-                  otherAxis = edgeAxis.orthogonalAxis()
+                  otherAxis = edgeAxis.orthogonal()
                }
                // This is (part of) the formula for expressing a vector in
                // terms of a new basis. We express moveVector in terms of
                // (edgeAxis, otherAxis), but we only keep the 2nd component.
-               current.vector = otherAxis.scaleBy(
+               current.vector = otherAxis.scaledBy(
                   (edgeAxis.x * moveVector.y - edgeAxis.y * moveVector.x) /
                      (edgeAxis.x * otherAxis.y - edgeAxis.y * otherAxis.x)
                )
@@ -789,14 +883,14 @@
          }
          function computeStandardGapSnap(): Vector {
             let snapAxis1 = move!.axisGrabbed
-            let snapAxis2 = findExistingAxis(move!.axisGrabbed.orthogonalAxis())
+            let snapAxis2 = findExistingAxis(move!.axisGrabbed.orthogonal())
             // To start with, compute relevant info about each segment.
             let snapInfo = new Map()
             for (let seg of segments) {
-               let start = Point.zero.displaceBy(
+               let start = Point.zero.displacedBy(
                   seg.start.displacementFrom(Point.zero).subRotation(snapAxis1)
                )
-               let end = Point.zero.displaceBy(
+               let end = Point.zero.displacedBy(
                   seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
                )
                let s = moveInfo.get0(seg.start)
@@ -1136,32 +1230,39 @@
       {/if} -->
    </g>
    <g>
-      <!-- Middle layer -->
-      {#each [...segments] as segment}
-         <Wire
-            {segment}
-            highlighted={highlighted.has(segment)}
-            selected={selected.has(segment)}
-         />
-      {/each}
-      {#each [...circuit] as [point, edges]}
-         {#if edges.size > 2}
-            <IntersectionPoint
-               position={point}
-               highlighted={highlighted.has(point)}
-               selected={selected.has(point)}
+      <!-- Line layer -->
+      {#each [...segmentsToDraw] as [segment, sections]}
+         {#each sections as section}
+            <FluidLine
+               segment={section}
+               highlighted={highlighted.has(segment)}
+               selected={selected.has(segment)}
             />
-         {:else if straightAt(point) || highlighted.has(point) || selected.has(point)}
+         {/each}
+      {/each}
+   </g>
+   <g>
+      <!-- Symbol layer -->
+      {#each [...glyphsToDraw] as glyph}
+         {#if glyph.type === "hopover"}
+            <Hopover start={glyph.start} end={glyph.end} />
+         {:else if glyph.type === "connection node"}
+            <ConnectionPoint
+               position={glyph.point}
+               highlighted={highlighted.has(glyph.point)}
+               selected={selected.has(glyph.point)}
+            />
+         {:else if glyph.type === "endpoint marker"}
             <EndpointMarker
-               position={point}
-               highlighted={highlighted.has(point)}
-               selected={selected.has(point)}
+               position={glyph.point}
+               highlighted={highlighted.has(glyph.point)}
+               selected={selected.has(glyph.point)}
             />{/if}
       {/each}
    </g>
    <g>
+      <!-- HUD layer -->
       <text class="toolText" x="8" y="24">{tool}</text>
-      <!-- Top layer -->
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}

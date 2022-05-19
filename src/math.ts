@@ -22,11 +22,11 @@ export class Vector extends VectorBase {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
-   scaleBy(s: number): Vector {
+   scaledBy(s: number): Vector {
       return new Vector(s * this.x, s * this.y)
    }
-   normalize(): Vector {
-      return this.scaleBy(1 / this.length())
+   normalized(): Vector {
+      return this.scaledBy(1 / this.length())
    }
    add(v: Vector): Vector {
       return new Vector(this.x + v.x, this.y + v.y)
@@ -58,13 +58,16 @@ export class Vector extends VectorBase {
       return this.x * v.x + this.y * v.y
    }
    projectionOnto(v: Vector): Vector {
-      return v.scaleBy(this.dot(v) / v.dot(v))
+      return v.scaledBy(this.dot(v) / v.dot(v))
    }
    scalarProjectionOnto(v: Vector): number {
       return this.dot(v) / v.length()
    }
    rejectionFrom(v: Vector): Vector {
       return this.sub(this.projectionOnto(v))
+   }
+   scalarRejectionFrom(v: Vector): number {
+      return (this.y * v.x - this.x * v.y) / v.length()
    }
 }
 
@@ -89,20 +92,20 @@ export class Axis extends Vector {
       if (vec.x === 0 && vec.y === 0) {
          return undefined
       } else if (vec.x > 0 || (vec.x === 0 && vec.y < 0)) {
-         let v = vec.scaleBy(1 / vec.length())
+         let v = vec.scaledBy(1 / vec.length())
          return new Axis(v.x, v.y)
       } else {
-         let v = vec.scaleBy(-1 / vec.length())
+         let v = vec.scaledBy(-1 / vec.length())
          return new Axis(v.x, v.y)
       }
    }
-   orthogonalAxis(): Axis {
+   orthogonal(): Axis {
       return this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
    }
    approxEquals(a: this, errorRatio: number): boolean {
       return (
          super.approxEquals(a, errorRatio) ||
-         super.approxEquals(a.scaleBy(-1) as this, errorRatio)
+         super.approxEquals(a.scaledBy(-1) as this, errorRatio)
       )
    }
 }
@@ -117,11 +120,14 @@ export class Point extends VectorBase {
    distanceFrom(p: Point): number {
       return Math.sqrt(this.sqDistanceFrom(p))
    }
-   displaceBy(v: Vector): Point {
-      return new Point(this.x + v.x, this.y + v.y)
-   }
    displacementFrom(p: Point): Vector {
       return new Vector(this.x - p.x, this.y - p.y)
+   }
+   directionFrom(p: Point): Vector {
+      return this.displacementFrom(p).normalized()
+   }
+   displacedBy(v: Vector): Point {
+      return new Point(this.x + v.x, this.y + v.y)
    }
    clone(): Point {
       return new Point(this.x, this.y)
@@ -184,7 +190,7 @@ export class Ray {
          target.start,
          target.end,
          this.origin,
-         this.origin.displaceBy(this.direction),
+         this.origin.displacedBy(this.direction),
          true
       )
    }
@@ -238,8 +244,8 @@ export class Segment {
    // Returns the point that is the given fraction of the way along the
    // segment, where 0 is segment.start and 1 is segment.end.
    pointAt(frac: number): Point {
-      return this.start.displaceBy(
-         this.end.displacementFrom(this.start).scaleBy(frac)
+      return this.start.displacedBy(
+         this.end.displacementFrom(this.start).scaledBy(frac)
       )
    }
    // Returns the endpoints of the segment, plus the specified number of
@@ -249,11 +255,11 @@ export class Segment {
       if (interiorPoints > 0) {
          let d = this.end
             .displacementFrom(this.start)
-            .scaleBy(1 / (interiorPoints + 1))
+            .scaledBy(1 / (interiorPoints + 1))
          for (
-            let i = 0, p = this.start.displaceBy(d);
+            let i = 0, p = this.start.displacedBy(d);
             i < interiorPoints;
-            ++i, p = p.displaceBy(d)
+            ++i, p = p.displacedBy(d)
          ) {
             yield p
          }
@@ -331,28 +337,28 @@ export class Box {
       let cos = this.direction.x
       let sin = this.direction.y
       // top left
-      yield this.origin.displaceBy(
+      yield this.origin.displacedBy(
          new Vector(
             cos * -this.padding.left - sin * -this.padding.top,
             sin * -this.padding.left + cos * -this.padding.top
          )
       )
       // top right
-      yield this.origin.displaceBy(
+      yield this.origin.displacedBy(
          new Vector(
             cos * this.padding.right - sin * -this.padding.top,
             sin * this.padding.right + cos * -this.padding.top
          )
       )
       // bottom right
-      yield this.origin.displaceBy(
+      yield this.origin.displacedBy(
          new Vector(
             cos * this.padding.right - sin * this.padding.bottom,
             sin * this.padding.right + cos * this.padding.bottom
          )
       )
       // bottom left
-      yield this.origin.displaceBy(
+      yield this.origin.displacedBy(
          new Vector(
             cos * -this.padding.left - sin * this.padding.bottom,
             sin * -this.padding.left + cos * this.padding.bottom
