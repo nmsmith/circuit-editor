@@ -34,7 +34,7 @@
       Axis.fromAngle(0.125 * tau), // 45 degrees
       Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
-   function canSnap(source: Point, target: Point): boolean {
+   function isProximal(source: Point, target: Point): boolean {
       return source.sqDistanceFrom(target) < sqSnapRadius
    }
    // ✨ A magical easing function for aesthetically-pleasing snapping. We
@@ -72,7 +72,7 @@
       consider?: (p: Point) => boolean
    ): Point | undefined {
       let closest: { point: Point; sqDistance: number } | undefined
-      for (let p of circuit.keys()) {
+      for (let p of endpoints()) {
          if (consider && !consider(p)) continue
          let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
          closest =
@@ -81,6 +81,13 @@
                : closest
       }
       return closest?.point
+   }
+   function closestProximalEndpoint(
+      point: Point,
+      consider?: (p: Point) => boolean
+   ): Point | undefined {
+      let endpoint = closestEndpoint(point, consider)
+      if (endpoint && isProximal(point, endpoint)) return endpoint
    }
    // Find the closest segment to the given point (if any).
    function closestSegment(
@@ -128,6 +135,34 @@
       }
       return closest
    }
+   function closestProximalSegment(
+      point: Point,
+      alongAxis?: Axis,
+      consider?: (s: Segment) => boolean
+   ): { segment: Segment; point: Point } | undefined {
+      let closest = closestSegment(point, alongAxis, consider)
+      if (closest && isProximal(point, closest.point)) return closest
+   }
+   function closestCrossing(point: Point): Crossing | undefined {
+      let closest: { crossing: Crossing; sqDistance: number } | undefined
+      for (let [seg1, cs] of crossings) {
+         for (let [seg2, p] of cs) {
+            let current = {
+               crossing: { seg1, seg2, point: p },
+               sqDistance: p.sqDistanceFrom(point),
+            }
+            closest =
+               !closest || current.sqDistance < closest.sqDistance
+                  ? current
+                  : closest
+         }
+      }
+      return closest?.crossing
+   }
+   function closestProximalCrossing(point: Point): Crossing | undefined {
+      let crossing = closestCrossing(point)
+      if (crossing && isProximal(point, crossing.point)) return crossing
+   }
    // Find the closest ruler to the given point (if any).
    // If "generatingPoint" is given, only consider rulers that are generated
    // by the given point (as defined elsewhere).
@@ -154,29 +189,30 @@
       }
       return closest
    }
-   type SnapResult =
-      | { target: Point; point: Point; isSelected: boolean }
-      | { target: Segment; point: Point; isSelected: boolean }
-      | { target: undefined }
-   function trySnapping(point: Point): SnapResult {
-      let endpoint = closestEndpoint(point)
-      if (endpoint && canSnap(point, endpoint)) {
-         return {
-            target: endpoint,
-            point: endpoint,
-            isSelected: selected.has(endpoint),
-         }
-      } else {
-         let s = closestSegment(point)
-         if (s && canSnap(point, s.point)) {
-            return {
-               target: s.segment,
-               point: s.point,
-               isSelected: selected.has(s.segment),
-            }
-         }
+   type AttachPoint =
+      | { object: Point; point: Point }
+      | { object: Segment; point: Point }
+      | { object: undefined }
+   function closestAttachPoint(point: Point): AttachPoint {
+      let endpoint = closestProximalEndpoint(point)
+      if (endpoint) return { object: endpoint, point: endpoint }
+      let s = closestProximalSegment(point)
+      if (s) return { object: s.segment, point: s.point }
+      return { object: undefined }
+   }
+   type ClickPoint = AttachPoint | { object: Crossing; point: Point }
+   function closestClickPoint(point: Point): ClickPoint {
+      let end = closestProximalEndpoint(point)
+      let cross = closestProximalCrossing(point)
+      if (end && cross) {
+         if (cross.point.sqDistanceFrom(point) < end.sqDistanceFrom(point))
+            end = undefined
       }
-      return { target: undefined }
+      if (end) return { object: end, point: end }
+      if (cross) return { object: cross, point: cross.point }
+      // let s = closestProximalSegment(point)
+      // if (s) return { object: s.segment, point: s.point }
+      return { object: undefined }
    }
    // --------------- State ---------------
    // The primary encoding of the circuit is an adjacency list. This supports
@@ -185,6 +221,7 @@
    type OutgoingSegment = [Point, Segment]
    type Circuit = DefaultMap<Point, Set<OutgoingSegment>>
    let circuit: Circuit = new DefaultMap(() => new Set())
+   let endpoints = () => circuit.keys()
    // For operations that only care about Segments, we store them directly.
    let segments: Set<Segment> = new Set()
    // We store the multiplicity of every axis in the circuit, so that if all
@@ -193,6 +230,7 @@
    // Because the intersection point of crossing lines should show as a
    // hopover, the set of symbols to be rendered is not defined by the topology
    // of the circuit alone. Thus, we must do a pass to gather rendering info.
+   type Crossing = { seg1: Segment; seg2: Segment; point: Point }
    type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
    let crossingToggleOrder: CrossingType[] = [
       "H up",
@@ -222,7 +260,7 @@
    type Section = Segment
    let segmentsToDraw: Map<Segment, Section[]>
    type Glyph =
-      | { type: "hopover"; start: Point; end: Point }
+      | { type: "hopover"; mid: Point; start: Point; end: Point; flip: boolean }
       | { type: "connection node"; point: Point }
       | { type: "endpoint marker"; point: Point }
    let glyphsToDraw: Set<Glyph>
@@ -232,8 +270,8 @@
       for (let segment of segments) {
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
-         let endpoints = [segment.start, segment.end]
-         for (let [other, crossPoint] of crossings.get0(segment)) {
+         let points = [segment.start, segment.end]
+         for (let [other, mid] of crossings.get0(segment)) {
             // Determine which segment is the "horizontal" one.
             let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
             let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
@@ -252,21 +290,22 @@
                (hSegment === other && (type == "V left" || type == "V right"))
             ) {
                let [start, end] = [
-                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
-                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
+                  mid.displacedBy(segment.axis.scaledBy(hopoverRadius)),
+                  mid.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
                ]
-               endpoints.push(start, end)
-               glyphsToDraw.add({ type: "hopover", start, end })
+               points.push(start, end)
+               let flip = type === "H down" || type === "V right"
+               glyphsToDraw.add({ type: "hopover", mid, start, end, flip })
+            } else if (type === "no hop" && highlighted.has(mid)) {
+               glyphsToDraw.add({ type: "endpoint marker", point: mid })
             }
          }
          // Compute the sections that need to be drawn.
          let distanceOf = (p: Point) => p.sqDistanceFrom(segment.start)
-         endpoints.sort((a, b) => distanceOf(a) - distanceOf(b))
+         points.sort((a, b) => distanceOf(a) - distanceOf(b))
          let sections: Section[] = []
-         for (let i = 0; i < endpoints.length; i += 2) {
-            sections.push(
-               new Segment(endpoints[i], endpoints[i + 1], segment.axis)
-            )
+         for (let i = 0; i < points.length; i += 2) {
+            sections.push(new Segment(points[i], points[i + 1], segment.axis))
          }
          segmentsToDraw.set(segment, sections)
       }
@@ -419,10 +458,10 @@
          cursor = "grabbing"
       } else {
          cursor = "auto"
-         let snap = trySnapping(mouse)
+         let attach = closestAttachPoint(mouse)
          if (
             tool === "select & move" &&
-            snap.target &&
+            attach.object &&
             !shift &&
             !alt &&
             !cmd
@@ -435,23 +474,29 @@
    let highlighted: Set<Point | Segment>
    $: {
       highlighted = new Set()
-      if (draw) {
-         if (draw.endObject) highlighted.add(draw.endObject)
-      } else if (rectSelect) {
+      if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
       } else if (bulkHighlighted.size > 0) {
          for (let s of bulkHighlighted) highlighted.add(s)
-      } else if (!move) {
-         let snap = trySnapping(mouse)
-         if (snap.target) highlighted.add(snap.target)
+      } else if (tool === "select & move" && !move) {
+         let attach = closestAttachPoint(mouse)
+         if (attach.object) highlighted.add(attach.object)
+      } else if (tool === "hydraulic line") {
+         let click = closestClickPoint(mouse)
+         if (click.object) {
+            highlighted.add(click.point)
+         } else {
+            let s = closestSegment(mouse)
+            if (s) highlighted.add(s.segment)
+         }
       }
    }
    let bulkHighlighted: Set<Segment>
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
       if (cmd) {
          bulkHighlighted = new Set()
-         let s = closestSegment(mouse)
-         if (s && s.point.sqDistanceFrom(mouse) < sqSnapRadius) {
+         let s = closestProximalSegment(mouse)
+         if (s) {
             // Do bulk highlighting (and later, selection) along the axis
             // orthogonal to the segment's axis. To achieve this, we
             // re-coordinatize every object that has the same orientation as
@@ -609,8 +654,7 @@
                }
                return true
             }
-            let target = closestEndpoint(mouse, isAcceptable)
-            if (target && !canSnap(mouse, target)) target = undefined
+            let target = closestProximalEndpoint(mouse, isAcceptable)
             let maybeAxis = Axis.fromVector(
                (target ? target : mouse).displacementFrom(draw.segment.start)
             )
@@ -623,8 +667,8 @@
                   draw.segment.end.moveTo(target)
                   draw.endObject = target
                } else {
-                  let s = closestSegment(mouse, newAxis)
-                  if (s && canSnap(mouse, s.point)) {
+                  let s = closestProximalSegment(mouse, newAxis)
+                  if (s) {
                      draw.segment.end.moveTo(s.point)
                      draw.endObject = s.segment
                   } else {
@@ -677,7 +721,7 @@
       // We need to use these copies as a reference, because we will be
       // mutating the Point objects over the course of the movement.
       let originalPositions = new DefaultMap<Point, Point>(() => Point.zero)
-      for (let point of circuit.keys()) {
+      for (let point of endpoints()) {
          originalPositions.set(point, point.clone())
       }
       move = {
@@ -751,8 +795,8 @@
                }
                return true
             }
-            let target = closestEndpoint(draw.segment.end, isAcceptable)
-            if (target && canSnap(draw.segment.end, target)) {
+            let target = closestProximalEndpoint(draw.segment.end, isAcceptable)
+            if (target) {
                snappedToPoint = true
                let snappedMove = target.displacementFrom(move.locationGrabbed)
                doMove(snappedMove)
@@ -772,8 +816,11 @@
             }
             if (draw) {
                // Try snapping the endpoint to nearby segments.
-               let s = closestSegment(draw.segment.end, draw.segment.axis)
-               if (s && canSnap(draw.segment.end, s.point)) {
+               let s = closestProximalSegment(
+                  draw.segment.end,
+                  draw.segment.axis
+               )
+               if (s) {
                   draw.segment.end.moveTo(s.point)
                   draw.endObject = s.segment
                } else {
@@ -822,7 +869,7 @@
                }
             }
             // Update the position of each Point.
-            for (let point of circuit.keys()) {
+            for (let point of endpoints()) {
                point.moveTo(
                   move!.originalPositions
                      .get0(point)
@@ -1146,11 +1193,11 @@
                      Math.abs(d.x) >= Math.abs(d.y)
                         ? Axis.horizontal
                         : Axis.vertical
-                  let snap = trySnapping(waitingForDrag)
-                  if (snap.target) {
-                     if (snap.target instanceof Segment)
-                        cutSegment(snap.target, snap.point)
-                     beginDraw(snap.point, drawAxis)
+                  let attach = closestAttachPoint(waitingForDrag)
+                  if (attach.object) {
+                     if (attach.object instanceof Segment)
+                        cutSegment(attach.object, attach.point)
+                     beginDraw(attach.point, drawAxis)
                   } else beginDraw(waitingForDrag, drawAxis)
                   waitingForDrag = null
                }
@@ -1163,15 +1210,15 @@
          let clickPoint = new Point(event.clientX, event.clientY)
          switch (tool) {
             case "select & move": {
-               let snap = trySnapping(clickPoint)
-               if (snap.target && !shift && !alt) {
+               let attach = closestAttachPoint(clickPoint)
+               if (attach.object && !shift && !alt) {
                   if (cmd) {
                      selected.clear()
                      for (let s of bulkHighlighted) selected.add(s)
-                  } else if (!snap.isSelected) {
-                     selected = new ToggleSet([snap.target])
+                  } else if (!selected.has(attach.object)) {
+                     selected = new ToggleSet([attach.object])
                   }
-                  beginMove(snap.target, snap.point)
+                  beginMove(attach.object, attach.point)
                } else waitingForDrag = clickPoint
                break
             }
@@ -1185,22 +1232,40 @@
       if (waitingForDrag) {
          waitingForDrag = null
          // A click happened.
-         let snap = trySnapping(mouse)
+
          switch (tool) {
-            case "select & move":
-               if (!snap.target) selected.clear()
+            case "select & move": {
+               let attach = closestAttachPoint(mouse)
+               if (!attach.object) selected.clear()
                else if (shift && cmd)
                   for (let s of bulkHighlighted) selected.add(s)
-               else if (shift && !cmd) selected.toggle(snap.target)
+               else if (shift && !cmd) selected.toggle(attach.object)
                else if (alt && cmd)
                   for (let s of bulkHighlighted) selected.delete(s)
-               else if (alt && !cmd) selected.delete(snap.target)
-               else selected = new ToggleSet([snap.target])
+               else if (alt && !cmd) selected.delete(attach.object)
+               else selected = new ToggleSet([attach.object])
                selected = selected
                break
-            case "hydraulic line":
-               if (snap.target instanceof Point) fuseSegments(snap.target)
+            }
+            case "hydraulic line": {
+               let click = closestClickPoint(mouse)
+               if (click.object instanceof Point) {
+                  fuseSegments(click.object)
+               } else if (click.object instanceof Segment) {
+                  // do nothing
+               } else if (click.object /* instanceof Crossing */) {
+                  // Change the crossing glyph.
+                  let seg1 = click.object.seg1
+                  let seg2 = click.object.seg2
+                  let oldType = crossingTypes.get0(seg1).get0(seg2)
+                  let c = crossingToggleOrder
+                  let newType = c[(c.indexOf(oldType) + 1) % c.length]
+                  crossingTypes.get0(seg1).set(seg2, newType)
+                  crossingTypes.get0(seg2).set(seg1, newType)
+                  crossingTypes = crossingTypes
+               }
                break
+            }
          }
       } else {
          endDraw()
@@ -1245,7 +1310,12 @@
       <!-- Symbol layer -->
       {#each [...glyphsToDraw] as glyph}
          {#if glyph.type === "hopover"}
-            <Hopover start={glyph.start} end={glyph.end} />
+            <Hopover
+               start={glyph.start}
+               end={glyph.end}
+               flip={glyph.flip}
+               highlighted={highlighted.has(glyph.mid)}
+            />
          {:else if glyph.type === "connection node"}
             <ConnectionPoint
                position={glyph.point}
