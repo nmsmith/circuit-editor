@@ -1,10 +1,10 @@
 <script lang="ts">
    import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
    import { DefaultMap, ToggleSet } from "./utilities"
-   import FluidLine from "./FluidLine.svelte"
-   import Hopover from "./Hopover.svelte"
-   import ConnectionPoint from "./ConnectionPoint.svelte"
-   import EndpointMarker from "./EndpointMarker.svelte"
+   import FluidLine from "./lines/FluidLine.svelte"
+   import Hopover from "./lines/Hopover.svelte"
+   import ConnectionPoint from "./lines/ConnectionPoint.svelte"
+   import EndpointMarker from "./lines/EndpointMarker.svelte"
    import RulerHTML from "./Ruler.svelte"
    import { Ruler } from "./Ruler.svelte"
    import Padding from "./Padding.svelte"
@@ -261,7 +261,14 @@
    type Section = Segment
    let segmentsToDraw: Map<Segment, Section[]>
    type Glyph =
-      | { type: "hopover"; mid: Point; start: Point; end: Point; flip: boolean }
+      | {
+           type: "hopover"
+           segment: Segment
+           point: Point
+           start: Point
+           end: Point
+           flip: boolean
+        }
       | { type: "connection node"; point: Point }
       | { type: "endpoint marker"; point: Point }
    let glyphsToDraw: Set<Glyph>
@@ -272,7 +279,7 @@
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
          let points = [segment.start, segment.end]
-         for (let [other, mid] of crossings.get0(segment)) {
+         for (let [other, crossPoint] of crossings.get0(segment)) {
             // Determine which segment is the "horizontal" one.
             let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
             let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
@@ -291,14 +298,21 @@
                (hSegment === other && (type == "V left" || type == "V right"))
             ) {
                let [start, end] = [
-                  mid.displacedBy(segment.axis.scaledBy(hopoverRadius)),
-                  mid.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
+                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
+                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
                ]
                points.push(start, end)
                let flip = type === "H down" || type === "V right"
-               glyphsToDraw.add({ type: "hopover", mid, start, end, flip })
-            } else if (type === "no hop" && highlighted.has(mid)) {
-               glyphsToDraw.add({ type: "endpoint marker", point: mid })
+               glyphsToDraw.add({
+                  type: "hopover",
+                  segment,
+                  point: crossPoint,
+                  start,
+                  end,
+                  flip,
+               })
+            } else if (type === "no hop" && highlighted.has(crossPoint)) {
+               glyphsToDraw.add({ type: "endpoint marker", point: crossPoint })
             }
          }
          // Compute the sections that need to be drawn.
@@ -1297,8 +1311,8 @@
       }
    }}
 >
+   <!-- Bottom layer -->
    <g>
-      <!-- Bottom layer -->
       <!-- {#each [...segments] as segment}
          {#if segment.end.sqDistanceFrom(segment.start) > 0.01}
             <Padding {segment} />
@@ -1310,44 +1324,80 @@
          {/each}
       {/if} -->
    </g>
+   <!-- Segment highlight layer -->
    <g>
-      <!-- Line layer -->
       {#each [...segmentsToDraw] as [segment, sections]}
+         {#if highlighted.has(segment)}
+            {#each sections as section}
+               <FluidLine renderType="highlight" segment={section} />
+            {/each}
+         {/if}
+      {/each}
+   </g>
+   <!-- Segment selection layer -->
+   <g>
+      {#each [...segmentsToDraw] as [segment, sections]}
+         {#if selected.has(segment)}
+            {#each sections as section}
+               <FluidLine renderType="selectLight" segment={section} />
+            {/each}
+         {/if}
+      {/each}
+   </g>
+   <!-- Segment layer -->
+   <g>
+      {#each [...segmentsToDraw] as [_, sections]}
          {#each sections as section}
-            <FluidLine
-               segment={section}
-               highlighted={highlighted.has(segment)}
-               selected={selected.has(segment)}
-            />
+            <FluidLine segment={section} />
          {/each}
       {/each}
    </g>
+   <!-- Symbol highlight & selection layer -->
    <g>
-      <!-- Symbol layer -->
       {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "hopover"}
+         {#if glyph.type === "hopover" && (selected.has(glyph.segment) || highlighted.has(glyph.segment) || highlighted.has(glyph.point))}
             <Hopover
+               renderType={selected.has(glyph.segment)
+                  ? "selectLight"
+                  : "highlight"}
                start={glyph.start}
                end={glyph.end}
                flip={glyph.flip}
-               highlighted={highlighted.has(glyph.mid)}
             />
          {:else if glyph.type === "connection node"}
-            <ConnectionPoint
-               position={glyph.point}
-               highlighted={highlighted.has(glyph.point)}
-               selected={selected.has(glyph.point)}
-            />
+            {#if selected.has(glyph.point)}
+               <ConnectionPoint
+                  renderType="selectLight"
+                  position={glyph.point}
+               />
+            {:else if highlighted.has(glyph.point)}
+               <ConnectionPoint renderType="highlight" position={glyph.point} />
+            {/if}
          {:else if glyph.type === "endpoint marker"}
-            <EndpointMarker
-               position={glyph.point}
-               highlighted={highlighted.has(glyph.point)}
-               selected={selected.has(glyph.point)}
-            />{/if}
+            {#if selected.has(glyph.point)}
+               <EndpointMarker
+                  renderType="selectLight"
+                  position={glyph.point}
+               />
+            {:else if highlighted.has(glyph.point)}
+               <EndpointMarker renderType="highlight" position={glyph.point} />
+            {/if}
+         {/if}
       {/each}
    </g>
+   <!-- Symbol layer -->
    <g>
-      <!-- HUD layer -->
+      {#each [...glyphsToDraw] as glyph}
+         {#if glyph.type === "hopover"}
+            <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
+         {:else if glyph.type === "connection node"}
+            <ConnectionPoint position={glyph.point} />
+         {:else if glyph.type === "endpoint marker"}
+            <EndpointMarker position={glyph.point} />{/if}
+      {/each}
+   </g>
+   <!-- HUD layer -->
+   <g>
       <text class="toolText" x="8" y="24">{tool}</text>
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
@@ -1361,22 +1411,17 @@
       margin: 0;
    }
    :global(.fluidLine) {
-      fill: blue;
+      fill: none;
       stroke: blue;
+      stroke-linejoin: round;
+      stroke-linecap: round;
       stroke-width: 0;
    }
-   :global(.highlighted) {
-      fill: rgb(0, 234, 255);
+   :global(.fluidLine.highlight) {
       stroke: rgb(0, 234, 255);
-      stroke-width: 0;
    }
-   :global(.selected) {
-      fill: yellow;
+   :global(.fluidLine.selectLight) {
       stroke: yellow;
-   }
-   :global(.highlighted.selected) {
-      fill: rgb(120, 255, 0);
-      stroke: rgb(120, 255, 0);
    }
    svg {
       width: 100%;
