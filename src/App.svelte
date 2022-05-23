@@ -227,22 +227,23 @@
    // We store the multiplicity of every axis in the circuit, so that if all
    // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
-   // Because the intersection point of crossing lines should show as a
-   // hopover, the set of symbols to be rendered is not defined by the topology
-   // of the circuit alone. Thus, we must do a pass to gather rendering info.
-   type Crossing = { seg1: Segment; seg2: Segment; point: Point }
+   // For each pair of segments, we store how their crossing should be rendered.
    type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
-   let crossingToggleOrder: CrossingType[] = [
+   let crossingTypes: DefaultMap<
+      Segment,
+      DefaultMap<Segment, CrossingType>
+   > = new DefaultMap(() => new DefaultMap(() => "H up"))
+   const crossingToggleOrder: CrossingType[] = [
       "H up",
       "H down",
       "V left",
       "V right",
       "no hop",
    ]
-   let crossingTypes: DefaultMap<
-      Segment,
-      DefaultMap<Segment, CrossingType>
-   > = new DefaultMap(() => new DefaultMap(() => "H up"))
+   // Because the presence of hopovers is independent of the circuit topology,
+   // the circuit topology does not directly determine the SVG paths & lines
+   // that need to be rendered. We compute the required SVG paths & lines below.
+   type Crossing = { seg1: Segment; seg2: Segment; point: Point }
    let crossings: DefaultMap<Segment, Map<Segment, Point>>
    $: {
       crossings = new DefaultMap(() => new Map())
@@ -367,27 +368,32 @@
       } else {
          circuitAxes.delete(segment.axis)
       }
+      // Delete from "crossingTypes"
+      crossingTypes.delete(segment)
+      for (let map of crossingTypes.values()) {
+         map.delete(segment)
+      }
       circuit = circuit
       segments = segments
    }
    function deleteSelected() {
-      let junctionsToFuse = new Set<Point>()
+      let junctionsToConvert = new Set<Point>()
       for (let thing of selected) {
          if (thing instanceof Segment) {
             deleteSegment(thing)
-            junctionsToFuse.add(thing.start)
-            junctionsToFuse.add(thing.end)
+            junctionsToConvert.add(thing.start)
+            junctionsToConvert.add(thing.end)
          } else {
             for (let [_, segment] of circuit.get0(thing)) {
                deleteSegment(segment)
-               junctionsToFuse.add(segment.start)
-               junctionsToFuse.add(segment.end)
+               junctionsToConvert.add(segment.start)
+               junctionsToConvert.add(segment.end)
             }
          }
       }
-      for (let junction of junctionsToFuse) {
+      for (let junction of junctionsToConvert) {
          if (circuit.has(junction) && circuit.get0(junction).size === 2)
-            fuseSegments(junction)
+            convertToCrossing(junction)
       }
       selected = new ToggleSet()
    }
@@ -401,9 +407,9 @@
          addSegment(new Segment(cutPoint, end, axis))
       }
    }
-   // If the junction is an X-junction, or a pair of colinear segments, fuse
-   // together each pair of colinear segments into a single segment.
-   function fuseSegments(junction: Point) {
+   // If the junction is an X-junction, or a pair of colinear segments,
+   // convert it into a crossing.
+   function convertToCrossing(junction: Point) {
       let parts = partsOfJunction(junction)
       for (let segs of parts) {
          let fusedSegment = new Segment(
@@ -415,6 +421,10 @@
          deleteSegment(segs[1])
          addSegment(fusedSegment)
       }
+   }
+   function convertToJunction(crossing: Crossing) {
+      cutSegment(crossing.seg1, crossing.point)
+      cutSegment(crossing.seg2, crossing.point)
    }
    // If the junction is an X-junction, or a pair of colinear segments, return
    // each pair of colinear segments. Otherwise, return nothing.
@@ -486,7 +496,7 @@
          if (click.object) {
             highlighted.add(click.point)
          } else {
-            let s = closestSegment(mouse)
+            let s = closestProximalSegment(mouse)
             if (s) highlighted.add(s.segment)
          }
       }
@@ -1101,6 +1111,7 @@
          case "f":
          case "F":
             tool = "hydraulic line"
+            selected = new ToggleSet()
             break
          case "Backspace":
          case "Delete": {
@@ -1250,7 +1261,7 @@
             case "hydraulic line": {
                let click = closestClickPoint(mouse)
                if (click.object instanceof Point) {
-                  fuseSegments(click.object)
+                  convertToCrossing(click.object)
                } else if (click.object instanceof Segment) {
                   // do nothing
                } else if (click.object /* instanceof Crossing */) {
@@ -1258,11 +1269,16 @@
                   let seg1 = click.object.seg1
                   let seg2 = click.object.seg2
                   let oldType = crossingTypes.get0(seg1).get0(seg2)
-                  let c = crossingToggleOrder
-                  let newType = c[(c.indexOf(oldType) + 1) % c.length]
-                  crossingTypes.get0(seg1).set(seg2, newType)
-                  crossingTypes.get0(seg2).set(seg1, newType)
-                  crossingTypes = crossingTypes
+                  let i = crossingToggleOrder.indexOf(oldType) + 1
+                  let newType
+                  if (i < crossingToggleOrder.length) {
+                     newType = crossingToggleOrder[i]
+                     crossingTypes.get0(seg1).set(seg2, newType)
+                     crossingTypes.get0(seg2).set(seg1, newType)
+                     crossingTypes = crossingTypes
+                  } else {
+                     convertToJunction(click.object)
+                  }
                }
                break
             }
