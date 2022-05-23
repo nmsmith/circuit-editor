@@ -252,8 +252,14 @@
             if (segmentsConnect(seg1, seg2)) continue
             let crossPoint = seg1.intersection(seg2)
             if (crossPoint) {
-               crossings.get0(seg1).set(seg2, crossPoint)
-               crossings.get0(seg2).set(seg1, crossPoint)
+               let ends = [seg1.start, seg1.end, seg2.start, seg2.end]
+               let minDistance = Math.min(
+                  ...ends.map((p) => p.distanceFrom(crossPoint as Point))
+               )
+               if (minDistance >= hopoverRadius + 4) {
+                  crossings.get0(seg1).set(seg2, crossPoint)
+                  crossings.get0(seg2).set(seg1, crossPoint)
+               }
             }
          }
       }
@@ -505,7 +511,7 @@
       } else if (tool === "select & move" && !move) {
          let attach = closestAttachPoint(mouse)
          if (attach.object) highlighted.add(attach.object)
-      } else if (tool === "hydraulic line") {
+      } else if (tool === "hydraulic line" && !move) {
          let click = closestClickPoint(mouse)
          if (click.object) {
             highlighted.add(click.point)
@@ -663,7 +669,7 @@
             // operation is restarted from scratch every update. (This is a bit
             // of a hack, but it's the simplest way to integrate "free
             // rotation" with the other drawing modes.)
-            function isAcceptable(point: Point) {
+            function isAcceptableTEMP(point: Point) {
                let start = draw!.segment.start
                let maybeAxis = Axis.fromVector(point.displacementFrom(start))
                if (!maybeAxis) return false
@@ -672,13 +678,14 @@
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === drawAxis &&
-                     point.distanceFrom(start) > other.distanceFrom(start)
+                     other.distanceFrom(start) + 1 <
+                        point.distanceFrom(start) + other.distanceFrom(point)
                   )
                      return false
                }
                return true
             }
-            let target = closestProximalEndpoint(mouse, isAcceptable)
+            let target = closestProximalEndpoint(mouse, isAcceptableTEMP)
             let maybeAxis = Axis.fromVector(
                (target ? target : mouse).displacementFrom(draw.segment.start)
             )
@@ -712,7 +719,20 @@
       if (!draw) return
       endMove()
       let segment = draw.segment
-      if (segment.sqLength() >= sqMinSegmentLength) {
+      function isAcceptableTEMP() {
+         for (let [other, s] of circuit.get0(draw!.segment.start)) {
+            if (
+               s !== segment &&
+               s.axis === draw!.segment.axis &&
+               other.distanceFrom(draw!.segment.end) + 1 <
+                  draw!.segment.start.distanceFrom(draw!.segment.end) +
+                     other.distanceFrom(draw!.segment.start)
+            )
+               return false
+         }
+         return true
+      }
+      if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
          if (draw.endObject instanceof Point) {
             // Create a new Segment that ends at the Point.
             deleteSegment(segment)
@@ -806,20 +826,24 @@
          let snappedToPoint = false
          if (draw && draw.mode === "strafing") {
             // Try snapping the moved endpoint to a nearby Point.
-            function isAcceptable(point: Point) {
+            function isAcceptableTEMP(point: Point) {
                if (moveInfo.get0(point).moveType !== "no move") return false
                let start = draw!.segment.start
                for (let [other, { axis }] of circuit.get0(point)) {
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === draw!.segment.axis &&
-                     point.distanceFrom(start) > other.distanceFrom(start)
+                     other.distanceFrom(start) + 1 <
+                        point.distanceFrom(start) + other.distanceFrom(point)
                   )
                      return false
                }
                return true
             }
-            let target = closestProximalEndpoint(draw.segment.end, isAcceptable)
+            let target = closestProximalEndpoint(
+               draw.segment.end,
+               isAcceptableTEMP
+            )
             if (target) {
                snappedToPoint = true
                let snappedMove = target.displacementFrom(move.locationGrabbed)
@@ -831,7 +855,11 @@
          }
          if (!snappedToPoint) {
             // Snap axis-aligned objects to a "standardGap" distance apart.
-            let snappedMove = fullMove.add(computeStandardGapSnap())
+            let snapGap = computeStandardGapSnap()
+            let snappedMove =
+               move.distance < 15
+                  ? fullMove.add(snapGap.scaledBy(move.distance / 15))
+                  : fullMove.add(snapGap)
             if (draw && draw.mode === "fixed-axis rotation") {
                snappedMove = snappedMove.projectionOnto(draw.segment.axis)
                movePoint(draw.segment.end, snappedMove)
