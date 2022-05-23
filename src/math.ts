@@ -217,6 +217,7 @@ export class Ray {
 
 // A line segment.
 export class Segment {
+   static readonly zero = new Segment(Point.zero, Point.zero, Axis.horizontal)
    readonly start: Point
    readonly end: Point
    readonly axis: Axis

@@ -361,6 +361,8 @@
       segments.add(segment)
       circuitAxes.update(segment.axis, (c) => c + 1)
    }
+   // Delete the given segment. (To replace a segment with a different one,
+   // "replaceSegment" should be used instead.)
    function deleteSegment(segment: Segment) {
       // Delete from "circuit"
       let startEdges = circuit.get0(segment.start)
@@ -396,6 +398,15 @@
       circuit = circuit
       segments = segments
    }
+   // Replace the given segment with another segment (or several),
+   // transferring all of the deleted segment's properties.
+   function replaceSegment(segment: Segment, ...segs: Segment[]) {
+      for (let seg of segs) {
+         addSegment(seg)
+         // TODO: Transfer crossing type.
+      }
+      deleteSegment(segment)
+   }
    function deleteSelected() {
       let junctionsToConvert = new Set<Point>()
       for (let thing of selected) {
@@ -422,9 +433,11 @@
       let axis = Axis.fromVector(start.displacementFrom(end))
       if (axis) {
          axis = findExistingAxis(axis)
-         deleteSegment(segment)
-         addSegment(new Segment(cutPoint, start, axis))
-         addSegment(new Segment(cutPoint, end, axis))
+         replaceSegment(
+            segment,
+            new Segment(cutPoint, start, axis),
+            new Segment(cutPoint, end, axis)
+         )
       }
    }
    // If the junction is an X-junction, or a pair of colinear segments,
@@ -437,6 +450,7 @@
             junction === segs[1].start ? segs[1].end : segs[1].start,
             segs[0].axis
          )
+         // TODO: Merge the properties of this segment into the new segment.
          deleteSegment(segs[0])
          deleteSegment(segs[1])
          addSegment(fusedSegment)
@@ -627,6 +641,7 @@
       selected = new ToggleSet([end])
       beginMove(end, end)
       // Create a ruler for each of the "standard" axes.
+      // TODO: I'm no longer showing any rulers. Should I delete this code?
       let rulers: Set<Ruler> = new Set()
       for (let a of snapAxes) rulers.add(new Ruler(start, a, "ray"))
       // Create a ruler for each edge incident to the starting vertex (if any).
@@ -649,19 +664,25 @@
          if (draw.mode === "fixed-axis rotation") {
             // Check which axis the mouse is closest to. If the axis has
             // changed, restart the drawing operation along the new axis.
-            let maybeAxis = Axis.fromVector(
-               mouse.displacementFrom(draw.segment.start)
-            )
+            let drawVector = mouse.displacementFrom(draw.segment.start)
+            let maybeAxis = Axis.fromVector(drawVector)
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
                // Snap to the nearest standard axis.
                let scores = snapAxes.map((axis) => Math.abs(newAxis.dot(axis)))
                newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
                if (newAxis !== draw.segment.axis) {
-                  deleteSegment(draw.segment)
-                  beginDraw(draw.segment.start, newAxis)
-                  draw.mode = "fixed-axis rotation"
-                  if (move) move.offset = zeroVector
+                  // Replace the existing segment.
+                  let end = draw.segment.start.displacedBy(
+                     drawVector.projectionOnto(newAxis)
+                  )
+                  let newSegment = new Segment(draw.segment.start, end, newAxis)
+                  replaceSegment(draw.segment, newSegment)
+                  // Patch the draw and move operations.
+                  draw.segment = newSegment
+                  selected = new ToggleSet([end])
+                  beginMove(end, end)
+                  move.offset = zeroVector
                }
             }
          } else if (draw.mode === "free rotation") {
@@ -691,11 +712,17 @@
             )
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
-               deleteSegment(draw.segment)
-               beginDraw(draw.segment.start, newAxis)
-               draw.mode = "free rotation"
+               // Replace the existing segment.
+               let end = target ? target.clone() : mouse.clone()
+               let newSegment = new Segment(draw.segment.start, end, newAxis)
+               replaceSegment(draw.segment, newSegment)
+               // Patch the draw and move operations.
+               draw.segment = newSegment
+               selected = new ToggleSet([end])
+               beginMove(end, end)
+               move.offset = zeroVector
+               // Do snapping.
                if (target) {
-                  draw.segment.end.moveTo(target)
                   draw.endObject = target
                } else {
                   let s = closestProximalSegment(mouse, newAxis)
@@ -703,7 +730,6 @@
                      draw.segment.end.moveTo(s.point)
                      draw.endObject = s.segment
                   } else {
-                     draw.segment.end.moveTo(mouse)
                      draw.endObject = undefined
                   }
                }
@@ -734,9 +760,11 @@
       }
       if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
          if (draw.endObject instanceof Point) {
-            // Create a new Segment that ends at the Point.
-            deleteSegment(segment)
-            addSegment(new Segment(segment.start, draw.endObject, segment.axis))
+            // Replace the drawn segment with one that ends at the Point.
+            replaceSegment(
+               segment,
+               new Segment(segment.start, draw.endObject, segment.axis)
+            )
          } else if (draw.endObject instanceof Segment) {
             // Turn the intersected Segment into a T-junction.
             cutSegment(draw.endObject, segment.end)
@@ -779,22 +807,19 @@
       // If moving a single Point which is a loose end, treat the move
       // operation as a draw operation.
       if (!draw && move.points.size === 1) {
-         for (let end of move.points) {
-            let edges = circuit.get0(end)
-            if (edges.size === 1) {
-               for (let [start, existingSegment] of edges) {
-                  // The existing segment may be backwards, so we should
-                  // delete it and create a new one.
-                  let newSegment = new Segment(start, end, existingSegment.axis)
-                  deleteSegment(existingSegment)
-                  addSegment(newSegment)
-                  draw = {
-                     mode: "strafing",
-                     segment: newSegment,
-                     segmentIsNew: false,
-                  }
-               }
+         let end = Point.zero
+         for (end of move.points) {
+         }
+         let edges = circuit.get0(end)
+         if (edges.size === 1) {
+            let [start, existingSegment] = [Point.zero, Segment.zero]
+            for ([start, existingSegment] of edges) {
             }
+            // The existing segment may be "backwards". We need to replace
+            // it with a segment whose .end is the point being grabbed.
+            let segment = new Segment(start, end, existingSegment.axis)
+            replaceSegment(existingSegment, segment)
+            draw = { mode: "strafing", segment, segmentIsNew: false }
          }
       }
    }
