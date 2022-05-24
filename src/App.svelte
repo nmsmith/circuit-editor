@@ -9,6 +9,7 @@
    import { Ruler } from "./Ruler.svelte"
    import Padding from "./Padding.svelte"
    import RectSelectBox from "./RectSelectBox.svelte"
+   import Cross from "./lines/Cross.svelte"
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -17,11 +18,12 @@
    // The error ratio (between 0 and 1) at which two axes should be considered
    // parallel. A non-zero tolerance is required to circumvent numerical error.
    const axisErrorTolerance = 0.004
-   // Snapping constants
+   // Circuit-sizing constants
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
    const hopoverRadius = halfGap / 2
    const gapSelectError = 1 // diff from standardGap acceptable to gap select
+   // Snapping constants
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
    const snapRadius = 15 // dist btw mouse & snap point at which snapping occurs
    const snapJump = 5 // the distance things move at the moment they snap
@@ -211,8 +213,8 @@
       }
       if (end) return { object: end, point: end }
       if (cross) return { object: cross, point: cross.point }
-      // let s = closestProximalSegment(point)
-      // if (s) return { object: s.segment, point: s.point }
+      let s = closestProximalSegment(point)
+      if (s) return { object: s.segment, point: s.point }
       return { object: undefined }
    }
    // --------------- State ---------------
@@ -223,11 +225,14 @@
    type Circuit = DefaultMap<Point, Set<OutgoingSegment>>
    let circuit: Circuit = new DefaultMap(() => new Set())
    let endpoints = () => circuit.keys()
-   // For operations that only care about Segments, we store them directly.
-   let segments: Set<Segment> = new Set()
+   let segments = new Set<Segment>() // for direct access to circuit segments
    // We store the multiplicity of every axis in the circuit, so that if all
    // the segments aligned to a given axis are removed, the axis is forgotten.
-   let circuitAxes: DefaultMap<Axis, number> = new DefaultMap(() => 0)
+   let circuitAxes = new DefaultMap<Axis, number>(() => 0)
+   // We store how each endpoint/junction in the circuit should be rendered.
+   let endpointGlyphs = new DefaultMap<Point, "default" | "cross">(
+      () => "default"
+   )
    // For each pair of segments, we store how their crossing should be rendered.
    type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
    let crossingTypes: DefaultMap<
@@ -277,6 +282,7 @@
            flip: boolean
         }
       | { type: "connection node"; point: Point }
+      | { type: "cross"; point: Point }
       | { type: "endpoint marker"; point: Point }
    let glyphsToDraw: Set<Glyph>
    $: {
@@ -333,7 +339,9 @@
       }
       // Determine the other glyphs that need to be drawn at endpoints.
       for (let [p, edges] of circuit) {
-         if (edges.size > 2) {
+         if (endpointGlyphs.get0(p) === "cross") {
+            glyphsToDraw.add({ type: "cross", point: p })
+         } else if (edges.size > 2) {
             glyphsToDraw.add({ type: "connection node", point: p })
          } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
             glyphsToDraw.add({ type: "endpoint marker", point: p })
@@ -549,11 +557,10 @@
          if (attach.object) highlighted.add(attach.object)
       } else if (tool === "hydraulic line" && !move) {
          let click = closestClickPoint(mouse)
-         if (click.object) {
+         if (click.object instanceof Segment) {
+            highlighted.add(click.object)
+         } else if (click.object) {
             highlighted.add(click.point)
-         } else {
-            let s = closestProximalSegment(mouse)
-            if (s) highlighted.add(s.segment)
          }
       }
    }
@@ -1332,7 +1339,6 @@
       if (waitingForDrag) {
          waitingForDrag = null
          // A click happened.
-
          switch (tool) {
             case "select & move": {
                let attach = closestAttachPoint(mouse)
@@ -1350,9 +1356,16 @@
             case "hydraulic line": {
                let click = closestClickPoint(mouse)
                if (click.object instanceof Point) {
-                  convertToCrossing(click.object)
-               } else if (click.object instanceof Segment) {
-                  // do nothing
+                  if (endpointGlyphs.get0(click.object) === "default") {
+                     endpointGlyphs.set(click.object, "cross")
+                  } else {
+                     endpointGlyphs.set(click.object, "default")
+                     convertToCrossing(click.object)
+                  }
+                  endpointGlyphs = endpointGlyphs
+               } else if (click.object instanceof Segment && click.object) {
+                  cutSegment(click.object, click.point)
+                  endpointGlyphs.set(click.point, "cross")
                } else if (click.object /* instanceof Crossing */) {
                   // Change the crossing glyph.
                   let { seg1, seg2 } = click.object
@@ -1446,6 +1459,12 @@
             {:else if highlighted.has(glyph.point)}
                <ConnectionPoint renderType="highlight" position={glyph.point} />
             {/if}
+         {:else if glyph.type === "cross"}
+            {#if selected.has(glyph.point)}
+               <Cross renderType="selectLight" position={glyph.point} />
+            {:else if highlighted.has(glyph.point)}
+               <Cross renderType="highlight" position={glyph.point} />
+            {/if}
          {:else if glyph.type === "endpoint marker"}
             {#if selected.has(glyph.point)}
                <EndpointMarker
@@ -1465,6 +1484,8 @@
             <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
          {:else if glyph.type === "connection node"}
             <ConnectionPoint position={glyph.point} />
+         {:else if glyph.type === "cross"}
+            <Cross position={glyph.point} />
          {:else if glyph.type === "endpoint marker"}
             <EndpointMarker position={glyph.point} />{/if}
       {/each}
