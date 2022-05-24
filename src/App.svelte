@@ -404,7 +404,11 @@
    function replaceSegment(segment: Segment, ...segs: Segment[]) {
       for (let seg of segs) {
          addSegment(seg)
-         // TODO: Transfer crossing type.
+         // Transfer the crossing types associated with the old segment.
+         crossingTypes.set(seg, crossingTypes.get0(segment).clone())
+         for (let map of crossingTypes.values()) {
+            map.set(seg, map.get0(segment))
+         }
       }
       deleteSegment(segment)
    }
@@ -446,15 +450,30 @@
    function convertToCrossing(junction: Point) {
       let parts = partsOfJunction(junction)
       for (let segs of parts) {
-         let fusedSegment = new Segment(
+         let mergedSegment = new Segment(
             junction === segs[0].start ? segs[0].end : segs[0].start,
             junction === segs[1].start ? segs[1].end : segs[1].start,
             segs[0].axis
          )
-         // TODO: Merge the properties of this segment into the new segment.
+         addSegment(mergedSegment)
+         // Merge the crossing types of the old segments into the new one.
+         // The merge strategy is: if segs[0] is currently crossing another
+         // segment, use that crossing type. Otherwise, use seg[1]'s type.
+         let mergedTypes = crossingTypes.get0(segs[1]).clone()
+         let seg0Crossings = crossings.get0(segs[0])
+         let seg0Types = crossingTypes.get0(segs[0])
+         for (let crossSegment of segments) {
+            if (seg0Crossings.has(crossSegment)) {
+               mergedTypes.set(crossSegment, seg0Types.get0(crossSegment))
+            }
+         }
+         crossingTypes.set(mergedSegment, mergedTypes)
+         for (let [s, map] of crossingTypes) {
+            map.set(mergedSegment, mergedTypes.get0(s))
+         }
+         // Get rid of the old segments.
          deleteSegment(segs[0])
          deleteSegment(segs[1])
-         addSegment(fusedSegment)
       }
    }
    function convertToJunction(crossing: Crossing) {
@@ -519,7 +538,9 @@
    let highlighted: Set<Point | Segment>
    $: {
       highlighted = new Set()
-      if (rectSelect) {
+      if (draw?.endObject instanceof Segment) {
+         highlighted.add(draw.endObject)
+      } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
       } else if (bulkHighlighted.size > 0) {
          for (let s of bulkHighlighted) highlighted.add(s)
@@ -538,7 +559,7 @@
    }
    let bulkHighlighted: Set<Segment>
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
-      if (cmd) {
+      if (tool === "select & move" && !move && cmd) {
          bulkHighlighted = new Set()
          let s = closestProximalSegment(mouse)
          if (s) {
@@ -1334,19 +1355,17 @@
                   // do nothing
                } else if (click.object /* instanceof Crossing */) {
                   // Change the crossing glyph.
-                  let seg1 = click.object.seg1
-                  let seg2 = click.object.seg2
+                  let { seg1, seg2 } = click.object
                   let oldType = crossingTypes.get0(seg1).get0(seg2)
                   let i = crossingToggleOrder.indexOf(oldType) + 1
-                  let newType
-                  if (i < crossingToggleOrder.length) {
-                     newType = crossingToggleOrder[i]
-                     crossingTypes.get0(seg1).set(seg2, newType)
-                     crossingTypes.get0(seg2).set(seg1, newType)
-                     crossingTypes = crossingTypes
-                  } else {
-                     convertToJunction(click.object)
-                  }
+                  let makeJunction = i === crossingToggleOrder.length
+                  let newType = makeJunction
+                     ? crossingToggleOrder[0]
+                     : crossingToggleOrder[i]
+                  crossingTypes.get0(seg1).set(seg2, newType)
+                  crossingTypes.get0(seg2).set(seg1, newType)
+                  crossingTypes = crossingTypes
+                  if (makeJunction) convertToJunction(click.object)
                }
                break
             }

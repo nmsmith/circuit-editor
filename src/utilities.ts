@@ -20,6 +20,9 @@ export class DefaultMap<K, V> extends Map<K, V> {
    update(key: K, f: (existingValue: V) => V): void {
       this.set(key, f(this.get0(key)))
    }
+   clone(): DefaultMap<K, V> {
+      return new DefaultMap(this.defaultValue, this)
+   }
 }
 
 export class ToggleSet<K> extends Set<K> {
