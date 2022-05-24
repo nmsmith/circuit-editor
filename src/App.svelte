@@ -104,6 +104,7 @@
          let p = point.displacementFrom(segment.start)
          let s = segment.end.displacementFrom(segment.start)
          let sqLength = s.sqLength()
+         if (sqLength === 0) continue
          let dot = p.dot(s)
          // Only consider the segment if the point's projection lies on it.
          // This occurs iff the dot product is in [0, sqLength).

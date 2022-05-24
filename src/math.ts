@@ -26,7 +26,8 @@ export class Vector extends VectorBase {
       return new Vector(s * this.x, s * this.y)
    }
    normalized(): Vector {
-      return this.scaledBy(1 / this.length())
+      let length = this.length()
+      return length === 0 ? this : this.scaledBy(1 / length)
    }
    add(v: Vector): Vector {
       return new Vector(this.x + v.x, this.y + v.y)
@@ -58,16 +59,21 @@ export class Vector extends VectorBase {
       return this.x * v.x + this.y * v.y
    }
    projectionOnto(v: Vector): Vector {
-      return v.scaledBy(this.dot(v) / v.dot(v))
+      let vdotV = v.dot(v)
+      return vdotV === 0 ? new Vector(0, 0) : v.scaledBy(this.dot(v) / vdotV)
    }
    scalarProjectionOnto(v: Vector): number {
-      return this.dot(v) / v.length()
+      let vLength = v.length()
+      return vLength === 0 ? 0 : this.dot(v) / vLength
    }
    rejectionFrom(v: Vector): Vector {
       return this.sub(this.projectionOnto(v))
    }
    scalarRejectionFrom(v: Vector): number {
-      return (this.y * v.x - this.x * v.y) / v.length()
+      let vLength = v.length()
+      return vLength === 0
+         ? this.length()
+         : (this.y * v.x - this.x * v.y) / vLength
    }
 }
 
