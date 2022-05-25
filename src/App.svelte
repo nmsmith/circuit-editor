@@ -239,12 +239,12 @@
       Segment,
       DefaultMap<Segment, CrossingType>
    > = new DefaultMap(() => new DefaultMap(() => "H up"))
-   const crossingToggleOrder: CrossingType[] = [
-      "H up",
+   const crossingToggleSeq: CrossingType[] = [
+      "no hop",
+      "V right",
       "H down",
       "V left",
-      "V right",
-      "no hop",
+      "H up",
    ]
    // Because the presence of hopovers is independent of the circuit topology,
    // the circuit topology does not directly determine the SVG paths & lines
@@ -457,6 +457,7 @@
    // convert it into a crossing.
    function convertToCrossing(junction: Point) {
       let parts = partsOfJunction(junction)
+      let crossing = []
       for (let segs of parts) {
          let mergedSegment = new Segment(
             junction === segs[0].start ? segs[0].end : segs[0].start,
@@ -464,6 +465,7 @@
             segs[0].axis
          )
          addSegment(mergedSegment)
+         crossing.push(mergedSegment)
          // Merge the crossing types of the old segments into the new one.
          // The merge strategy is: if segs[0] is currently crossing another
          // segment, use that crossing type. Otherwise, use seg[1]'s type.
@@ -483,6 +485,12 @@
          deleteSegment(segs[0])
          deleteSegment(segs[1])
       }
+      if (crossing.length === 2) {
+         // Set the crossing type of the crossing itself.
+         crossingTypes.get0(crossing[0]).set(crossing[1], crossingToggleSeq[0])
+         crossingTypes.get0(crossing[1]).set(crossing[0], crossingToggleSeq[0])
+      }
+      crossingTypes = crossingTypes
    }
    function convertToJunction(crossing: Crossing) {
       cutSegment(crossing.seg1, crossing.point)
@@ -490,14 +498,14 @@
    }
    // If the junction is an X-junction, or a pair of colinear segments, return
    // each pair of colinear segments. Otherwise, return nothing.
-   function partsOfJunction(junction: Point): Set<Segment[]> {
+   function partsOfJunction(junction: Point): Set<[Segment, Segment]> {
       let edges = circuit.get0(junction)
       if (edges.size !== 2 && edges.size !== 4) return new Set()
       let axes = new DefaultMap<Axis, OutgoingSegment[]>(() => [])
       for (let edge of edges) {
          axes.get0(edge[1].axis).push(edge)
       }
-      let pairs = new Set<Segment[]>()
+      let pairs = new Set<[Segment, Segment]>()
       for (let edgePair of axes.values()) {
          if (edgePair.length !== 2) return new Set()
          pairs.add([edgePair[0][1], edgePair[1][1]])
@@ -1370,15 +1378,14 @@
                   // Change the crossing glyph.
                   let { seg1, seg2 } = click.object
                   let oldType = crossingTypes.get0(seg1).get0(seg2)
-                  let i = crossingToggleOrder.indexOf(oldType) + 1
-                  let makeJunction = i === crossingToggleOrder.length
-                  let newType = makeJunction
-                     ? crossingToggleOrder[0]
-                     : crossingToggleOrder[i]
-                  crossingTypes.get0(seg1).set(seg2, newType)
-                  crossingTypes.get0(seg2).set(seg1, newType)
-                  crossingTypes = crossingTypes
-                  if (makeJunction) convertToJunction(click.object)
+                  let i = crossingToggleSeq.indexOf(oldType) + 1
+                  if (i < crossingToggleSeq.length) {
+                     crossingTypes.get0(seg1).set(seg2, crossingToggleSeq[i])
+                     crossingTypes.get0(seg2).set(seg1, crossingToggleSeq[i])
+                     crossingTypes = crossingTypes
+                  } else {
+                     convertToJunction(click.object)
+                  }
                }
                break
             }
