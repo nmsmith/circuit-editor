@@ -9,7 +9,7 @@
    import { Ruler } from "./Ruler.svelte"
    import Padding from "./Padding.svelte"
    import RectSelectBox from "./RectSelectBox.svelte"
-   import Cross from "./lines/Cross.svelte"
+   import Plug from "./lines/Plug.svelte"
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -230,7 +230,7 @@
    // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes = new DefaultMap<Axis, number>(() => 0)
    // We store how each endpoint/junction in the circuit should be rendered.
-   let endpointGlyphs = new DefaultMap<Point, "default" | "cross">(
+   let endpointGlyphs = new DefaultMap<Point, "default" | "plug">(
       () => "default"
    )
    // For each pair of segments, we store how their crossing should be rendered.
@@ -282,7 +282,7 @@
            flip: boolean
         }
       | { type: "connection node"; point: Point }
-      | { type: "cross"; point: Point }
+      | { type: "plug"; point: Point }
       | { type: "endpoint marker"; point: Point }
    let glyphsToDraw: Set<Glyph>
    $: {
@@ -339,8 +339,8 @@
       }
       // Determine the other glyphs that need to be drawn at endpoints.
       for (let [p, edges] of circuit) {
-         if (endpointGlyphs.get0(p) === "cross") {
-            glyphsToDraw.add({ type: "cross", point: p })
+         if (endpointGlyphs.get0(p) === "plug") {
+            glyphsToDraw.add({ type: "plug", point: p })
          } else if (edges.size > 2) {
             glyphsToDraw.add({ type: "connection node", point: p })
          } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
@@ -1357,7 +1357,7 @@
                let click = closestClickPoint(mouse)
                if (click.object instanceof Point) {
                   if (endpointGlyphs.get0(click.object) === "default") {
-                     endpointGlyphs.set(click.object, "cross")
+                     endpointGlyphs.set(click.object, "plug")
                   } else {
                      endpointGlyphs.set(click.object, "default")
                      convertToCrossing(click.object)
@@ -1365,7 +1365,7 @@
                   endpointGlyphs = endpointGlyphs
                } else if (click.object instanceof Segment && click.object) {
                   cutSegment(click.object, click.point)
-                  endpointGlyphs.set(click.point, "cross")
+                  endpointGlyphs.set(click.point, "plug")
                } else if (click.object /* instanceof Crossing */) {
                   // Change the crossing glyph.
                   let { seg1, seg2 } = click.object
@@ -1459,11 +1459,11 @@
             {:else if highlighted.has(glyph.point)}
                <ConnectionPoint renderType="highlight" position={glyph.point} />
             {/if}
-         {:else if glyph.type === "cross"}
+         {:else if glyph.type === "plug"}
             {#if selected.has(glyph.point)}
-               <Cross renderType="selectLight" position={glyph.point} />
+               <Plug renderType="selectLight" position={glyph.point} />
             {:else if highlighted.has(glyph.point)}
-               <Cross renderType="highlight" position={glyph.point} />
+               <Plug renderType="highlight" position={glyph.point} />
             {/if}
          {:else if glyph.type === "endpoint marker"}
             {#if selected.has(glyph.point)}
@@ -1484,8 +1484,8 @@
             <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
          {:else if glyph.type === "connection node"}
             <ConnectionPoint position={glyph.point} />
-         {:else if glyph.type === "cross"}
-            <Cross position={glyph.point} />
+         {:else if glyph.type === "plug"}
+            <Plug position={glyph.point} />
          {:else if glyph.type === "endpoint marker"}
             <EndpointMarker position={glyph.point} />{/if}
       {/each}

@@ -16,12 +16,12 @@
 </script>
 
 <path
-   class="cross {renderType}"
+   class="plug {renderType}"
    d="M{topLeft.x},{topLeft.y} l {w},{w} M{bottomLeft.x},{bottomLeft.y} l{w},{-w}"
 />
 
 <style>
-   .cross {
+   .plug {
       fill: none;
       stroke-linecap: round;
    }
