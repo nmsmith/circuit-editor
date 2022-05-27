@@ -1,15 +1,36 @@
 <script lang="ts">
-   import { Vector, Axis, Point, Line, Ray, Segment } from "./math"
-   import { DefaultMap, ToggleSet } from "./utilities"
-   import FluidLine from "./lines/FluidLine.svelte"
-   import Hopover from "./lines/Hopover.svelte"
-   import ConnectionPoint from "./lines/ConnectionPoint.svelte"
-   import EndpointMarker from "./lines/EndpointMarker.svelte"
-   import RulerHTML from "./Ruler.svelte"
-   import { Ruler } from "./Ruler.svelte"
-   import Padding from "./Padding.svelte"
-   import RectSelectBox from "./RectSelectBox.svelte"
-   import Plug from "./lines/Plug.svelte"
+   // Imports
+   import type { Tool } from "~/shared/definitions"
+   import { Vector, Axis, Point, Line, Ray, Segment } from "~/shared/math"
+   import { DefaultMap, ToggleSet } from "~/shared/utilities"
+   import FluidLine from "~/components/lines/FluidLine.svelte"
+   import Hopover from "~/components/lines/Hopover.svelte"
+   import ConnectionPoint from "~/components/lines/ConnectionPoint.svelte"
+   import EndpointMarker from "~/components/lines/EndpointMarker.svelte"
+   import RulerHTML from "~/components/Ruler.svelte"
+   import { Ruler } from "~/components/Ruler.svelte"
+   import Padding from "~/components/Padding.svelte"
+   import RectSelectBox from "~/components/RectSelectBox.svelte"
+   import Plug from "~/components/lines/Plug.svelte"
+   // Props
+   export let tool: Tool
+   export let shift: boolean
+   export let alt: boolean
+   export let cmd: boolean
+   export const onDelete = deleteSelected
+   // Response to props changing:
+   $: {
+      if (tool === "hydraulic line") selected = new ToggleSet()
+   }
+   $: {
+      shift ? shiftDown() : shiftUp()
+   }
+   $: {
+      alt ? altDown() : altUp()
+   }
+   $: {
+      cmd ? cmdDown() : cmdUp()
+   }
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -531,7 +552,6 @@
    }
    // Input state
    let mouse: Point = Point.zero
-   let [shift, alt, cmd] = [false, false, false]
    let cursor: "auto" | "grab" | "grabbing" | "cell"
    $: {
       if (move) {
@@ -645,7 +665,6 @@
       }
       return s
    }
-   let tool: "select & move" | "hydraulic line" = "hydraulic line"
    let draw: {
       mode: "strafing" | "fixed-axis rotation" | "free rotation"
       segment: Segment
@@ -1205,89 +1224,8 @@
    function cmdUp() {}
 </script>
 
-<svelte:window
-   on:keydown={(event) => {
-      switch (event.key) {
-         case "s":
-         case "S":
-            tool = "select & move"
-            break
-         case "f":
-         case "F":
-            tool = "hydraulic line"
-            selected = new ToggleSet()
-            break
-         case "Backspace":
-         case "Delete": {
-            deleteSelected()
-            break
-         }
-         case "Shift":
-            if (!shift) {
-               shift = true
-               shiftDown()
-            }
-            break
-         case "Alt":
-            if (!alt) {
-               alt = true
-               altDown()
-            }
-            break
-         case "Control":
-         case "Meta":
-            if (!cmd) {
-               cmd = true
-               cmdDown()
-            }
-            break
-      }
-   }}
-   on:keyup={(event) => {
-      switch (event.key) {
-         case "Shift":
-            if (shift) {
-               shift = false
-               shiftUp()
-            }
-            break
-         case "Alt":
-            if (alt) {
-               alt = false
-               altUp()
-            }
-            break
-         case "Control":
-         case "Meta":
-            if (cmd) {
-               cmd = false
-               cmdUp()
-            }
-            break
-      }
-   }}
-   on:blur={(event) => {
-      if (shift) {
-         shift = false
-         shiftUp()
-      }
-      if (alt) {
-         alt = false
-         altUp()
-      }
-      if (cmd) {
-         cmd = false
-         cmdUp()
-      }
-   }}
-/>
 <svg
    style="cursor: {cursor}"
-   on:contextmenu={(event) => {
-      // Disable the context menu.
-      event.preventDefault()
-      return false
-   }}
    on:mousemove={(event) => {
       let newMouse = new Point(event.clientX, event.clientY)
       if (move) move.distance += newMouse.distanceFrom(mouse)
@@ -1499,7 +1437,6 @@
    </g>
    <!-- HUD layer -->
    <g>
-      <text class="toolText" x="8" y="24">{tool}</text>
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}
@@ -1507,34 +1444,11 @@
 </svg>
 
 <style>
-   :global(html, body, #app) {
-      height: 100%;
-      margin: 0;
-   }
-   :global(.fluidLine) {
-      fill: none;
-      stroke: blue;
-      stroke-linejoin: round;
-      stroke-linecap: round;
-      stroke-width: 0;
-   }
-   :global(.fluidLine.highlight) {
-      stroke: rgb(0, 234, 255);
-   }
-   :global(.fluidLine.selectLight) {
-      stroke: yellow;
-   }
    svg {
       width: 100%;
       height: 100%;
       /* shift the image so that 3px lines render without aliasing */
       transform: translate(-0.5px, -0.5px);
       background-color: rgb(193, 195, 199);
-   }
-   .toolText {
-      user-select: none;
-      -webkit-user-select: none;
-      cursor: default;
-      font: 20px sans-serif;
    }
 </style>

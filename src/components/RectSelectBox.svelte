@@ -1,5 +1,5 @@
 <script lang="ts">
-   import type { Point } from "./math"
+   import type { Point } from "~/shared/math"
    export let start: Point
    export let end: Point
 </script>

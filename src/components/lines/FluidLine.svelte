@@ -1,5 +1,5 @@
 <script lang="ts">
-   import type { Point, Segment } from "../math"
+   import type { Point, Segment } from "~/shared/math"
    export let renderType: "default" | "highlight" | "selectLight" = "default"
    export let segment: Segment
    $: start = segment.start

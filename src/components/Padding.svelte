@@ -1,5 +1,5 @@
 <script lang="ts">
-   import { Point, Axis, Segment, Box } from "./math"
+   import { Point, Axis, Segment, Box } from "~/shared/math"
    export let segment: Segment
    $: padding = { left: 15, right: 15, top: 15, bottom: 15 }
    // segment.axis.x === 0 || segment.axis.y === 0

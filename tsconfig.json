@@ -5,7 +5,10 @@
       "useDefineForClassFields": true,
       "module": "esnext",
       "resolveJsonModule": true,
-      "baseUrl": ".",
+      "baseUrl": "./src",
+      "paths": {
+         "~/*": ["./*"]
+      },
       "allowJs": true,
       "checkJs": true,
       "strict": true,
@@ -19,7 +22,7 @@
    ],
    "references": [
       {
-         "path": "./tsconfig.node.json"
+         "path": "./tsconfig.vite.json"
       }
    ]
 }

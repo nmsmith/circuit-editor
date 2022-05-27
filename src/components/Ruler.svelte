@@ -1,5 +1,5 @@
 <script lang="ts" context="module">
-   import { Point, Line, Ray, Axis } from "./math"
+   import { Point, Line, Ray, Axis } from "~/shared/math"
    // Constants
    const rulerOpaqueDistance = 15 // Max distance at which opaque
    const rulerTransparentDistance = 60 // Min distance at which transparent
@@ -47,8 +47,8 @@
    export let ruler: Ruler
    $: origin = ruler.line.origin
    $: opacity = 0.16 * ruler.opacity
-   $: pos = ruler.line.origin.displaceBy(ruler.line.axis.scaleBy(+9001))
-   $: neg = ruler.line.origin.displaceBy(ruler.line.axis.scaleBy(-9001))
+   $: pos = ruler.line.origin.displacedBy(ruler.line.axis.scaledBy(+9001))
+   $: neg = ruler.line.origin.displacedBy(ruler.line.axis.scaledBy(-9001))
 </script>
 
 {#if ruler.render === "line"}
