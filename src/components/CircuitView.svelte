@@ -1198,14 +1198,16 @@
          }
       }
    }
-   function endRectSelect() {
-      if (!rectSelect) return
-
-      if (!shift && !alt) selected.clear()
-      if (alt) for (let thing of rectSelect.highlighted) selected.delete(thing)
-      else for (let thing of rectSelect.highlighted) selected.add(thing)
-
-      selected = selected
+   function endRectSelect(cancel?: boolean) {
+      if (rectSelect && !cancel) {
+         if (!shift && !alt) selected.clear()
+         if (alt) {
+            for (let thing of rectSelect.highlighted) selected.delete(thing)
+         } else {
+            for (let thing of rectSelect.highlighted) selected.add(thing)
+         }
+         selected = selected
+      }
       rectSelect = null
    }
    function shiftDown() {}
@@ -1222,12 +1224,35 @@
    function altUp() {}
    function cmdDown() {}
    function cmdUp() {}
-</script>
-
-<svg
-   style="cursor: {cursor}"
-   on:mousemove={(event) => {
-      let newMouse = new Point(event.clientX, event.clientY)
+   // The state the left mouse button SHOULD be in (if the browser hasn't
+   // concealed any events from us).
+   let leftMouseShouldBeDown = false
+   // The state the left mouse button is ACTUALLY in.
+   function leftMouseIsDown(event: MouseEvent) {
+      return (event.buttons & 0b1) === 1
+   }
+   function leftMouseDown(clickPoint: Point) {
+      leftMouseShouldBeDown = true
+      switch (tool) {
+         case "select & move": {
+            let attach = closestAttachPoint(clickPoint)
+            if (attach.object && !shift && !alt) {
+               if (cmd) {
+                  selected.clear()
+                  for (let s of bulkHighlighted) selected.add(s)
+               } else if (!selected.has(attach.object)) {
+                  selected = new ToggleSet([attach.object])
+               }
+               beginMove(attach.object, attach.point)
+            } else waitingForDrag = clickPoint
+            break
+         }
+         case "hydraulic line":
+            waitingForDrag = clickPoint
+            break
+      }
+   }
+   function mouseMoved(newMouse: Point) {
       if (move) move.distance += newMouse.distanceFrom(mouse)
       mouse = newMouse
       // Check if the mouse has moved enough to trigger an action.
@@ -1257,89 +1282,83 @@
                break
          }
       }
+   }
+   function leftMouseUp(unexpectedly?: boolean) {
+      if (draw) endDraw()
+      if (move) endMove()
+      if (rectSelect) endRectSelect(unexpectedly)
+      waitingForDrag = null
+      leftMouseShouldBeDown = false
+   }
+   function leftMouseClicked() {
+      switch (tool) {
+         case "select & move": {
+            let attach = closestAttachPoint(mouse)
+            if (!attach.object) selected.clear()
+            else if (shift && cmd)
+               for (let s of bulkHighlighted) selected.add(s)
+            else if (shift && !cmd) selected.toggle(attach.object)
+            else if (alt && cmd)
+               for (let s of bulkHighlighted) selected.delete(s)
+            else if (alt && !cmd) selected.delete(attach.object)
+            else selected = new ToggleSet([attach.object])
+            selected = selected
+            break
+         }
+         case "hydraulic line": {
+            let click = closestClickPoint(mouse)
+            if (click.object instanceof Point) {
+               if (endpointGlyphs.get0(click.object) === "default") {
+                  endpointGlyphs.set(click.object, "plug")
+               } else {
+                  endpointGlyphs.set(click.object, "default")
+                  convertToCrossing(click.object)
+               }
+               endpointGlyphs = endpointGlyphs
+            } else if (click.object instanceof Segment && click.object) {
+               cutSegment(click.object, click.point)
+               endpointGlyphs.set(click.point, "plug")
+            } else if (click.object /* instanceof Crossing */) {
+               // Change the crossing glyph.
+               let { seg1, seg2 } = click.object
+               let oldType = crossingTypes.get0(seg1).get0(seg2)
+               let i = crossingToggleSeq.indexOf(oldType) + 1
+               if (i < crossingToggleSeq.length) {
+                  crossingTypes.get0(seg1).set(seg2, crossingToggleSeq[i])
+                  crossingTypes.get0(seg2).set(seg1, crossingToggleSeq[i])
+                  crossingTypes = crossingTypes
+               } else {
+                  convertToJunction(click.object)
+               }
+            }
+            break
+         }
+      }
+   }
+   let canvas: SVGElement
+</script>
+
+<svg
+   bind:this={canvas}
+   style="cursor: {cursor}"
+   on:mousemove={(event) => {
+      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
+      mouseMoved(new Point(event.clientX, event.clientY))
    }}
    on:mousedown={(event) => {
       if (event.button === 0 /* Left mouse button */) {
-         let clickPoint = new Point(event.clientX, event.clientY)
-         switch (tool) {
-            case "select & move": {
-               let attach = closestAttachPoint(clickPoint)
-               if (attach.object && !shift && !alt) {
-                  if (cmd) {
-                     selected.clear()
-                     for (let s of bulkHighlighted) selected.add(s)
-                  } else if (!selected.has(attach.object)) {
-                     selected = new ToggleSet([attach.object])
-                  }
-                  beginMove(attach.object, attach.point)
-               } else waitingForDrag = clickPoint
-               break
-            }
-            case "hydraulic line":
-               waitingForDrag = clickPoint
-               break
-         }
+         leftMouseDown(new Point(event.clientX, event.clientY))
       }
    }}
    on:mouseup={(event) => {
-      if (waitingForDrag) {
-         waitingForDrag = null
-         // A click happened.
-         switch (tool) {
-            case "select & move": {
-               let attach = closestAttachPoint(mouse)
-               if (!attach.object) selected.clear()
-               else if (shift && cmd)
-                  for (let s of bulkHighlighted) selected.add(s)
-               else if (shift && !cmd) selected.toggle(attach.object)
-               else if (alt && cmd)
-                  for (let s of bulkHighlighted) selected.delete(s)
-               else if (alt && !cmd) selected.delete(attach.object)
-               else selected = new ToggleSet([attach.object])
-               selected = selected
-               break
-            }
-            case "hydraulic line": {
-               let click = closestClickPoint(mouse)
-               if (click.object instanceof Point) {
-                  if (endpointGlyphs.get0(click.object) === "default") {
-                     endpointGlyphs.set(click.object, "plug")
-                  } else {
-                     endpointGlyphs.set(click.object, "default")
-                     convertToCrossing(click.object)
-                  }
-                  endpointGlyphs = endpointGlyphs
-               } else if (click.object instanceof Segment && click.object) {
-                  cutSegment(click.object, click.point)
-                  endpointGlyphs.set(click.point, "plug")
-               } else if (click.object /* instanceof Crossing */) {
-                  // Change the crossing glyph.
-                  let { seg1, seg2 } = click.object
-                  let oldType = crossingTypes.get0(seg1).get0(seg2)
-                  let i = crossingToggleSeq.indexOf(oldType) + 1
-                  if (i < crossingToggleSeq.length) {
-                     crossingTypes.get0(seg1).set(seg2, crossingToggleSeq[i])
-                     crossingTypes.get0(seg2).set(seg1, crossingToggleSeq[i])
-                     crossingTypes = crossingTypes
-                  } else {
-                     convertToJunction(click.object)
-                  }
-               }
-               break
-            }
-         }
-      } else {
-         endDraw()
-         endMove()
-         endRectSelect()
+      if (event.button === 0 /* Left mouse button */) {
+         let mouseWasClicked = waitingForDrag
+         leftMouseUp()
+         if (mouseWasClicked) leftMouseClicked()
       }
    }}
    on:mouseenter={(event) => {
-      // If we're (re-)entering the window and the left mouse button isn't
-      // down, cancel any drag-based operation that may be in progress.
-      if ((event.buttons & 0b1) === 0) {
-         draw = move = rectSelect = null
-      }
+      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
    }}
 >
    <!-- Bottom layer -->
@@ -1441,14 +1460,23 @@
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}
    </g>
+   <!--TODO: The <foreignObject> element should be moved to the location where
+      the slot is FILLED. However, doing so currently triggers a bug in Svelte.
+      I've filed the bug on Github. -->
+   <foreignObject
+      x={canvas ? canvas.clientWidth - 200 : 0}
+      y="0"
+      width="200"
+      height="100%"
+   >
+      <slot /></foreignObject
+   >
 </svg>
 
 <style>
    svg {
       width: 100%;
       height: 100%;
-      /* shift the image so that 3px lines render without aliasing */
-      transform: translate(-0.5px, -0.5px);
       background-color: rgb(193, 195, 199);
    }
 </style>
