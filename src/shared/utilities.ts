@@ -1,3 +1,13 @@
+import { Point } from "~/shared/math"
+
+export function mouseInCoordinateSystemOf(
+   element: Element,
+   event: MouseEvent
+): Point {
+   let rect = element.getBoundingClientRect()
+   return new Point(event.clientX - rect.left, event.clientY - rect.top)
+}
+
 // A very handy extension of "Map".
 // When a DefaultMap is constructed, the user gives it a default value,
 // and if get0() would fail, it returns that default value instead.

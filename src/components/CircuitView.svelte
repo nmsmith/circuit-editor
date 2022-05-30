@@ -1,8 +1,12 @@
 <script lang="ts">
    // Imports
-   import type { Tool } from "~/shared/definitions"
+   import type { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
    import { Vector, Axis, Point, Line, Ray, Segment } from "~/shared/math"
-   import { DefaultMap, ToggleSet } from "~/shared/utilities"
+   import {
+      mouseInCoordinateSystemOf,
+      DefaultMap,
+      ToggleSet,
+   } from "~/shared/utilities"
    import FluidLine from "~/components/lines/FluidLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
    import ConnectionPoint from "~/components/lines/ConnectionPoint.svelte"
@@ -12,13 +16,22 @@
    import Padding from "~/components/Padding.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
-   // Props
+   // Root element
+   let canvas: SVGElement
+   // Input props
    export let tool: Tool
    export let shift: boolean
    export let alt: boolean
    export let cmd: boolean
+   export let onSymbolLeave: (
+      kind: SymbolKind,
+      grabOffset: Vector,
+      event: MouseEvent
+   ) => void
+   // Output props
    export const onDelete = deleteSelected
-   // Response to props changing:
+   export const onSymbolEnter = spawnSymbol
+   // Response to props changing
    $: {
       if (tool === "hydraulic line") selected = new ToggleSet()
    }
@@ -1210,6 +1223,58 @@
       }
       rectSelect = null
    }
+   function moveElementToPoint(element: SVGElement, point: Point) {
+      element.setAttribute("x", point.x.toString())
+      element.setAttribute("y", point.y.toString())
+   }
+   let symbolInstanceUUID = 0
+   let currentSymbol: {
+      instance: SymbolInstance
+      grabOffset: Vector
+   } | null = null
+   function spawnSymbol(
+      kind: SymbolKind,
+      grabOffset: Vector,
+      event: MouseEvent
+   ) {
+      let svg = kind.svgTemplate.cloneNode(true) as SVGElement
+      moveElementToPoint(
+         svg,
+         mouseInCoordinateSystemOf(canvas, event).displacedBy(grabOffset)
+      )
+      // Namespace the IDs (since IDs must be unique amongst all instances).
+      let idSuffix = ":" + symbolInstanceUUID++
+      for (let element of svg.querySelectorAll("*")) {
+         if (element.hasAttribute("id")) {
+            element.setAttribute("id", element.id + idSuffix)
+         }
+         if (element.nodeName === "use") {
+            let ref = element.getAttribute("href")
+            let xRef = element.getAttribute("xlink:href")
+            if (ref && ref[0] === "#")
+               element.setAttribute("href", ref + idSuffix)
+            else if (xRef && xRef[0] === "#")
+               element.setAttribute("xlink:href", xRef + idSuffix)
+         }
+      }
+      document.getElementById("symbol layer")?.appendChild(svg)
+      currentSymbol = {
+         instance: {
+            kind,
+            svg,
+            idSuffix,
+         },
+         grabOffset,
+      }
+   }
+   $: {
+      if (currentSymbol) {
+         moveElementToPoint(
+            currentSymbol.instance.svg,
+            mouse.displacedBy(currentSymbol.grabOffset)
+         )
+      }
+   }
    function shiftDown() {}
    function shiftUp() {}
    function altDown() {
@@ -1335,7 +1400,6 @@
          }
       }
    }
-   let canvas: SVGElement
 </script>
 
 <svg
@@ -1343,11 +1407,11 @@
    style="cursor: {cursor}"
    on:mousemove={(event) => {
       if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
-      mouseMoved(new Point(event.clientX, event.clientY))
+      mouseMoved(mouseInCoordinateSystemOf(event.currentTarget, event))
    }}
    on:mousedown={(event) => {
       if (event.button === 0 /* Left mouse button */) {
-         leftMouseDown(new Point(event.clientX, event.clientY))
+         leftMouseDown(mouseInCoordinateSystemOf(event.currentTarget, event))
       }
    }}
    on:mouseup={(event) => {
@@ -1402,7 +1466,7 @@
          {/each}
       {/each}
    </g>
-   <!-- Symbol highlight & selection layer -->
+   <!-- Glyph highlight & selection layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
          {#if glyph.type === "hopover" && (selected.has(glyph.segment) || highlighted.has(glyph.segment) || highlighted.has(glyph.point))}
@@ -1441,7 +1505,7 @@
          {/if}
       {/each}
    </g>
-   <!-- Symbol layer -->
+   <!-- Glyph layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
          {#if glyph.type === "hopover"}
@@ -1454,23 +1518,16 @@
             <EndpointMarker position={glyph.point} />{/if}
       {/each}
    </g>
+   <!-- Symbol highlight & selection layer -->
+   <g />
+   <!-- Symbol layer -->
+   <g id="symbol layer" />
    <!-- HUD layer -->
    <g>
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}
    </g>
-   <!--TODO: The <foreignObject> element should be moved to the location where
-      the slot is FILLED. However, doing so currently triggers a bug in Svelte.
-      I've filed the bug on Github. -->
-   <foreignObject
-      x={canvas ? canvas.clientWidth - 200 : 0}
-      y="0"
-      width="200"
-      height="100%"
-   >
-      <slot /></foreignObject
-   >
 </svg>
 
 <style>

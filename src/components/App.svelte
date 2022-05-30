@@ -1,12 +1,56 @@
 <script lang="ts">
-   import type { Tool } from "~/shared/definitions"
+   import type { Tool, SymbolKind } from "~/shared/definitions"
+   import { Vector, Point } from "~/shared/math"
+   import { mouseInCoordinateSystemOf } from "~/shared/utilities"
    import CircuitView from "~/components/CircuitView.svelte"
+   // State
+   let mouse: Point = Point.zero
+
    // State passed to CircuitView
    let tool: Tool = "hydraulic line"
    let [shift, alt, cmd] = [false, false, false]
-   // State obtained from circuitView
-   let onDelete: () => void
+   function onSymbolLeave() {}
 
+   // Callbacks obtained from circuitView
+   let onDelete: () => void
+   let onSymbolEnter: (
+      kind: SymbolKind,
+      grabOffset: Vector,
+      event: MouseEvent
+   ) => void
+
+   // Data related to schematic symbols
+   let symbolFiles = ["/symbols/animate/pump.svg", "/symbols/animate/valve.svg"]
+   let symbolKinds: SymbolKind[] = []
+   let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
+
+   // Pre-process the SVG (already in the DOM) of the schematic symbol whose
+   // file path is given.
+   function registerSymbolKind(filePath: string) {
+      let object = document.getElementById(filePath) as HTMLObjectElement
+      let svgDocument = object.contentDocument
+      if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
+         let svg = svgDocument.firstChild as SVGElement
+         // Locate the snap points and bounding box of the symbol.
+         let snapPoints = new Set<Point>()
+         for (let element of svg.querySelectorAll("*")) {
+            if (element.hasAttribute("id")) {
+               if (element.id.endsWith("Snap")) {
+                  let { x, y, width, height } = element.getBoundingClientRect()
+                  snapPoints.add(new Point(x + width / 2, y + height / 2))
+               }
+            }
+         }
+         // Add the symbol to the app's list of symbols.
+         symbolKinds = [
+            ...symbolKinds,
+            { filePath, svgTemplate: svg, snapPoints },
+         ]
+      }
+   }
+   function absolutePosition(p: Point) {
+      return `position: absolute; left: ${p.x}px; top: ${p.y}px`
+   }
    function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
       shift = event.getModifierState("Shift")
       alt = event.getModifierState("Alt")
@@ -49,15 +93,72 @@
       event.preventDefault()
       return false
    }}
+   on:mousemove={(event) => {
+      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
+   }}
 >
-   <CircuitView {tool} {shift} {alt} {cmd} bind:onDelete>
-      <div class="componentPane">
-         <div class="paneTitle">Components</div>
-         <img src="/symbols/animate/pump.svg" alt="pump" />
-         <img src="/symbols/animate/valve.svg" alt="valve" />
-      </div>
-   </CircuitView>
+   <CircuitView
+      {tool}
+      {shift}
+      {alt}
+      {cmd}
+      {onSymbolLeave}
+      bind:onDelete
+      bind:onSymbolEnter
+   />
    <div class="toolText">{tool}</div>
+   <div
+      class="symbolPane"
+      on:mouseup={() => {
+         grabbedSymbol = null
+      }}
+      on:mouseleave={(event) => {
+         if (grabbedSymbol) {
+            onSymbolEnter(grabbedSymbol.kind, grabbedSymbol.grabOffset, event)
+            grabbedSymbol = null
+         }
+      }}
+   >
+      <div class="paneTitle">Symbols</div>
+      {#each symbolKinds as kind}
+         <img
+            src={kind.filePath}
+            alt=""
+            style="visibility: {kind.filePath === grabbedSymbol?.kind.filePath
+               ? 'hidden'
+               : 'visible'}"
+            on:mousedown={(event) => {
+               grabbedSymbol = {
+                  kind,
+                  grabOffset: new Vector(-event.offsetX, -event.offsetY),
+               }
+            }}
+         />
+      {/each}
+   </div>
+   {#if grabbedSymbol}
+      <img
+         class="grabbedSymbolImage"
+         src={grabbedSymbol.kind.filePath}
+         alt=""
+         style={absolutePosition(mouse.displacedBy(grabbedSymbol.grabOffset))}
+      />
+   {/if}
+</div>
+<div id="resources" style="visibility: hidden">
+   <!-- Load each kind of symbol as an invisible <object>, and pre-process it
+   as necessary. We will clone an <object>'s DOM content when the corresponding
+   symbol needs to be instantiated on the main drawing canvas. -->
+   <!-- N.B: display:none doesn't work: it prevents the objects from loading.-->
+   {#each symbolFiles as filePath}
+      <object
+         id={filePath}
+         type="image/svg+xml"
+         data={filePath}
+         title=""
+         on:load={() => registerSymbolKind(filePath)}
+      />
+   {/each}
 </div>
 
 <style>
@@ -82,22 +183,26 @@
    .paneTitle {
       font: bold 24px sans-serif;
       margin-bottom: 12px;
+      cursor: default;
    }
-   .componentPane {
-      position: fixed; /* N.B: This overcomes a bug in Safari's layout. */
-      margin-left: 8px; /* This gives room for the drop shadow to render. */
-      width: 100%;
+   .symbolPane {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 200px;
       height: 100%;
+      overflow: scroll;
       background-color: rgb(231, 234, 237);
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.2);
       padding: 8px;
-      overflow-x: scroll;
-      overflow-y: scroll;
       user-select: none;
       -webkit-user-select: none;
    }
-   .componentPane > img {
+   .symbolPane > img {
       margin: 4px;
+   }
+   .grabbedSymbolImage {
+      pointer-events: none;
    }
    .toolText {
       position: absolute;
