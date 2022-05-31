@@ -1,16 +1,15 @@
-import type { Point, Rotation, BoundingBox } from "~/shared/math"
+import type { Point, Rotation, Range2D, Rectangle } from "~/shared/math"
 
 export type Tool = "select & move" | "hydraulic line"
 export type SymbolKind = {
    filePath: string
    svgTemplate: SVGElement
-   boundingBox: BoundingBox
+   boundingBox: Range2D
    snapPoints: Set<Point>
 }
 export type SymbolInstance = {
    kind: SymbolKind
    svg: SVGElement
    idSuffix: string // added to every ID of the instantiated SVG
-   position: Point // where the SVG's origin should be placed on the canvas
-   rotation: Rotation
+   geometry: Rectangle // geometry for the purposes of interaction and collision
 }

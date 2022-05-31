@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Tool, SymbolKind } from "~/shared/definitions"
-   import { Vector, Point, BoundingBox } from "~/shared/math"
+   import { Vector, Point, Range1D, Range2D } from "~/shared/math"
    import { mouseInCoordinateSystemOf } from "~/shared/utilities"
    import CircuitView from "~/components/CircuitView.svelte"
    // State
@@ -38,7 +38,10 @@
             if (element.hasAttribute("id")) {
                if (element.id === "boundingBox") {
                   let { x, y, width, height } = element.getBoundingClientRect()
-                  boundingBox = BoundingBox.fromXY(x, x + width, y, y + height)
+                  boundingBox = new Range2D(
+                     new Range1D(x, x + width),
+                     new Range1D(y, y + height)
+                  )
                } else if (element.id.endsWith("Snap")) {
                   let { x, y, width, height } = element.getBoundingClientRect()
                   snapPoints.add(new Point(x + width / 2, y + height / 2))
@@ -48,7 +51,10 @@
          // If the symbol has no defined bounding box, create a default one.
          if (!boundingBox) {
             let { x, y, width, height } = svg.getBoundingClientRect()
-            boundingBox = BoundingBox.fromXY(x, x + width, y, y + height)
+            boundingBox = new Range2D(
+               new Range1D(x, x + width),
+               new Range1D(y, y + height)
+            )
          }
          // Add the symbol to the app's list of symbols.
          symbolKinds = [

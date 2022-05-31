@@ -35,6 +35,11 @@ export class Vector extends VectorBase {
    sub(v: Vector): Vector {
       return new Vector(this.x - v.x, this.y - v.y)
    }
+   rotatedBy(rotation: Rotation): Vector {
+      let cos = this.x * rotation.x - this.y * rotation.y
+      let sin = this.y * rotation.x + this.x * rotation.y
+      return new Vector(cos, sin)
+   }
    // Express the vector in terms of the coordinate system implied by the
    // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
    relativeTo(axis: Axis): Vector {
@@ -361,53 +366,65 @@ function genericIntersection(
    } else return null
 }
 
-export class BoundingBox {
-   x1: number
-   x2: number
-   y1: number
-   y2: number
+export class Range1D {
+   readonly low: number
+   readonly high: number
+   // Return the unsigned Range between the given numbers.
+   constructor(v1: number, v2: number) {
+      this.low = Math.min(v1, v2)
+      this.high = Math.max(v1, v2)
+   }
+}
+
+export class Range2D {
+   readonly x: Range1D
+   readonly y: Range1D
+   constructor(x: Range1D, y: Range1D) {
+      this.x = x
+      this.y = y
+   }
+}
+
+export class Rectangle {
+   position: Point
    rotation: Rotation
-   protected constructor(
-      x1: number,
-      x2: number,
-      y1: number,
-      y2: number,
-      rotation: Rotation
-   ) {
-      this.x1 = x1
-      this.x2 = x2
-      this.y1 = y1
-      this.y2 = y2
+   readonly range: Range2D
+   constructor(position: Point, rotation: Rotation, range: Range2D) {
+      this.position = position
       this.rotation = rotation
+      this.range = range
    }
-   static fromXY(x1: number, x2: number, y1: number, y2: number) {
-      return new BoundingBox(x1, x2, y1, y2, Rotation.zero)
-   }
-   displacedBy(displacement: Vector): BoundingBox {
-      return new BoundingBox(
-         this.x1 + displacement.x,
-         this.x2 + displacement.x,
-         this.y1 + displacement.y,
-         this.y2 + displacement.y,
-         this.rotation
+   private toLocalCoordinates(point: Point): Point {
+      return Point.zero.displacedBy(
+         point
+            .displacementFrom(this.position)
+            .rotatedBy(this.rotation.scaledBy(-1))
       )
    }
-   // Rotate the bounding box around its implicitly-defined origin.
-   rotatedBy(rotation: Rotation): BoundingBox {
-      return new BoundingBox(
-         this.x1,
-         this.x2,
-         this.y1,
-         this.y2,
-         this.rotation.add(rotation)
-      )
+   contains(point: Point): boolean {
+      let p = this.toLocalCoordinates(point)
+      let { x, y } = this.range
+      return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
    }
-   *corners(): Generator<Point> {
+   sqDistanceFrom(point: Point): number {
+      let p = this.toLocalCoordinates(point)
+      let { x, y } = this.range
+      let dx = p.x < x.low ? p.x - x.low : p.x > x.high ? p.x - x.high : 0
+      let dy = p.y < y.low ? p.y - y.low : p.y > y.high ? p.y - y.high : 0
+      return dx * dx + dy * dy
+   }
+   distanceFrom(point: Point): number {
+      return Math.sqrt(this.sqDistanceFrom(point))
+   }
+   corners(): Point[] {
+      let { x, y } = this.range
       let c = this.rotation.x
       let s = this.rotation.y
-      yield new Point(c * this.x1 - s * this.y1, s * this.x1 + c * this.y1)
-      yield new Point(c * this.x2 - s * this.y1, s * this.x2 + c * this.y1)
-      yield new Point(c * this.x2 - s * this.y2, s * this.x2 + c * this.y2)
-      yield new Point(c * this.x1 - s * this.y2, s * this.x1 + c * this.y2)
+      return [
+         new Vector(c * x.low - s * y.low, s * x.low + c * y.low),
+         new Vector(c * x.high - s * y.low, s * x.high + c * y.low),
+         new Vector(c * x.high - s * y.high, s * x.high + c * y.high),
+         new Vector(c * x.low - s * y.high, s * x.low + c * y.high),
+      ].map(this.position.displacedBy)
    }
 }

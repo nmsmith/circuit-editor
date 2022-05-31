@@ -7,9 +7,9 @@
       Rotation,
       Direction,
       Axis,
-      Line,
       Ray,
       Segment,
+      Rectangle,
    } from "~/shared/math"
    import {
       mouseInCoordinateSystemOf,
@@ -1260,25 +1260,20 @@
                element.setAttribute("xlink:href", xRef + idSuffix)
          }
       }
-      let instance = {
-         kind,
-         svg,
-         idSuffix,
-         position: mouseInCoordinateSystemOf(canvas, event).displacedBy(
-            grabOffset
-         ),
-         rotation: Rotation.zero,
-      }
+      let initialPos = mouseInCoordinateSystemOf(canvas, event).displacedBy(
+         grabOffset
+      )
+      let geometry = new Rectangle(initialPos, Rotation.zero, kind.boundingBox)
+      let instance = { kind, svg, idSuffix, geometry }
       symbols.add(instance)
       document.getElementById("symbol layer")?.appendChild(svg)
       currentSymbol = { instance, grabOffset }
    }
    $: {
       if (currentSymbol) {
-         moveElementToPoint(
-            currentSymbol.instance.svg,
-            mouse.displacedBy(currentSymbol.grabOffset)
-         )
+         let p = mouse.displacedBy(currentSymbol.grabOffset)
+         currentSymbol.instance.geometry.position = p
+         moveElementToPoint(currentSymbol.instance.svg, p)
       }
    }
    function shiftDown() {}
@@ -1421,6 +1416,7 @@
       }
    }}
    on:mouseup={(event) => {
+      currentSymbol = null
       if (event.button === 0 /* Left mouse button */) {
          let mouseWasClicked = waitingForDrag
          leftMouseUp()
