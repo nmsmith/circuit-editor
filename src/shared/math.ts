@@ -22,12 +22,12 @@ export class Vector extends VectorBase {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
-   scaledBy(s: number): Vector {
-      return new Vector(s * this.x, s * this.y)
+   scaledBy(factor: number): Vector {
+      return new Vector(factor * this.x, factor * this.y)
    }
-   normalized(): Vector {
+   normalized(): Vector | undefined {
       let length = this.length()
-      return length === 0 ? this : this.scaledBy(1 / length)
+      if (length > 0) return this.scaledBy(1 / length)
    }
    add(v: Vector): Vector {
       return new Vector(this.x + v.x, this.y + v.y)
@@ -35,25 +35,17 @@ export class Vector extends VectorBase {
    sub(v: Vector): Vector {
       return new Vector(this.x - v.x, this.y - v.y)
    }
-   // Rotate the vector by the given angle.
-   // The angle can either be provided as radians, or as an Axis object.
-   addRotation(angle: number | Axis): Vector {
-      let [cos, sin] =
-         angle instanceof Axis
-            ? [angle.x, angle.y]
-            : [Math.cos(angle), Math.sin(angle)]
-      let x = this.x
-      let y = this.y
-      return new Vector(cos * x - sin * y, sin * x + cos * y)
-   }
-   subRotation(angle: number | Axis): Vector {
-      let [cos, sin] =
-         angle instanceof Axis
-            ? [angle.x, angle.y]
-            : [Math.cos(angle), Math.sin(angle)]
-      let x = this.x
-      let y = this.y
+   // Express the vector in terms of the coordinate system implied by the
+   // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
+   relativeTo(axis: Axis): Vector {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
       return new Vector(cos * x + sin * y, -sin * x + cos * y)
+   }
+   undoRelativeTo(axis: Axis): Vector {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
+      return new Vector(cos * x - sin * y, sin * x + cos * y)
    }
    dot(v: Vector): number {
       return this.x * v.x + this.y * v.y
@@ -77,6 +69,92 @@ export class Vector extends VectorBase {
    }
 }
 
+export class Point extends VectorBase {
+   static readonly zero = new Point(0, 0)
+   sqDistanceFrom(p: Point): number {
+      let dx = this.x - p.x
+      let dy = this.y - p.y
+      return dx * dx + dy * dy
+   }
+   distanceFrom(p: Point): number {
+      return Math.sqrt(this.sqDistanceFrom(p))
+   }
+   displacementFrom(p: Point): Vector {
+      return new Vector(this.x - p.x, this.y - p.y)
+   }
+   directionFrom(p: Point): Direction | undefined {
+      return Direction.fromVector(this.displacementFrom(p))
+   }
+   displacedBy(v: Vector): Point {
+      return new Point(this.x + v.x, this.y + v.y)
+   }
+   clone(): Point {
+      return new Point(this.x, this.y)
+   }
+   // These "move" operations are the only operations that mutate points.
+   // If we have these operations, we can implement circuit manipulations such
+   // as dragging without having to mutate the circuit data structure itself.
+   moveTo(p: Point): void {
+      ;(this.x as number) = p.x
+      ;(this.y as number) = p.y
+   }
+   moveBy(v: Vector): void {
+      ;(this.x as number) += v.x
+      ;(this.y as number) += v.y
+   }
+}
+
+// A Rotation is a _difference_ between two Directions.
+export class Rotation extends VectorBase {
+   static readonly zero = this.fromAngle(0)
+   protected constructor(x: number, y: number) {
+      super(x, y)
+   }
+   static fromAngle(radians: number): Rotation {
+      return new Rotation(Math.cos(radians), Math.sin(radians))
+   }
+   toAngle(): number {
+      return Math.atan2(this.y, this.x)
+   }
+   scaledBy(factor: number): Rotation {
+      return Rotation.fromAngle(factor * this.toAngle())
+   }
+   add(rotation: Rotation): Rotation {
+      let cos = this.x * rotation.x - this.y * rotation.y
+      let sin = this.y * rotation.x + this.x * rotation.y
+      return new Rotation(cos, sin)
+   }
+   sub(rotation: Rotation): Rotation {
+      let cos = this.x * rotation.x + this.y * rotation.y
+      let sin = this.y * rotation.x - this.x * rotation.y
+      return new Rotation(cos, sin)
+   }
+}
+
+export class Direction extends Vector {
+   protected constructor(x: number, y: number) {
+      super(x, y)
+   }
+   protected asRotation(): Rotation {
+      // subvert constructor privacy
+      return new (Rotation as any)(this.x, this.y)
+   }
+   static fromVector(vec: Vector): Direction | undefined {
+      let v = vec.normalized()
+      if (v) return new Direction(v.x, v.y)
+   }
+   rotationFrom(dir: Direction): Rotation {
+      return this.asRotation().sub(dir.asRotation())
+   }
+   rotatedBy(rotation: Rotation): Direction {
+      let r = this.asRotation().add(rotation)
+      return new Direction(r.x, r.y)
+   }
+   axis(): Axis {
+      return Axis.fromVector(this) as Axis
+   }
+}
+
 function mod(x: number, y: number) {
    return ((x % y) + y) % y
 }
@@ -85,7 +163,7 @@ function mod(x: number, y: number) {
 export class Axis extends Vector {
    static readonly horizontal = new Axis(1, 0)
    static readonly vertical = new Axis(0, -1)
-   private constructor(x: number, y: number) {
+   protected constructor(x: number, y: number) {
       super(x, y)
    }
    static fromAngle(radians: number): Axis {
@@ -108,46 +186,17 @@ export class Axis extends Vector {
    orthogonal(): Axis {
       return this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
    }
+   posDirection(): Direction {
+      return Direction.fromVector(this) as Direction
+   }
+   negDirection(): Direction {
+      return Direction.fromVector(this.scaledBy(-1)) as Direction
+   }
    approxEquals(a: this, errorRatio: number): boolean {
       return (
          super.approxEquals(a, errorRatio) ||
          super.approxEquals(a.scaledBy(-1) as this, errorRatio)
       )
-   }
-}
-
-export class Point extends VectorBase {
-   static readonly zero = new Point(0, 0)
-   sqDistanceFrom(p: Point): number {
-      let dx = this.x - p.x
-      let dy = this.y - p.y
-      return dx * dx + dy * dy
-   }
-   distanceFrom(p: Point): number {
-      return Math.sqrt(this.sqDistanceFrom(p))
-   }
-   displacementFrom(p: Point): Vector {
-      return new Vector(this.x - p.x, this.y - p.y)
-   }
-   directionFrom(p: Point): Vector {
-      return this.displacementFrom(p).normalized()
-   }
-   displacedBy(v: Vector): Point {
-      return new Point(this.x + v.x, this.y + v.y)
-   }
-   clone(): Point {
-      return new Point(this.x, this.y)
-   }
-   // These "move" operations are the only operations that mutate points.
-   // If we have these operations, we can implement circuit manipulations such
-   // as dragging without having to mutate the circuit data structure itself.
-   moveTo(p: Point): void {
-      ;(this.x as number) = p.x
-      ;(this.y as number) = p.y
-   }
-   moveBy(v: Vector): void {
-      ;(this.x as number) += v.x
-      ;(this.y as number) += v.y
    }
 }
 
@@ -186,8 +235,8 @@ export class Line {
 // A line that extends infinitely in (only) one direction.
 export class Ray {
    readonly origin: Point
-   readonly direction: Vector
-   constructor(origin: Point, dir: Vector) {
+   readonly direction: Direction
+   constructor(origin: Point, dir: Direction) {
       this.origin = origin
       this.direction = dir
    }
@@ -312,64 +361,53 @@ function genericIntersection(
    } else return null
 }
 
-export type Padding = {
-   left: number
-   right: number
-   top: number
-   bottom: number
-}
-export class Box {
-   origin: Point
-   direction: Vector
-   padding: Padding
-   constructor(origin: Point, axis: Axis, padding: Padding) {
-      this.origin = origin
-      this.direction = axis
-      this.padding = padding
+export class BoundingBox {
+   x1: number
+   x2: number
+   y1: number
+   y2: number
+   rotation: Rotation
+   protected constructor(
+      x1: number,
+      x2: number,
+      y1: number,
+      y2: number,
+      rotation: Rotation
+   ) {
+      this.x1 = x1
+      this.x2 = x2
+      this.y1 = y1
+      this.y2 = y2
+      this.rotation = rotation
    }
-   static fromPaddedPoint(origin: Point, axis: Axis, padding: Padding): Box {
-      return new Box(origin, axis, padding)
+   static fromXY(x1: number, x2: number, y1: number, y2: number) {
+      return new BoundingBox(x1, x2, y1, y2, Rotation.zero)
    }
-   static fromPaddedSegment(segment: Segment, padding: Padding) {
-      let length = segment.length()
-      let pointPadding = {
-         left: padding.left + length / 2,
-         right: padding.right + length / 2,
-         top: padding.top,
-         bottom: padding.bottom,
-      }
-      return new Box(segment.pointAt(0.5), segment.axis, pointPadding)
+   displacedBy(displacement: Vector): BoundingBox {
+      return new BoundingBox(
+         this.x1 + displacement.x,
+         this.x2 + displacement.x,
+         this.y1 + displacement.y,
+         this.y2 + displacement.y,
+         this.rotation
+      )
    }
-   *corners() {
-      let cos = this.direction.x
-      let sin = this.direction.y
-      // top left
-      yield this.origin.displacedBy(
-         new Vector(
-            cos * -this.padding.left - sin * -this.padding.top,
-            sin * -this.padding.left + cos * -this.padding.top
-         )
+   // Rotate the bounding box around its implicitly-defined origin.
+   rotatedBy(rotation: Rotation): BoundingBox {
+      return new BoundingBox(
+         this.x1,
+         this.x2,
+         this.y1,
+         this.y2,
+         this.rotation.add(rotation)
       )
-      // top right
-      yield this.origin.displacedBy(
-         new Vector(
-            cos * this.padding.right - sin * -this.padding.top,
-            sin * this.padding.right + cos * -this.padding.top
-         )
-      )
-      // bottom right
-      yield this.origin.displacedBy(
-         new Vector(
-            cos * this.padding.right - sin * this.padding.bottom,
-            sin * this.padding.right + cos * this.padding.bottom
-         )
-      )
-      // bottom left
-      yield this.origin.displacedBy(
-         new Vector(
-            cos * -this.padding.left - sin * this.padding.bottom,
-            sin * -this.padding.left + cos * this.padding.bottom
-         )
-      )
+   }
+   *corners(): Generator<Point> {
+      let c = this.rotation.x
+      let s = this.rotation.y
+      yield new Point(c * this.x1 - s * this.y1, s * this.x1 + c * this.y1)
+      yield new Point(c * this.x2 - s * this.y1, s * this.x2 + c * this.y1)
+      yield new Point(c * this.x2 - s * this.y2, s * this.x2 + c * this.y2)
+      yield new Point(c * this.x1 - s * this.y2, s * this.x1 + c * this.y2)
    }
 }

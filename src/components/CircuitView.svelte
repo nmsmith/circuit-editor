@@ -1,7 +1,16 @@
 <script lang="ts">
    // Imports
    import type { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
-   import { Vector, Axis, Point, Line, Ray, Segment } from "~/shared/math"
+   import {
+      Vector,
+      Point,
+      Rotation,
+      Direction,
+      Axis,
+      Line,
+      Ray,
+      Segment,
+   } from "~/shared/math"
    import {
       mouseInCoordinateSystemOf,
       DefaultMap,
@@ -13,7 +22,6 @@
    import EndpointMarker from "~/components/lines/EndpointMarker.svelte"
    import RulerHTML from "~/components/Ruler.svelte"
    import { Ruler } from "~/components/Ruler.svelte"
-   import Padding from "~/components/Padding.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
    // Root element
@@ -94,7 +102,7 @@
       if (sqDistance < sqSnapRadius) {
          return { outcome: "snapped", point: target }
       } else if (sqDistance < sqEaseRadius) {
-         let easeDir = target.directionFrom(source)
+         let easeDir = target.directionFrom(source) as Direction
          let distance = Math.sqrt(sqDistance)
          return {
             outcome: "eased",
@@ -150,8 +158,8 @@
          let rejection = s.scaledBy(dot / sqLength).sub(p)
          let current
          if (alongAxis && rejection.sqLength() > 0.001) {
-            let forward = new Ray(point, alongAxis)
-            let backward = new Ray(point, alongAxis.scaledBy(-1))
+            let forward = new Ray(point, alongAxis.posDirection())
+            let backward = new Ray(point, alongAxis.negDirection())
             let intersection =
                forward.intersection(segment) || backward.intersection(segment)
             if (intersection) {
@@ -627,17 +635,17 @@
             for (let seg of segments) {
                if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
                let start = Point.zero.displacedBy(
-                  seg.start.displacementFrom(Point.zero).subRotation(selectAxis)
+                  seg.start.displacementFrom(Point.zero).relativeTo(selectAxis)
                )
                let end = Point.zero.displacedBy(
-                  seg.end.displacementFrom(Point.zero).subRotation(selectAxis)
+                  seg.end.displacementFrom(Point.zero).relativeTo(selectAxis)
                )
                let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
                let y = start.y <= end.y ? [start.y, end.y] : [end.y, start.y]
                info.set(seg, { segment: seg, x, y, visited: false })
             }
             let [front, back] =
-               s.point.displacementFrom(mouse).subRotation(selectAxis).y > 0
+               s.point.displacementFrom(mouse).relativeTo(selectAxis).y > 0
                   ? [0, 1]
                   : [1, 0]
             bulkHighlighted.add(s.segment)
@@ -1081,10 +1089,10 @@
             let snapInfo = new Map()
             for (let seg of segments) {
                let start = Point.zero.displacedBy(
-                  seg.start.displacementFrom(Point.zero).subRotation(snapAxis1)
+                  seg.start.displacementFrom(Point.zero).relativeTo(snapAxis1)
                )
                let end = Point.zero.displacedBy(
-                  seg.end.displacementFrom(Point.zero).subRotation(snapAxis1)
+                  seg.end.displacementFrom(Point.zero).relativeTo(snapAxis1)
                )
                let s = moveInfo.get0(seg.start)
                let e = moveInfo.get0(seg.end)
@@ -1163,7 +1171,7 @@
             } else if (Math.abs(minYSnap) >= snapRadius /* ease */) {
                minYSnap = Math.sign(minYSnap) * easeFn(Math.abs(minYSnap))
             }
-            return new Vector(minXSnap, minYSnap).addRotation(snapAxis1)
+            return new Vector(minXSnap, minYSnap).undoRelativeTo(snapAxis1)
          }
       }
    }
@@ -1227,21 +1235,16 @@
       element.setAttribute("x", point.x.toString())
       element.setAttribute("y", point.y.toString())
    }
+   let symbols = new Set<SymbolInstance>()
    let symbolInstanceUUID = 0
-   let currentSymbol: {
-      instance: SymbolInstance
-      grabOffset: Vector
-   } | null = null
+   let currentSymbol: { instance: SymbolInstance; grabOffset: Vector } | null =
+      null
    function spawnSymbol(
       kind: SymbolKind,
       grabOffset: Vector,
       event: MouseEvent
    ) {
       let svg = kind.svgTemplate.cloneNode(true) as SVGElement
-      moveElementToPoint(
-         svg,
-         mouseInCoordinateSystemOf(canvas, event).displacedBy(grabOffset)
-      )
       // Namespace the IDs (since IDs must be unique amongst all instances).
       let idSuffix = ":" + symbolInstanceUUID++
       for (let element of svg.querySelectorAll("*")) {
@@ -1257,15 +1260,18 @@
                element.setAttribute("xlink:href", xRef + idSuffix)
          }
       }
-      document.getElementById("symbol layer")?.appendChild(svg)
-      currentSymbol = {
-         instance: {
-            kind,
-            svg,
-            idSuffix,
-         },
-         grabOffset,
+      let instance = {
+         kind,
+         svg,
+         idSuffix,
+         position: mouseInCoordinateSystemOf(canvas, event).displacedBy(
+            grabOffset
+         ),
+         rotation: Rotation.zero,
       }
+      symbols.add(instance)
+      document.getElementById("symbol layer")?.appendChild(svg)
+      currentSymbol = { instance, grabOffset }
    }
    $: {
       if (currentSymbol) {

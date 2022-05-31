@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Tool, SymbolKind } from "~/shared/definitions"
-   import { Vector, Point } from "~/shared/math"
+   import { Vector, Point, BoundingBox } from "~/shared/math"
    import { mouseInCoordinateSystemOf } from "~/shared/utilities"
    import CircuitView from "~/components/CircuitView.svelte"
    // State
@@ -31,20 +31,29 @@
       let svgDocument = object.contentDocument
       if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
          let svg = svgDocument.firstChild as SVGElement
-         // Locate the snap points and bounding box of the symbol.
+         // Locate the bounding box and snap points of the symbol.
+         let boundingBox
          let snapPoints = new Set<Point>()
          for (let element of svg.querySelectorAll("*")) {
             if (element.hasAttribute("id")) {
-               if (element.id.endsWith("Snap")) {
+               if (element.id === "boundingBox") {
+                  let { x, y, width, height } = element.getBoundingClientRect()
+                  boundingBox = BoundingBox.fromXY(x, x + width, y, y + height)
+               } else if (element.id.endsWith("Snap")) {
                   let { x, y, width, height } = element.getBoundingClientRect()
                   snapPoints.add(new Point(x + width / 2, y + height / 2))
                }
             }
          }
+         // If the symbol has no defined bounding box, create a default one.
+         if (!boundingBox) {
+            let { x, y, width, height } = svg.getBoundingClientRect()
+            boundingBox = BoundingBox.fromXY(x, x + width, y, y + height)
+         }
          // Add the symbol to the app's list of symbols.
          symbolKinds = [
             ...symbolKinds,
-            { filePath, svgTemplate: svg, snapPoints },
+            { filePath, svgTemplate: svg, boundingBox, snapPoints },
          ]
       }
    }
