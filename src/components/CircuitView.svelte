@@ -1,6 +1,6 @@
 <script lang="ts">
    // Imports
-   import type { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
+   import { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
    import {
       Vector,
       Point,
@@ -116,6 +116,7 @@
       consider?: (p: Point) => boolean
    ): Point | undefined {
       let closest: { point: Point; sqDistance: number } | undefined
+      // Line endpoints
       for (let p of endpoints()) {
          if (consider && !consider(p)) continue
          let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
@@ -123,6 +124,17 @@
             !closest || current.sqDistance < closest.sqDistance
                ? current
                : closest
+      }
+      // Symbol attachment points
+      for (let symbol of symbols) {
+         for (let p of symbol.snapPoints) {
+            if (consider && !consider(p)) continue
+            let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
+            closest =
+               !closest || current.sqDistance < closest.sqDistance
+                  ? current
+                  : closest
+         }
       }
       return closest?.point
    }
@@ -305,8 +317,8 @@
                   ...ends.map((p) => p.distanceFrom(crossPoint as Point))
                )
                if (minDistance >= hopoverRadius + 4) {
-                  crossings.get0(seg1).set(seg2, crossPoint)
-                  crossings.get0(seg2).set(seg1, crossPoint)
+                  crossings.getOrCreate(seg1).set(seg2, crossPoint)
+                  crossings.getOrCreate(seg2).set(seg1, crossPoint)
                }
             }
          }
@@ -334,7 +346,7 @@
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
          let points = [segment.start, segment.end]
-         for (let [other, crossPoint] of crossings.get0(segment)) {
+         for (let [other, crossPoint] of crossings.read(segment)) {
             // Determine which segment is the "horizontal" one.
             let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
             let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
@@ -347,7 +359,7 @@
                hSegment = segReject < otherReject ? segment : other
             }
             // Determine which segment will hop over the other.
-            let type = crossingTypes.get0(segment).get0(other)
+            let type = crossingTypes.read(segment).read(other)
             if (
                (hSegment === segment && (type == "H up" || type == "H down")) ||
                (hSegment === other && (type == "V left" || type == "V right"))
@@ -381,12 +393,20 @@
       }
       // Determine the other glyphs that need to be drawn at endpoints.
       for (let [p, edges] of circuit) {
-         if (endpointGlyphs.get0(p) === "plug") {
+         if (endpointGlyphs.read(p) === "plug") {
             glyphsToDraw.add({ type: "plug", point: p })
          } else if (edges.size > 2) {
             glyphsToDraw.add({ type: "connection node", point: p })
          } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
             glyphsToDraw.add({ type: "endpoint marker", point: p })
+         }
+      }
+      // Determine the glyphs that need to be drawn at symbol attachment points.
+      for (let symbol of symbols) {
+         for (let p of symbol.snapPoints) {
+            if (highlighted.has(p)) {
+               glyphsToDraw.add({ type: "endpoint marker", point: p })
+            }
          }
       }
    }
@@ -400,15 +420,15 @@
       )
    }
    function straightAt(point: Point) {
-      let edges = circuit.get0(point)
+      let edges = circuit.read(point)
       if (edges.size !== 2) return false
       let axes = []
       for (let [_, { axis }] of edges) axes.push(axis)
       return axes[0] === axes[1]
    }
    function addSegment(segment: Segment) {
-      circuit.get0(segment.start).add([segment.end, segment])
-      circuit.get0(segment.end).add([segment.start, segment])
+      circuit.getOrCreate(segment.start).add([segment.end, segment])
+      circuit.getOrCreate(segment.end).add([segment.start, segment])
       segments.add(segment)
       circuitAxes.update(segment.axis, (c) => c + 1)
    }
@@ -416,7 +436,7 @@
    // "replaceSegment" should be used instead.)
    function deleteSegment(segment: Segment) {
       // Delete from "circuit"
-      let startEdges = circuit.get0(segment.start)
+      let startEdges = circuit.read(segment.start)
       for (let edge of startEdges) {
          if (edge[1] === segment) {
             startEdges.delete(edge)
@@ -424,7 +444,7 @@
             break
          }
       }
-      let endEdges = circuit.get0(segment.end)
+      let endEdges = circuit.read(segment.end)
       for (let edge of endEdges) {
          if (edge[1] === segment) {
             endEdges.delete(edge)
@@ -435,7 +455,7 @@
       // Delete from "segments"
       segments.delete(segment)
       // Delete from "circuitAxes"
-      let count = circuitAxes.get0(segment.axis)
+      let count = circuitAxes.read(segment.axis)
       if (count > 1) {
          circuitAxes.set(segment.axis, count - 1)
       } else {
@@ -455,9 +475,9 @@
       for (let seg of segs) {
          addSegment(seg)
          // Transfer the crossing types associated with the old segment.
-         crossingTypes.set(seg, crossingTypes.get0(segment).clone())
+         crossingTypes.set(seg, crossingTypes.read(segment).clone())
          for (let map of crossingTypes.values()) {
-            map.set(seg, map.get0(segment))
+            map.set(seg, map.read(segment))
          }
       }
       deleteSegment(segment)
@@ -470,7 +490,7 @@
             junctionsToConvert.add(thing.start)
             junctionsToConvert.add(thing.end)
          } else {
-            for (let [_, segment] of circuit.get0(thing)) {
+            for (let [_, segment] of circuit.read(thing)) {
                deleteSegment(segment)
                junctionsToConvert.add(segment.start)
                junctionsToConvert.add(segment.end)
@@ -478,7 +498,7 @@
          }
       }
       for (let junction of junctionsToConvert) {
-         if (circuit.has(junction) && circuit.get0(junction).size === 2)
+         if (circuit.has(junction) && circuit.read(junction).size === 2)
             convertToCrossing(junction)
       }
       selected = new ToggleSet()
@@ -511,17 +531,17 @@
          // Merge the crossing types of the old segments into the new one.
          // The merge strategy is: if segs[0] is currently crossing another
          // segment, use that crossing type. Otherwise, use seg[1]'s type.
-         let mergedTypes = crossingTypes.get0(segs[1]).clone()
-         let seg0Crossings = crossings.get0(segs[0])
-         let seg0Types = crossingTypes.get0(segs[0])
+         let mergedTypes = crossingTypes.read(segs[1]).clone()
+         let seg0Crossings = crossings.read(segs[0])
+         let seg0Types = crossingTypes.read(segs[0])
          for (let crossSegment of segments) {
             if (seg0Crossings.has(crossSegment)) {
-               mergedTypes.set(crossSegment, seg0Types.get0(crossSegment))
+               mergedTypes.set(crossSegment, seg0Types.read(crossSegment))
             }
          }
          crossingTypes.set(mergedSegment, mergedTypes)
          for (let [s, map] of crossingTypes) {
-            map.set(mergedSegment, mergedTypes.get0(s))
+            map.set(mergedSegment, mergedTypes.read(s))
          }
          // Get rid of the old segments.
          deleteSegment(segs[0])
@@ -529,8 +549,12 @@
       }
       if (crossing.length === 2) {
          // Set the crossing type of the crossing itself.
-         crossingTypes.get0(crossing[0]).set(crossing[1], crossingToggleSeq[0])
-         crossingTypes.get0(crossing[1]).set(crossing[0], crossingToggleSeq[0])
+         crossingTypes
+            .getOrCreate(crossing[0])
+            .set(crossing[1], crossingToggleSeq[0])
+         crossingTypes
+            .getOrCreate(crossing[1])
+            .set(crossing[0], crossingToggleSeq[0])
       }
       crossingTypes = crossingTypes
    }
@@ -541,11 +565,11 @@
    // If the junction is an X-junction, or a pair of colinear segments, return
    // each pair of colinear segments. Otherwise, return nothing.
    function partsOfJunction(junction: Point): Set<[Segment, Segment]> {
-      let edges = circuit.get0(junction)
+      let edges = circuit.read(junction)
       if (edges.size !== 2 && edges.size !== 4) return new Set()
       let axes = new DefaultMap<Axis, OutgoingSegment[]>(() => [])
       for (let edge of edges) {
-         axes.get0(edge[1].axis).push(edge)
+         axes.getOrCreate(edge[1].axis).push(edge)
       }
       let pairs = new Set<[Segment, Segment]>()
       for (let edgePair of axes.values()) {
@@ -567,7 +591,7 @@
    }
    function axesAtPoint(point: Point): Axis[] {
       let axes: Axis[] = []
-      for (let [_, segment] of circuit.get0(point))
+      for (let [_, segment] of circuit.read(point))
          if (!axes.includes(segment.axis)) axes.push(segment.axis)
       return axes
    }
@@ -723,7 +747,7 @@
       for (let a of snapAxes) rulers.add(new Ruler(start, a, "ray"))
       // Create a ruler for each edge incident to the starting vertex (if any).
       if (circuit.has(start)) {
-         for (let [_, seg] of circuit.get0(start)) {
+         for (let [_, seg] of circuit.read(start)) {
             if (!snapAxes.includes(seg.axis)) {
                rulers.add(new Ruler(start, seg.axis, "ray"))
             }
@@ -772,7 +796,7 @@
                let maybeAxis = Axis.fromVector(point.displacementFrom(start))
                if (!maybeAxis) return false
                let drawAxis = findExistingAxis(maybeAxis)
-               for (let [other, { axis }] of circuit.get0(point)) {
+               for (let [other, { axis }] of circuit.read(point)) {
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === drawAxis &&
@@ -823,7 +847,7 @@
       endMove()
       let segment = draw.segment
       function isAcceptableTEMP() {
-         for (let [other, s] of circuit.get0(draw!.segment.start)) {
+         for (let [other, s] of circuit.read(draw!.segment.start)) {
             if (
                s !== segment &&
                s.axis === draw!.segment.axis &&
@@ -860,7 +884,7 @@
       } else {
          let _
          let axis = Axis.horizontal
-         for ([_, { axis }] of circuit.get0(thingGrabbed)) {
+         for ([_, { axis }] of circuit.read(thingGrabbed)) {
             // Prefer horizontal and vertical axes.
             if (axis === Axis.horizontal || axis === Axis.vertical) break
          }
@@ -887,7 +911,7 @@
          let end = Point.zero
          for (end of move.points) {
          }
-         let edges = circuit.get0(end)
+         let edges = circuit.read(end)
          if (edges.size === 1) {
             let [start, existingSegment] = [Point.zero, Segment.zero]
             for ([start, existingSegment] of edges) {
@@ -929,9 +953,9 @@
          if (draw && draw.mode === "strafing") {
             // Try snapping the moved endpoint to a nearby Point.
             function isAcceptableTEMP(point: Point) {
-               if (moveInfo.get0(point).moveType !== "no move") return false
+               if (moveInfo.read(point).moveType !== "no move") return false
                let start = draw!.segment.start
-               for (let [other, { axis }] of circuit.get0(point)) {
+               for (let [other, { axis }] of circuit.read(point)) {
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === draw!.segment.axis &&
@@ -985,7 +1009,7 @@
 
          function movePoint(p: Point, vector: Vector) {
             moveInfo.set(p, { moveType: "full move", vector })
-            p.moveTo(move!.originalPositions.get0(p).displacedBy(vector))
+            p.moveTo(move!.originalPositions.read(p).displacedBy(vector))
             circuit = circuit
             segments = segments
          }
@@ -1012,7 +1036,7 @@
                }
                // If we weren't able to alter the length of the segment being
                // drawn, resort to a special move.
-               if (moveInfo.get0(draw.segment.start).moveType === "full move") {
+               if (moveInfo.read(draw.segment.start).moveType === "full move") {
                   moveInfo.clear()
                   specialMove()
                }
@@ -1026,8 +1050,8 @@
             for (let point of endpoints()) {
                point.moveTo(
                   move!.originalPositions
-                     .get0(point)
-                     .displacedBy(moveInfo.get0(point).vector)
+                     .read(point)
+                     .displacedBy(moveInfo.read(point).vector)
                )
             }
             circuit = circuit
@@ -1038,7 +1062,7 @@
             edgeAxis: Axis | null, // The axis of the edge we just followed.
             moveVector: Vector // The movement being propagated.
          ) {
-            let current = moveInfo.get0(currentPoint)
+            let current = moveInfo.getOrCreate(currentPoint)
             let axes = axesAtPoint(currentPoint)
             if (edgeAxis && axes.length <= 2 && current.moveType == "no move") {
                // Keep only one component of the movement vector. This allows
@@ -1062,10 +1086,10 @@
                current.moveType = "full move"
                current.vector = moveVector
             }
-            for (let [nextPoint, nextSegment] of circuit.get0(currentPoint)) {
+            for (let [nextPoint, nextSegment] of circuit.read(currentPoint)) {
                let nextEdgeAxis = nextSegment.axis
-               let next = moveInfo.get0(nextPoint)
-               let loneEdge = circuit.get0(nextPoint).size === 1
+               let next = moveInfo.getOrCreate(nextPoint)
+               let loneEdge = circuit.read(nextPoint).size === 1
                if (loneEdge && next.moveType !== "full move") {
                   next.moveType = current.moveType
                   next.vector = current.vector
@@ -1094,8 +1118,8 @@
                let end = Point.zero.displacedBy(
                   seg.end.displacementFrom(Point.zero).relativeTo(snapAxis1)
                )
-               let s = moveInfo.get0(seg.start)
-               let e = moveInfo.get0(seg.end)
+               let s = moveInfo.read(seg.start)
+               let e = moveInfo.read(seg.end)
                let sMovesX, sMovesY, eMovesX, eMovesY
                sMovesX = sMovesY = s.moveType === "full move"
                if (s.moveType instanceof Axis) {
@@ -1264,7 +1288,7 @@
          grabOffset
       )
       let geometry = new Rectangle(initialPos, Rotation.zero, kind.boundingBox)
-      let instance = { kind, svg, idSuffix, geometry }
+      let instance = new SymbolInstance(kind, svg, idSuffix, geometry)
       symbols.add(instance)
       document.getElementById("symbol layer")?.appendChild(svg)
       currentSymbol = { instance, grabOffset }
@@ -1272,7 +1296,7 @@
    $: {
       if (currentSymbol) {
          let p = mouse.displacedBy(currentSymbol.grabOffset)
-         currentSymbol.instance.geometry.position = p
+         currentSymbol.instance.moveTo(p)
          moveElementToPoint(currentSymbol.instance.svg, p)
       }
    }
@@ -1374,7 +1398,7 @@
          case "hydraulic line": {
             let click = closestClickPoint(mouse)
             if (click.object instanceof Point) {
-               if (endpointGlyphs.get0(click.object) === "default") {
+               if (endpointGlyphs.read(click.object) === "default") {
                   endpointGlyphs.set(click.object, "plug")
                } else {
                   endpointGlyphs.set(click.object, "default")
@@ -1387,11 +1411,15 @@
             } else if (click.object /* instanceof Crossing */) {
                // Change the crossing glyph.
                let { seg1, seg2 } = click.object
-               let oldType = crossingTypes.get0(seg1).get0(seg2)
+               let oldType = crossingTypes.read(seg1).read(seg2)
                let i = crossingToggleSeq.indexOf(oldType) + 1
                if (i < crossingToggleSeq.length) {
-                  crossingTypes.get0(seg1).set(seg2, crossingToggleSeq[i])
-                  crossingTypes.get0(seg2).set(seg1, crossingToggleSeq[i])
+                  crossingTypes
+                     .getOrCreate(seg1)
+                     .set(seg2, crossingToggleSeq[i])
+                  crossingTypes
+                     .getOrCreate(seg2)
+                     .set(seg1, crossingToggleSeq[i])
                   crossingTypes = crossingTypes
                } else {
                   convertToJunction(click.object)

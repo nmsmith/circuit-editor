@@ -309,24 +309,6 @@ export class Segment {
          this.end.displacementFrom(this.start).scaledBy(frac)
       )
    }
-   // Returns the endpoints of the segment, plus the specified number of
-   // interior points (equally spaced).
-   *points(interiorPoints: number): Generator<Point> {
-      yield this.start
-      if (interiorPoints > 0) {
-         let d = this.end
-            .displacementFrom(this.start)
-            .scaledBy(1 / (interiorPoints + 1))
-         for (
-            let i = 0, p = this.start.displacedBy(d);
-            i < interiorPoints;
-            ++i, p = p.displacedBy(d)
-         ) {
-            yield p
-         }
-      }
-      yield this.end
-   }
 }
 
 // If the flag is false, compute the intersection between two line segments.
@@ -394,20 +376,25 @@ export class Rectangle {
       this.rotation = rotation
       this.range = range
    }
-   private toLocalCoordinates(point: Point): Point {
+   toRectCoordinates(point: Point): Point {
       return Point.zero.displacedBy(
          point
             .displacementFrom(this.position)
             .rotatedBy(this.rotation.scaledBy(-1))
       )
    }
+   fromRectCoordinates(point: Point): Point {
+      return this.position.displacedBy(
+         point.displacementFrom(Point.zero).rotatedBy(this.rotation)
+      )
+   }
    contains(point: Point): boolean {
-      let p = this.toLocalCoordinates(point)
+      let p = this.toRectCoordinates(point)
       let { x, y } = this.range
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
    }
    sqDistanceFrom(point: Point): number {
-      let p = this.toLocalCoordinates(point)
+      let p = this.toRectCoordinates(point)
       let { x, y } = this.range
       let dx = p.x < x.low ? p.x - x.low : p.x > x.high ? p.x - x.high : 0
       let dy = p.y < y.low ? p.y - y.low : p.y > y.high ? p.y - y.high : 0
@@ -418,13 +405,11 @@ export class Rectangle {
    }
    corners(): Point[] {
       let { x, y } = this.range
-      let c = this.rotation.x
-      let s = this.rotation.y
       return [
-         new Vector(c * x.low - s * y.low, s * x.low + c * y.low),
-         new Vector(c * x.high - s * y.low, s * x.high + c * y.low),
-         new Vector(c * x.high - s * y.high, s * x.high + c * y.high),
-         new Vector(c * x.low - s * y.high, s * x.low + c * y.high),
-      ].map(this.position.displacedBy)
+         new Point(x.low, y.low),
+         new Point(x.high, y.low),
+         new Point(x.high, y.high),
+         new Point(x.low, y.high),
+      ].map(this.fromRectCoordinates)
    }
 }

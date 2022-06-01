@@ -18,17 +18,31 @@ export class DefaultMap<K, V> extends Map<K, V> {
       super(entries)
       this.defaultValue = defaultValue
    }
-   // Special version of Map.get() that returns the default value
-   // if the entry doesn't exist.
-   get0(key: K): V {
-      if (!this.has(key)) {
-         this.set(key, this.defaultValue())
+   // A variant of Map.get() which is intended to be used for
+   // READ-ONLY access. If the entry doesn't exist, it returns
+   // the default value, but it DOESN'T initialize the entry.
+   // (Therefore, mutating the return value doesn't change the Map.)
+   read(key: K): V {
+      if (this.has(key)) {
+         return super.get(key) as V
+      } else {
+         return this.defaultValue()
       }
-      return super.get(key) as V
+   }
+   // A variant of Map.get() that initializes the entry with the
+   // default value if it didn't already exist.
+   getOrCreate(key: K): V {
+      if (this.has(key)) {
+         return super.get(key) as V
+      } else {
+         let v = this.defaultValue()
+         this.set(key, v)
+         return v
+      }
    }
    // A useful new method
    update(key: K, f: (existingValue: V) => V): void {
-      this.set(key, f(this.get0(key)))
+      this.set(key, f(this.getOrCreate(key)))
    }
    clone(): DefaultMap<K, V> {
       return new DefaultMap(this.defaultValue, this)

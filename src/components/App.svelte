@@ -33,7 +33,7 @@
          let svg = svgDocument.firstChild as SVGElement
          // Locate the bounding box and snap points of the symbol.
          let boundingBox
-         let snapPoints = new Set<Point>()
+         let snapPoints = []
          for (let element of svg.querySelectorAll("*")) {
             if (element.hasAttribute("id")) {
                if (element.id === "boundingBox") {
@@ -44,7 +44,7 @@
                   )
                } else if (element.id.endsWith("Snap")) {
                   let { x, y, width, height } = element.getBoundingClientRect()
-                  snapPoints.add(new Point(x + width / 2, y + height / 2))
+                  snapPoints.push(new Point(x + width / 2, y + height / 2))
                }
             }
          }
