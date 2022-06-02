@@ -10,7 +10,8 @@
       Axis,
       Segment,
       Crossing,
-      Rectangle,
+      Range1D,
+      Range2D,
       ClosenessResult,
       closestTo,
       closestSegmentTo,
@@ -133,14 +134,26 @@
          return closest
       }
    }
-   function closestAttachPoint(point: Point): ClosenessResult<Point | Segment> {
-      return closestNearTo(point, endpoints()) || closestNearTo(point, segments)
+   type Attachable = Point | Segment // Something a line can be attached to.
+   type Toggleable = Point | Segment | Crossing
+   type Grabbable = Point | Segment | SymbolInstance // Grabbed or selected.
+   type Highlightable = Attachable | Toggleable | Grabbable
+   function closestAttachable(point: Point): ClosenessResult<Attachable> {
+      return (
+         closestNearTo(point, endpoints(), ports()) ||
+         closestNearTo(point, segments)
+      )
    }
-   function closestClickPoint(
-      point: Point
-   ): ClosenessResult<Point | Segment | Crossing> {
+   function closestToggleable(point: Point): ClosenessResult<Toggleable> {
       return (
          closestNearTo<Point | Crossing>(point, endpoints(), crossings()) ||
+         closestNearTo(point, segments)
+      )
+   }
+   function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
+      return (
+         closestNearTo(point, endpoints()) ||
+         closestNearTo(point, symbols) ||
          closestNearTo(point, segments)
       )
    }
@@ -152,6 +165,10 @@
    type Circuit = DefaultMap<Point, Set<OutgoingSegment>>
    let circuit: Circuit = new DefaultMap(() => new Set())
    let endpoints = () => circuit.keys()
+   function* endpointsAndPorts() {
+      for (let p of endpoints()) yield p
+      for (let p of ports()) yield p
+   }
    let segments = new Set<Segment>() // for direct access to circuit segments
    // We store the multiplicity of every axis in the circuit, so that if all
    // the segments aligned to a given axis are removed, the axis is forgotten.
@@ -280,7 +297,7 @@
       }
       // Determine the glyphs that need to be drawn at symbol attachment points.
       for (let symbol of symbols) {
-         for (let p of symbol.snapPoints) {
+         for (let p of symbol.ports) {
             if (highlighted.has(p)) {
                glyphsToDraw.add({ type: "endpoint marker", point: p })
             }
@@ -362,16 +379,19 @@
    function deleteSelected() {
       let junctionsToConvert = new Set<Point>()
       for (let thing of selected) {
-         if (thing instanceof Segment) {
-            deleteSegment(thing)
-            junctionsToConvert.add(thing.start)
-            junctionsToConvert.add(thing.end)
-         } else {
+         if (thing instanceof Point) {
+            // Delete all neighbouring segments.
             for (let [_, segment] of circuit.read(thing)) {
                deleteSegment(segment)
                junctionsToConvert.add(segment.start)
                junctionsToConvert.add(segment.end)
             }
+         } else if (thing instanceof Segment) {
+            deleteSegment(thing)
+            junctionsToConvert.add(thing.start)
+            junctionsToConvert.add(thing.end)
+         } else if (thing instanceof SymbolInstance) {
+            symbols.delete(thing)
          }
       }
       for (let junction of junctionsToConvert) {
@@ -480,14 +500,14 @@
          cursor = "grabbing"
       } else {
          cursor = "auto"
-         let attach = closestAttachPoint(mouse)
-         if (tool === "select & move" && attach && !shift && !alt && !cmd) {
+         let grab = closestGrabbable(mouse)
+         if (tool === "select & move" && grab && !shift && !alt && !cmd) {
             cursor = waitingForDrag ? "grabbing" : "grab"
          }
       }
    }
    let waitingForDrag: Point | null = null
-   let highlighted: Set<Point | Segment>
+   let highlighted: Set<Highlightable>
    $: {
       highlighted = new Set()
       if (draw?.endObject instanceof Segment) {
@@ -497,15 +517,15 @@
       } else if (bulkHighlighted.size > 0) {
          for (let s of bulkHighlighted) highlighted.add(s)
       } else if (tool === "select & move" && !move) {
-         let attach = closestAttachPoint(mouse)
-         if (attach) highlighted.add(attach.object)
+         let grab = closestGrabbable(mouse)
+         if (grab) highlighted.add(grab.object)
       } else if (tool === "hydraulic line" && !move) {
-         let click = closestClickPoint(mouse)
-         if (click) {
-            if (click.object instanceof Crossing) {
-               highlighted.add(click.closestPart)
+         let thing = closestAttachable(mouse) || closestToggleable(mouse)
+         if (thing) {
+            if (thing.object instanceof Crossing) {
+               highlighted.add(thing.closestPart)
             } else {
-               highlighted.add(click.object)
+               highlighted.add(thing.object)
             }
          }
       }
@@ -571,7 +591,7 @@
          bulkHighlighted = new Set()
       }
    }
-   let selected: ToggleSet<Point | Segment> = new ToggleSet()
+   let selected: ToggleSet<Grabbable> = new ToggleSet()
    function selectedPoints(): Set<Point> {
       let s = new Set<Point>()
       for (let thing of selected) {
@@ -581,6 +601,8 @@
             s.add(thing.start)
             s.add(thing.end)
          }
+         // TODO: Remove the "move.points" abstraction entirely. It doesn't
+         // make sense now that the move() operation moves Symbols too!
       }
       return s
    }
@@ -588,7 +610,7 @@
       mode: "strafing" | "fixed-axis rotation" | "free rotation"
       segment: Segment
       segmentIsNew: boolean
-      endObject?: Point | Segment
+      endObject?: Attachable
    } | null = null
    let move: {
       points: Set<Point>
@@ -601,7 +623,7 @@
    let rectSelect: {
       start: Point
       end: Point
-      highlighted: Set<Point | Segment>
+      highlighted: Set<Grabbable>
    } | null = null
 
    function beginDraw(start: Point, axis: Axis) {
@@ -668,7 +690,7 @@
             }
             let closest = closestNearTo(
                mouse,
-               Array.from(endpoints()).filter(isAcceptableTEMP)
+               Array.from(endpointsAndPorts()).filter(isAcceptableTEMP)
             )
             let maybeAxis = Axis.fromVector(
                closest
@@ -739,7 +761,7 @@
       if (draw.segmentIsNew) selected = new ToggleSet()
       draw = null
    }
-   function beginMove(thingGrabbed: Point | Segment, pointGrabbed: Point) {
+   function beginMove(thingGrabbed: Grabbable, pointGrabbed: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
       let axisGrabbed
       if (thingGrabbed instanceof Segment) {
@@ -831,7 +853,7 @@
             }
             let closest = closestNearTo(
                draw.segment.end,
-               Array.from(endpoints()).filter(isAcceptableTEMP)
+               Array.from(endpointsAndPorts()).filter(isAcceptableTEMP)
             )
             if (closest) {
                snappedToPoint = true
@@ -1075,18 +1097,13 @@
       if (rectSelect) {
          rectSelect.end = mouse
          rectSelect.highlighted = new Set()
-         let x1 = Math.min(rectSelect.start.x, rectSelect.end.x)
-         let x2 = Math.max(rectSelect.start.x, rectSelect.end.x)
-         let y1 = Math.min(rectSelect.start.y, rectSelect.end.y)
-         let y2 = Math.max(rectSelect.start.y, rectSelect.end.y)
+         let range = Range2D.fromCorners(rectSelect.start, rectSelect.end)
+         // Highlight segments and their endpoints.
          for (let [start, edges] of circuit) {
-            function inRange(x: number, low: number, high: number) {
-               return low <= x && x <= high
-            }
-            if (inRange(start.x, x1, x2) && inRange(start.y, y1, y2)) {
+            if (range.contains(start)) {
                let segmentAdded = false
                for (let [end, segment] of edges) {
-                  if (inRange(end.x, x1, x2) && inRange(end.y, y1, y2)) {
+                  if (range.contains(end)) {
                      rectSelect.highlighted.add(segment)
                      segmentAdded = true
                   }
@@ -1096,11 +1113,21 @@
                }
             }
          }
-         // Don't highlight points if their segment is already selected.
+         // Don't highlight endpoints if their segment is already selected.
          for (let thing of selected) {
             if (thing instanceof Segment) {
                rectSelect.highlighted.delete(thing.start)
                rectSelect.highlighted.delete(thing.end)
+            }
+         }
+         for (let symbol of symbols) {
+            // Highlight enclosed symbols.
+            if (symbol.svgCorners().every((c) => range.contains(c))) {
+               rectSelect.highlighted.add(symbol)
+            }
+            // Don't highlight endpoints which connect to ports.
+            for (let port of symbol.ports) {
+               rectSelect.highlighted.delete(port)
             }
          }
       }
@@ -1122,37 +1149,18 @@
       element.setAttribute("y", point.y.toString())
    }
    let symbols = new Set<SymbolInstance>()
-   let symbolInstanceUUID = 0
+   function* ports() {
+      for (let symbol of symbols) {
+         for (let port of symbol.ports) yield port
+      }
+   }
    let currentSymbol: { instance: SymbolInstance; grabOffset: Vector } | null =
       null
-   function spawnSymbol(
-      kind: SymbolKind,
-      grabOffset: Vector,
-      event: MouseEvent
-   ) {
-      let svg = kind.svgTemplate.cloneNode(true) as SVGElement
-      // Namespace the IDs (since IDs must be unique amongst all instances).
-      let idSuffix = ":" + symbolInstanceUUID++
-      for (let element of svg.querySelectorAll("*")) {
-         if (element.hasAttribute("id")) {
-            element.setAttribute("id", element.id + idSuffix)
-         }
-         if (element.nodeName === "use") {
-            let ref = element.getAttribute("href")
-            let xRef = element.getAttribute("xlink:href")
-            if (ref && ref[0] === "#")
-               element.setAttribute("href", ref + idSuffix)
-            else if (xRef && xRef[0] === "#")
-               element.setAttribute("xlink:href", xRef + idSuffix)
-         }
-      }
-      let initialPos = mouseInCoordinateSystemOf(canvas, event).displacedBy(
-         grabOffset
-      )
-      let geometry = new Rectangle(initialPos, Rotation.zero, kind.boundingBox)
-      let instance = new SymbolInstance(kind, svg, idSuffix, geometry)
+   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
+      let initPos = mouseInCoordinateSystemOf(canvas, e).displacedBy(grabOffset)
+      let instance = new SymbolInstance(kind, initPos, Rotation.zero)
       symbols.add(instance)
-      document.getElementById("symbol layer")?.appendChild(svg)
+      document.getElementById("symbol layer")?.appendChild(instance.svg)
       currentSymbol = { instance, grabOffset }
    }
    $: {
@@ -1160,6 +1168,7 @@
          let p = mouse.displacedBy(currentSymbol.grabOffset)
          currentSymbol.instance.moveTo(p)
          moveElementToPoint(currentSymbol.instance.svg, p)
+         symbols = symbols
       }
    }
    function shiftDown() {}
@@ -1187,15 +1196,15 @@
       leftMouseShouldBeDown = true
       switch (tool) {
          case "select & move": {
-            let attach = closestAttachPoint(clickPoint)
-            if (attach && !shift && !alt) {
+            let grab = closestGrabbable(clickPoint)
+            if (grab && !shift && !alt) {
                if (cmd) {
                   selected.clear()
                   for (let s of bulkHighlighted) selected.add(s)
-               } else if (!selected.has(attach.object)) {
-                  selected = new ToggleSet([attach.object])
+               } else if (!selected.has(grab.object)) {
+                  selected = new ToggleSet([grab.object])
                }
-               beginMove(attach.object, attach.closestPart)
+               beginMove(grab.object, grab.closestPart)
             } else waitingForDrag = clickPoint
             break
          }
@@ -1223,7 +1232,7 @@
                      Math.abs(d.x) >= Math.abs(d.y)
                         ? Axis.horizontal
                         : Axis.vertical
-                  let attach = closestAttachPoint(waitingForDrag)
+                  let attach = closestAttachable(waitingForDrag)
                   if (attach) {
                      if (attach.object instanceof Segment)
                         cutSegment(attach.object, attach.closestPart)
@@ -1245,35 +1254,35 @@
    function leftMouseClicked() {
       switch (tool) {
          case "select & move": {
-            let attach = closestAttachPoint(mouse)
-            if (!attach) selected.clear()
+            let grab = closestGrabbable(mouse)
+            if (!grab) selected.clear()
             else if (shift && cmd)
                for (let s of bulkHighlighted) selected.add(s)
-            else if (shift && !cmd) selected.toggle(attach.object)
+            else if (shift && !cmd) selected.toggle(grab.object)
             else if (alt && cmd)
                for (let s of bulkHighlighted) selected.delete(s)
-            else if (alt && !cmd) selected.delete(attach.object)
-            else selected = new ToggleSet([attach.object])
+            else if (alt && !cmd) selected.delete(grab.object)
+            else selected = new ToggleSet([grab.object])
             selected = selected
             break
          }
          case "hydraulic line": {
-            let click = closestClickPoint(mouse)
-            if (!click) break
-            if (click.object instanceof Point) {
-               if (endpointGlyphs.read(click.object) === "default") {
-                  endpointGlyphs.set(click.object, "plug")
+            let toggle = closestToggleable(mouse)
+            if (!toggle) break
+            if (toggle.object instanceof Point) {
+               if (endpointGlyphs.read(toggle.object) === "default") {
+                  endpointGlyphs.set(toggle.object, "plug")
                } else {
-                  endpointGlyphs.set(click.object, "default")
-                  convertToCrossing(click.object)
+                  endpointGlyphs.set(toggle.object, "default")
+                  convertToCrossing(toggle.object)
                }
                endpointGlyphs = endpointGlyphs
-            } else if (click.object instanceof Segment) {
-               cutSegment(click.object, click.closestPart)
-               endpointGlyphs.set(click.closestPart, "plug")
-            } else if (click.object instanceof Crossing) {
+            } else if (toggle.object instanceof Segment) {
+               cutSegment(toggle.object, toggle.closestPart)
+               endpointGlyphs.set(toggle.closestPart, "plug")
+            } else if (toggle.object instanceof Crossing) {
                // Change the crossing glyph.
-               let { seg1, seg2 } = click.object
+               let { seg1, seg2 } = toggle.object
                let oldType = crossingTypes.read(seg1).read(seg2)
                let i = crossingToggleSeq.indexOf(oldType) + 1
                if (i < crossingToggleSeq.length) {
@@ -1285,7 +1294,7 @@
                      .set(seg1, crossingToggleSeq[i])
                   crossingTypes = crossingTypes
                } else {
-                  convertToJunction(click.object)
+                  convertToJunction(toggle.object)
                }
             }
             break
@@ -1318,6 +1327,21 @@
       if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
    }}
 >
+   <!-- Symbol highlight & selection layer -->
+   <g>
+      {#each [...symbols] as symbol}
+         {@const c = symbol.svgCorners()}
+         {#if highlighted.has(symbol) || selected.has(symbol)}
+            <polygon
+               class={selected.has(symbol)
+                  ? "symbolSelectLight"
+                  : "symbolHighlight"}
+               points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
+                  .y} {c[3].x},{c[3].y}"
+            />
+         {/if}
+      {/each}
+   </g>
    <!-- Segment highlight layer -->
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
@@ -1388,8 +1412,6 @@
          {/if}
       {/each}
    </g>
-   <!-- Symbol highlight & selection layer -->
-   <g />
    <!-- Symbol layer -->
    <g id="symbol layer" />
    <!-- HUD highlight layer -->
@@ -1424,5 +1446,15 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
+   }
+   .symbolHighlight {
+      fill: rgb(0, 234, 255);
+      stroke: rgb(0, 234, 255);
+      stroke-width: 8px;
+   }
+   .symbolSelectLight {
+      fill: yellow;
+      stroke: yellow;
+      stroke-width: 8px;
    }
 </style>

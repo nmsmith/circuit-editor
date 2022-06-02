@@ -6,9 +6,9 @@
    $: [x, y] = [position.x, position.y]
 </script>
 
-<path
+<polygon
    class={renderType}
-   d="M{x - w},{y} L{x},{y - w} L{x + w},{y} L{x},{y + w} Z"
+   points="{x - w},{y} {x},{y - w} {x + w},{y} {x},{y + w}"
 />
 
 <style>

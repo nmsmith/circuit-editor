@@ -401,28 +401,35 @@ export class Range1D {
 export class Range2D {
    readonly x: Range1D
    readonly y: Range1D
-   constructor(x: Range1D, y: Range1D) {
+   protected constructor(x: Range1D, y: Range1D) {
       this.x = x
       this.y = y
+   }
+   static fromCorners(p1: Point, p2: Point) {
+      return new Range2D(new Range1D(p1.x, p2.x), new Range1D(p1.y, p2.y))
+   }
+   static fromXY(x: Range1D, y: Range1D) {
+      return new Range2D(x, y)
+   }
+   contains(point: Point) {
+      return (
+         this.x.low <= point.x &&
+         point.x <= this.x.high &&
+         this.y.low <= point.y &&
+         point.y <= this.y.high
+      )
    }
 }
 
 export class Rectangle extends Object2D {
-   position: Point
-   rotation: Rotation
-   readonly range: Range2D
+   protected position: Point
+   protected rotation: Rotation
+   protected readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
       super()
       this.position = position
       this.rotation = rotation
       this.range = range
-   }
-   partClosestTo(point: Point): Point {
-      let p = this.toRectCoordinates(point)
-      let { x, y } = this.range
-      let partX = p.x < x.low ? x.low : p.x > x.high ? x.high : p.x
-      let partY = p.y < y.low ? y.low : p.y > y.high ? y.high : p.y
-      return new Point(partX, partY)
    }
    toRectCoordinates(point: Point): Point {
       return Point.zero.displacedBy(
@@ -436,19 +443,17 @@ export class Rectangle extends Object2D {
          point.displacementFrom(Point.zero).rotatedBy(this.rotation)
       )
    }
+   partClosestTo(point: Point): Point {
+      let p = this.toRectCoordinates(point)
+      let { x, y } = this.range
+      let partX = p.x < x.low ? x.low : p.x > x.high ? x.high : p.x
+      let partY = p.y < y.low ? y.low : p.y > y.high ? y.high : p.y
+      return this.fromRectCoordinates(new Point(partX, partY))
+   }
    contains(point: Point): boolean {
       let p = this.toRectCoordinates(point)
       let { x, y } = this.range
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
-   }
-   corners(): Point[] {
-      let { x, y } = this.range
-      return [
-         new Point(x.low, y.low),
-         new Point(x.high, y.low),
-         new Point(x.high, y.high),
-         new Point(x.low, y.high),
-      ].map(this.fromRectCoordinates)
    }
 }
 
