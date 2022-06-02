@@ -2,14 +2,18 @@
    // Imports
    import { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
    import {
+      Object2D,
       Vector,
       Point,
       Rotation,
       Direction,
       Axis,
-      Ray,
       Segment,
+      Crossing,
       Rectangle,
+      ClosenessResult,
+      closestTo,
+      closestSegmentTo,
    } from "~/shared/math"
    import {
       mouseInCoordinateSystemOf,
@@ -20,8 +24,6 @@
    import Hopover from "~/components/lines/Hopover.svelte"
    import ConnectionPoint from "~/components/lines/ConnectionPoint.svelte"
    import EndpointMarker from "~/components/lines/EndpointMarker.svelte"
-   import RulerHTML from "~/components/Ruler.svelte"
-   import { Ruler } from "~/components/Ruler.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
    // Root element
@@ -78,9 +80,6 @@
       Axis.fromAngle(0.125 * tau), // 45 degrees
       Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
-   function isProximal(source: Point, target: Point): boolean {
-      return source.sqDistanceFrom(target) < sqSnapRadius
-   }
    // ✨ A magical easing function for aesthetically-pleasing snapping. We
    // displace the source from its true position as it approaches the target.
    function easeFn(distance: number) {
@@ -110,166 +109,40 @@
          }
       } else return { outcome: "no easing", point: source }
    }
-   // Find the closest endpoint to the given point (if any).
-   function closestEndpoint(
+   function closestNearTo<T extends Object2D>(
       point: Point,
-      consider?: (p: Point) => boolean
-   ): Point | undefined {
-      let closest: { point: Point; sqDistance: number } | undefined
-      // Line endpoints
-      for (let p of endpoints()) {
-         if (consider && !consider(p)) continue
-         let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
-         closest =
-            !closest || current.sqDistance < closest.sqDistance
-               ? current
-               : closest
+      ...objectSets: Iterable<T>[]
+   ): ClosenessResult<T> {
+      let closest = closestTo(point, ...objectSets)
+      if (closest && closest.closestPart.sqDistanceFrom(point) < sqSnapRadius) {
+         return closest
       }
-      // Symbol attachment points
-      for (let symbol of symbols) {
-         for (let p of symbol.snapPoints) {
-            if (consider && !consider(p)) continue
-            let current = { point: p, sqDistance: p.sqDistanceFrom(point) }
-            closest =
-               !closest || current.sqDistance < closest.sqDistance
-                  ? current
-                  : closest
-         }
-      }
-      return closest?.point
    }
-   function closestProximalEndpoint(
+   function closestSegmentNearTo(
       point: Point,
-      consider?: (p: Point) => boolean
-   ): Point | undefined {
-      let endpoint = closestEndpoint(point, consider)
-      if (endpoint && isProximal(point, endpoint)) return endpoint
-   }
-   // Find the closest segment to the given point (if any).
-   function closestSegment(
-      point: Point,
-      alongAxis?: Axis,
-      consider?: (s: Segment) => boolean
-   ): { segment: Segment; point: Point } | undefined {
-      let closest:
-         | { segment: Segment; point: Point; sqDistance: number }
-         | undefined
-      for (let segment of segments) {
-         if (alongAxis && segment.axis === alongAxis) continue
-         if (consider && !consider(segment)) continue
-         let p = point.displacementFrom(segment.start)
-         let s = segment.end.displacementFrom(segment.start)
-         let sqLength = s.sqLength()
-         if (sqLength === 0) continue
-         let dot = p.dot(s)
-         // Only consider the segment if the point's projection lies on it.
-         // This occurs iff the dot product is in [0, sqLength).
-         // To avoid intersections absurdly close to the ends, we add a buffer.
-         let buffer = alongAxis ? (halfGap - 0.001) * s.length() : 0
-         if (dot < buffer || dot > sqLength - buffer) continue
-         let rejection = s.scaledBy(dot / sqLength).sub(p)
-         let current
-         if (alongAxis && rejection.sqLength() > 0.001) {
-            let forward = new Ray(point, alongAxis.posDirection())
-            let backward = new Ray(point, alongAxis.negDirection())
-            let intersection =
-               forward.intersection(segment) || backward.intersection(segment)
-            if (intersection) {
-               let sqDistance = point.sqDistanceFrom(intersection)
-               current = { segment, point: intersection, sqDistance }
-            }
-         } else {
-            current = {
-               segment,
-               point: point.displacedBy(rejection),
-               sqDistance: rejection.sqLength(),
-            }
-         }
-         closest =
-            current && (!closest || current.sqDistance < closest.sqDistance)
-               ? current
-               : closest
+      alongAxis: Axis
+   ): ClosenessResult<Segment> {
+      let closest = closestSegmentTo(point, alongAxis, segments)
+      let sqBuffer = hopoverRadius * hopoverRadius
+      if (
+         closest &&
+         closest.closestPart.sqDistanceFrom(point) < sqSnapRadius &&
+         closest.closestPart.sqDistanceFrom(closest.object.start) >= sqBuffer &&
+         closest.closestPart.sqDistanceFrom(closest.object.end) >= sqBuffer
+      ) {
+         return closest
       }
-      return closest
    }
-   function closestProximalSegment(
-      point: Point,
-      alongAxis?: Axis,
-      consider?: (s: Segment) => boolean
-   ): { segment: Segment; point: Point } | undefined {
-      let closest = closestSegment(point, alongAxis, consider)
-      if (closest && isProximal(point, closest.point)) return closest
+   function closestAttachPoint(point: Point): ClosenessResult<Point | Segment> {
+      return closestNearTo(point, endpoints()) || closestNearTo(point, segments)
    }
-   function closestCrossing(point: Point): Crossing | undefined {
-      let closest: { crossing: Crossing; sqDistance: number } | undefined
-      for (let [seg1, cs] of crossings) {
-         for (let [seg2, p] of cs) {
-            let current = {
-               crossing: { seg1, seg2, point: p },
-               sqDistance: p.sqDistanceFrom(point),
-            }
-            closest =
-               !closest || current.sqDistance < closest.sqDistance
-                  ? current
-                  : closest
-         }
-      }
-      return closest?.crossing
-   }
-   function closestProximalCrossing(point: Point): Crossing | undefined {
-      let crossing = closestCrossing(point)
-      if (crossing && isProximal(point, crossing.point)) return crossing
-   }
-   // Find the closest ruler to the given point (if any).
-   // If "generatingPoint" is given, only consider rulers that are generated
-   // by the given point (as defined elsewhere).
-   function closestRuler(
-      point: Point,
-      consider?: (r: Ruler) => boolean
-   ): { ruler: Ruler; point: Point } | undefined {
-      let closest:
-         | { ruler: Ruler; point: Point; sqDistance: number }
-         | undefined
-      for (let ruler of activeRulers) {
-         if (consider && !consider(ruler)) continue
-         let d = point.displacementFrom(ruler.line.origin)
-         let rejection = d.projectionOnto(ruler.line.axis).sub(d)
-         let current = {
-            ruler,
-            point: point.displacedBy(rejection),
-            sqDistance: rejection.sqLength(),
-         }
-         closest =
-            !closest || current.sqDistance < closest.sqDistance
-               ? current
-               : closest
-      }
-      return closest
-   }
-   type AttachPoint =
-      | { object: Point; point: Point }
-      | { object: Segment; point: Point }
-      | { object: undefined }
-   function closestAttachPoint(point: Point): AttachPoint {
-      let endpoint = closestProximalEndpoint(point)
-      if (endpoint) return { object: endpoint, point: endpoint }
-      let s = closestProximalSegment(point)
-      if (s) return { object: s.segment, point: s.point }
-      return { object: undefined }
-   }
-   type ClickPoint = AttachPoint | { object: Crossing; point: Point }
-   function closestClickPoint(point: Point): ClickPoint {
-      let end = closestProximalEndpoint(point)
-      let cross = closestProximalCrossing(point)
-      if (end && cross) {
-         if (cross.point.sqDistanceFrom(point) < end.sqDistanceFrom(point))
-            end = undefined
-      }
-      if (end) return { object: end, point: end }
-      if (cross) return { object: cross, point: cross.point }
-      let s = closestProximalSegment(point)
-      if (s) return { object: s.segment, point: s.point }
-      return { object: undefined }
+   function closestClickPoint(
+      point: Point
+   ): ClosenessResult<Point | Segment | Crossing> {
+      return (
+         closestNearTo<Point | Crossing>(point, endpoints(), crossings()) ||
+         closestNearTo(point, segments)
+      )
    }
    // --------------- State ---------------
    // The primary encoding of the circuit is an adjacency list. This supports
@@ -303,10 +176,14 @@
    // Because the presence of hopovers is independent of the circuit topology,
    // the circuit topology does not directly determine the SVG paths & lines
    // that need to be rendered. We compute the required SVG paths & lines below.
-   type Crossing = { seg1: Segment; seg2: Segment; point: Point }
-   let crossings: DefaultMap<Segment, Map<Segment, Point>>
+   let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
+   function* crossings() {
+      for (let [seg1, map] of crossingMap) {
+         for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
+      }
+   }
    $: {
-      crossings = new DefaultMap(() => new Map())
+      crossingMap = new DefaultMap(() => new Map())
       for (let seg1 of segments) {
          for (let seg2 of segments) {
             if (segmentsConnect(seg1, seg2)) continue
@@ -317,8 +194,8 @@
                   ...ends.map((p) => p.distanceFrom(crossPoint as Point))
                )
                if (minDistance >= hopoverRadius + 4) {
-                  crossings.getOrCreate(seg1).set(seg2, crossPoint)
-                  crossings.getOrCreate(seg2).set(seg1, crossPoint)
+                  crossingMap.getOrCreate(seg1).set(seg2, crossPoint)
+                  crossingMap.getOrCreate(seg2).set(seg1, crossPoint)
                }
             }
          }
@@ -346,7 +223,7 @@
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
          let points = [segment.start, segment.end]
-         for (let [other, crossPoint] of crossings.read(segment)) {
+         for (let [other, crossPoint] of crossingMap.read(segment)) {
             // Determine which segment is the "horizontal" one.
             let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
             let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
@@ -532,7 +409,7 @@
          // The merge strategy is: if segs[0] is currently crossing another
          // segment, use that crossing type. Otherwise, use seg[1]'s type.
          let mergedTypes = crossingTypes.read(segs[1]).clone()
-         let seg0Crossings = crossings.read(segs[0])
+         let seg0Crossings = crossingMap.read(segs[0])
          let seg0Types = crossingTypes.read(segs[0])
          for (let crossSegment of segments) {
             if (seg0Crossings.has(crossSegment)) {
@@ -604,13 +481,7 @@
       } else {
          cursor = "auto"
          let attach = closestAttachPoint(mouse)
-         if (
-            tool === "select & move" &&
-            attach.object &&
-            !shift &&
-            !alt &&
-            !cmd
-         ) {
+         if (tool === "select & move" && attach && !shift && !alt && !cmd) {
             cursor = waitingForDrag ? "grabbing" : "grab"
          }
       }
@@ -627,13 +498,15 @@
          for (let s of bulkHighlighted) highlighted.add(s)
       } else if (tool === "select & move" && !move) {
          let attach = closestAttachPoint(mouse)
-         if (attach.object) highlighted.add(attach.object)
+         if (attach) highlighted.add(attach.object)
       } else if (tool === "hydraulic line" && !move) {
          let click = closestClickPoint(mouse)
-         if (click.object instanceof Segment) {
-            highlighted.add(click.object)
-         } else if (click.object) {
-            highlighted.add(click.point)
+         if (click) {
+            if (click.object instanceof Crossing) {
+               highlighted.add(click.closestPart)
+            } else {
+               highlighted.add(click.object)
+            }
          }
       }
    }
@@ -641,13 +514,13 @@
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
       if (tool === "select & move" && !move && cmd) {
          bulkHighlighted = new Set()
-         let s = closestProximalSegment(mouse)
+         let s = closestNearTo(mouse, segments)
          if (s) {
             // Do bulk highlighting (and later, selection) along the axis
             // orthogonal to the segment's axis. To achieve this, we
             // re-coordinatize every object that has the same orientation as
             // the segment as an AABB, and search along the resultant y-axis.
-            let selectAxis = s.segment.axis
+            let selectAxis = s.object.axis
             let orthAxis = findExistingAxis(selectAxis.orthogonal())
             type SegmentInfo = {
                segment: Segment
@@ -669,11 +542,12 @@
                info.set(seg, { segment: seg, x, y, visited: false })
             }
             let [front, back] =
-               s.point.displacementFrom(mouse).relativeTo(selectAxis).y > 0
+               s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
+               0
                   ? [0, 1]
                   : [1, 0]
-            bulkHighlighted.add(s.segment)
-            let startInfo = info.get(s.segment) as SegmentInfo
+            bulkHighlighted.add(s.object)
+            let startInfo = info.get(s.object) as SegmentInfo
             startInfo.visited = true
             highlightFrom(startInfo)
             function highlightFrom(current: SegmentInfo) {
@@ -729,8 +603,6 @@
       end: Point
       highlighted: Set<Point | Segment>
    } | null = null
-   // Rulers that act as a visual indicator of snapping behaviour
-   let activeRulers: Set<Ruler> = new Set()
 
    function beginDraw(start: Point, axis: Axis) {
       // Add the line being drawn to the circuit.
@@ -741,19 +613,6 @@
       // Configure the endpoint of the line to be dragged as the mouse moves.
       selected = new ToggleSet([end])
       beginMove(end, end)
-      // Create a ruler for each of the "standard" axes.
-      // TODO: I'm no longer showing any rulers. Should I delete this code?
-      let rulers: Set<Ruler> = new Set()
-      for (let a of snapAxes) rulers.add(new Ruler(start, a, "ray"))
-      // Create a ruler for each edge incident to the starting vertex (if any).
-      if (circuit.has(start)) {
-         for (let [_, seg] of circuit.read(start)) {
-            if (!snapAxes.includes(seg.axis)) {
-               rulers.add(new Ruler(start, seg.axis, "ray"))
-            }
-         }
-      }
-      activeRulers = rulers
    }
    $: {
       if (draw && move) {
@@ -807,14 +666,19 @@
                }
                return true
             }
-            let target = closestProximalEndpoint(mouse, isAcceptableTEMP)
+            let closest = closestNearTo(
+               mouse,
+               Array.from(endpoints()).filter(isAcceptableTEMP)
+            )
             let maybeAxis = Axis.fromVector(
-               (target ? target : mouse).displacementFrom(draw.segment.start)
+               closest
+                  ? closest.object.displacementFrom(draw.segment.start)
+                  : mouse.displacementFrom(draw.segment.start)
             )
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
                // Replace the existing segment.
-               let end = target ? target.clone() : mouse.clone()
+               let end = closest ? closest.object.clone() : mouse.clone()
                let newSegment = new Segment(draw.segment.start, end, newAxis)
                replaceSegment(draw.segment, newSegment)
                // Patch the draw and move operations.
@@ -823,13 +687,13 @@
                beginMove(end, end)
                move.offset = zeroVector
                // Do snapping.
-               if (target) {
-                  draw.endObject = target
+               if (closest) {
+                  draw.endObject = closest.object
                } else {
-                  let s = closestProximalSegment(mouse, newAxis)
+                  let s = closestSegmentNearTo(mouse, newAxis)
                   if (s) {
-                     draw.segment.end.moveTo(s.point)
-                     draw.endObject = s.segment
+                     draw.segment.end.moveTo(s.closestPart)
+                     draw.endObject = s.object
                   } else {
                      draw.endObject = undefined
                   }
@@ -874,7 +738,6 @@
       // Reset the drawing state.
       if (draw.segmentIsNew) selected = new ToggleSet()
       draw = null
-      activeRulers = new Set()
    }
    function beginMove(thingGrabbed: Point | Segment, pointGrabbed: Point) {
       // Find the Axis that the moved objects should snap along & orthogonal to.
@@ -966,15 +829,17 @@
                }
                return true
             }
-            let target = closestProximalEndpoint(
+            let closest = closestNearTo(
                draw.segment.end,
-               isAcceptableTEMP
+               Array.from(endpoints()).filter(isAcceptableTEMP)
             )
-            if (target) {
+            if (closest) {
                snappedToPoint = true
-               let snappedMove = target.displacementFrom(move.locationGrabbed)
+               let snappedMove = closest.object.displacementFrom(
+                  move.locationGrabbed
+               )
                doMove(snappedMove)
-               draw.endObject = target
+               draw.endObject = closest.object
             } else {
                draw.endObject = undefined
             }
@@ -994,13 +859,10 @@
             }
             if (draw) {
                // Try snapping the endpoint to nearby segments.
-               let s = closestProximalSegment(
-                  draw.segment.end,
-                  draw.segment.axis
-               )
+               let s = closestSegmentNearTo(draw.segment.end, draw.segment.axis)
                if (s) {
-                  draw.segment.end.moveTo(s.point)
-                  draw.endObject = s.segment
+                  draw.segment.end.moveTo(s.closestPart)
+                  draw.endObject = s.object
                } else {
                   draw.endObject = undefined
                }
@@ -1326,14 +1188,14 @@
       switch (tool) {
          case "select & move": {
             let attach = closestAttachPoint(clickPoint)
-            if (attach.object && !shift && !alt) {
+            if (attach && !shift && !alt) {
                if (cmd) {
                   selected.clear()
                   for (let s of bulkHighlighted) selected.add(s)
                } else if (!selected.has(attach.object)) {
                   selected = new ToggleSet([attach.object])
                }
-               beginMove(attach.object, attach.point)
+               beginMove(attach.object, attach.closestPart)
             } else waitingForDrag = clickPoint
             break
          }
@@ -1362,10 +1224,10 @@
                         ? Axis.horizontal
                         : Axis.vertical
                   let attach = closestAttachPoint(waitingForDrag)
-                  if (attach.object) {
+                  if (attach) {
                      if (attach.object instanceof Segment)
-                        cutSegment(attach.object, attach.point)
-                     beginDraw(attach.point, drawAxis)
+                        cutSegment(attach.object, attach.closestPart)
+                     beginDraw(attach.closestPart, drawAxis)
                   } else beginDraw(waitingForDrag, drawAxis)
                   waitingForDrag = null
                }
@@ -1384,7 +1246,7 @@
       switch (tool) {
          case "select & move": {
             let attach = closestAttachPoint(mouse)
-            if (!attach.object) selected.clear()
+            if (!attach) selected.clear()
             else if (shift && cmd)
                for (let s of bulkHighlighted) selected.add(s)
             else if (shift && !cmd) selected.toggle(attach.object)
@@ -1397,6 +1259,7 @@
          }
          case "hydraulic line": {
             let click = closestClickPoint(mouse)
+            if (!click) break
             if (click.object instanceof Point) {
                if (endpointGlyphs.read(click.object) === "default") {
                   endpointGlyphs.set(click.object, "plug")
@@ -1405,10 +1268,10 @@
                   convertToCrossing(click.object)
                }
                endpointGlyphs = endpointGlyphs
-            } else if (click.object instanceof Segment && click.object) {
-               cutSegment(click.object, click.point)
-               endpointGlyphs.set(click.point, "plug")
-            } else if (click.object /* instanceof Crossing */) {
+            } else if (click.object instanceof Segment) {
+               cutSegment(click.object, click.closestPart)
+               endpointGlyphs.set(click.closestPart, "plug")
+            } else if (click.object instanceof Crossing) {
                // Change the crossing glyph.
                let { seg1, seg2 } = click.object
                let oldType = crossingTypes.read(seg1).read(seg2)
@@ -1455,19 +1318,6 @@
       if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
    }}
 >
-   <!-- Bottom layer -->
-   <g>
-      <!-- {#each [...segments] as segment}
-         {#if segment.end.sqDistanceFrom(segment.start) > 0.01}
-            <Padding {segment} />
-         {/if}
-      {/each} -->
-      <!-- {#if !(draw && alt)}
-         {#each [...activeRulers] as ruler}
-            <RulerHTML {ruler} />
-         {/each}
-      {/if} -->
-   </g>
    <!-- Segment highlight layer -->
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
@@ -1523,15 +1373,6 @@
             {:else if highlighted.has(glyph.point)}
                <Plug renderType="highlight" position={glyph.point} />
             {/if}
-         {:else if glyph.type === "endpoint marker"}
-            {#if selected.has(glyph.point)}
-               <EndpointMarker
-                  renderType="selectLight"
-                  position={glyph.point}
-               />
-            {:else if highlighted.has(glyph.point)}
-               <EndpointMarker renderType="highlight" position={glyph.point} />
-            {/if}
          {/if}
       {/each}
    </g>
@@ -1544,16 +1385,34 @@
             <ConnectionPoint position={glyph.point} />
          {:else if glyph.type === "plug"}
             <Plug position={glyph.point} />
-         {:else if glyph.type === "endpoint marker"}
-            <EndpointMarker position={glyph.point} />{/if}
+         {/if}
       {/each}
    </g>
    <!-- Symbol highlight & selection layer -->
    <g />
    <!-- Symbol layer -->
    <g id="symbol layer" />
+   <!-- HUD highlight layer -->
+   <g>
+      {#each [...glyphsToDraw] as glyph}
+         {#if glyph.type === "endpoint marker"}
+            {#if selected.has(glyph.point)}
+               <EndpointMarker
+                  renderType="selectLight"
+                  position={glyph.point}
+               />
+            {:else if highlighted.has(glyph.point)}
+               <EndpointMarker renderType="highlight" position={glyph.point} />
+            {/if}
+         {/if}
+      {/each}
+   </g>
    <!-- HUD layer -->
    <g>
+      {#each [...glyphsToDraw] as glyph}
+         {#if glyph.type === "endpoint marker"}
+            <EndpointMarker position={glyph.point} />{/if}
+      {/each}
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}

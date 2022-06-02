@@ -1,21 +1,20 @@
-abstract class VectorBase {
+export abstract class Object2D {
+   abstract partClosestTo(point: Point): Point
+   sqDistanceFrom(point: Point): number {
+      return this.partClosestTo(point).sqDistanceFrom(point)
+   }
+   distanceFrom(point: Point): number {
+      return Math.sqrt(this.sqDistanceFrom(point))
+   }
+}
+
+export class Vector {
    readonly x: number
    readonly y: number
    constructor(x: number, y: number) {
       this.x = x
       this.y = y
    }
-   approxEquals(v: this, absoluteError: number) {
-      return (
-         v.x - absoluteError <= this.x &&
-         v.x + absoluteError >= this.x &&
-         v.y - absoluteError <= this.y &&
-         v.y + absoluteError >= this.y
-      )
-   }
-}
-
-export class Vector extends VectorBase {
    sqLength(): number {
       return this.x * this.x + this.y * this.y
    }
@@ -40,18 +39,6 @@ export class Vector extends VectorBase {
       let sin = this.y * rotation.x + this.x * rotation.y
       return new Vector(cos, sin)
    }
-   // Express the vector in terms of the coordinate system implied by the
-   // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
-   relativeTo(axis: Axis): Vector {
-      let [cos, sin] = [axis.x, axis.y]
-      let [x, y] = [this.x, this.y]
-      return new Vector(cos * x + sin * y, -sin * x + cos * y)
-   }
-   undoRelativeTo(axis: Axis): Vector {
-      let [cos, sin] = [axis.x, axis.y]
-      let [x, y] = [this.x, this.y]
-      return new Vector(cos * x - sin * y, sin * x + cos * y)
-   }
    dot(v: Vector): number {
       return this.x * v.x + this.y * v.y
    }
@@ -72,17 +59,37 @@ export class Vector extends VectorBase {
          ? this.length()
          : (this.y * v.x - this.x * v.y) / vLength
    }
+   // Express the vector in terms of the coordinate system implied by the
+   // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
+   relativeTo(axis: Axis): Vector {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
+      return new Vector(cos * x + sin * y, -sin * x + cos * y)
+   }
+   undoRelativeTo(axis: Axis): Vector {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
+      return new Vector(cos * x - sin * y, sin * x + cos * y)
+   }
 }
 
-export class Point extends VectorBase {
+export class Point extends Object2D {
+   readonly x: number
+   readonly y: number
    static readonly zero = new Point(0, 0)
-   sqDistanceFrom(p: Point): number {
+
+   constructor(x: number, y: number) {
+      super()
+      this.x = x
+      this.y = y
+   }
+   partClosestTo(point: Point): Point {
+      return this
+   }
+   override sqDistanceFrom(p: Point): number {
       let dx = this.x - p.x
       let dy = this.y - p.y
       return dx * dx + dy * dy
-   }
-   distanceFrom(p: Point): number {
-      return Math.sqrt(this.sqDistanceFrom(p))
    }
    displacementFrom(p: Point): Vector {
       return new Vector(this.x - p.x, this.y - p.y)
@@ -110,10 +117,14 @@ export class Point extends VectorBase {
 }
 
 // A Rotation is a _difference_ between two Directions.
-export class Rotation extends VectorBase {
+export class Rotation {
+   readonly x: number
+   readonly y: number
    static readonly zero = this.fromAngle(0)
+
    protected constructor(x: number, y: number) {
-      super(x, y)
+      this.x = x
+      this.y = y
    }
    static fromAngle(radians: number): Rotation {
       return new Rotation(Math.cos(radians), Math.sin(radians))
@@ -155,9 +166,6 @@ export class Direction extends Vector {
       let r = this.asRotation().add(rotation)
       return new Direction(r.x, r.y)
    }
-   axis(): Axis {
-      return Axis.fromVector(this) as Axis
-   }
 }
 
 function mod(x: number, y: number) {
@@ -188,6 +196,9 @@ export class Axis extends Vector {
          return new Axis(v.x, v.y)
       }
    }
+   static fromDirection(dir: Direction): Axis {
+      return Axis.fromVector(dir) as Axis
+   }
    orthogonal(): Axis {
       return this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
    }
@@ -197,77 +208,58 @@ export class Axis extends Vector {
    negDirection(): Direction {
       return Direction.fromVector(this.scaledBy(-1)) as Direction
    }
-   approxEquals(a: this, errorRatio: number): boolean {
+   approxEquals(axis: Axis, errorRatio: number): boolean {
+      let absoluteError = errorRatio // For axes, these are the same.
       return (
-         super.approxEquals(a, errorRatio) ||
-         super.approxEquals(a.scaledBy(-1) as this, errorRatio)
+         axis.x - absoluteError <= this.x &&
+         axis.x + absoluteError >= this.x &&
+         axis.y - absoluteError <= this.y &&
+         axis.y + absoluteError >= this.y
       )
    }
 }
 
 // A line of infinite length.
-export class Line {
+export class Line extends Object2D {
    readonly origin: Point
    readonly axis: Axis
    constructor(origin: Point, axis: Axis) {
+      super()
       this.origin = origin
       this.axis = axis
    }
-   sqDistanceFrom(point: Point): number {
-      let d = point.displacementFrom(this.origin)
-      return d.sub(d.projectionOnto(this.axis)).sqLength()
+   partClosestTo(point: Point): Point {
+      return this.origin.displacedBy(
+         point.displacementFrom(this.origin).projectionOnto(this.axis)
+      )
    }
-   distanceFrom(point: Point): number {
-      return Math.sqrt(this.sqDistanceFrom(point))
-   }
-   intersection(line: Line): Point | null {
-      let grad1 = this.axis.y / this.axis.x
-      let grad2 = line.axis.y / line.axis.x
-      let intercept1 = this.origin.y - grad1 * this.origin.x
-      let intercept2 = line.origin.y - grad2 * line.origin.x
-      if (grad1 === grad2) return null
-      else if (!isFinite(grad1)) {
-         return new Point(this.origin.x, grad2 * this.origin.x + intercept2)
-      } else if (!isFinite(grad2)) {
-         return new Point(line.origin.x, grad1 * line.origin.x + intercept1)
-      } else {
-         let x = (intercept2 - intercept1) / (grad1 - grad2)
-         return new Point(x, grad1 * x + intercept1)
-      }
+   intersection(object: Line | Ray | Segment): Point | undefined {
+      return genericIntersection(this, object)
    }
 }
 
 // A line that extends infinitely in (only) one direction.
-export class Ray {
+export class Ray extends Object2D {
    readonly origin: Point
    readonly direction: Direction
+   readonly axis: Axis
    constructor(origin: Point, dir: Direction) {
+      super()
       this.origin = origin
       this.direction = dir
+      this.axis = Axis.fromDirection(this.direction)
    }
-   intersection(target: Segment): Point | null {
-      return genericIntersection(
-         target.start,
-         target.end,
-         this.origin,
-         this.origin.displacedBy(this.direction),
-         true
-      )
-   }
-   sqDistanceFrom(point: Point): number {
-      let d = point.displacementFrom(this.origin)
-      let projection = d.projectionOnto(this.direction)
+   partClosestTo(point: Point): Point {
+      let p = point.displacementFrom(this.origin).projectionOnto(this.direction)
       if (
-         Math.sign(projection.x) === Math.sign(this.direction.x) &&
-         Math.sign(projection.y) === Math.sign(this.direction.y)
+         Math.sign(p.x) === Math.sign(this.direction.x) &&
+         Math.sign(p.y) === Math.sign(this.direction.y)
       ) {
-         return d.sub(projection).sqLength()
-      } else {
-         return projection.sqLength() + d.sub(projection).sqLength()
-      }
+         return this.origin.displacedBy(p)
+      } else return this.origin
    }
-   distanceFrom(point: Point): number {
-      return Math.sqrt(this.sqDistanceFrom(point))
+   intersection(object: Line | Ray | Segment): Point | undefined {
+      return genericIntersection(this, object)
    }
    // Whether the given point projects onto the ray.
    shadowedBy(point: Point): boolean {
@@ -276,15 +268,30 @@ export class Ray {
 }
 
 // A line segment.
-export class Segment {
+export class Segment extends Object2D {
    static readonly zero = new Segment(Point.zero, Point.zero, Axis.horizontal)
    readonly start: Point
    readonly end: Point
    readonly axis: Axis
    constructor(start: Point, end: Point, axis: Axis) {
+      super()
       this.start = start
       this.end = end
       this.axis = axis
+   }
+   partClosestTo(point: Point): Point {
+      let d = this.end.displacementFrom(this.start)
+      let p = point.displacementFrom(this.start).projectionOnto(this.axis)
+      if (
+         Math.sign(p.x) !== Math.sign(d.x) ||
+         Math.sign(p.y) !== Math.sign(d.y)
+      ) {
+         return this.start
+      } else if (p.sqLength() > d.sqLength()) {
+         return this.end
+      } else {
+         return this.start.displacedBy(p)
+      }
    }
    sqLength(): number {
       return this.end.sqDistanceFrom(this.start)
@@ -292,8 +299,8 @@ export class Segment {
    length(): number {
       return this.end.distanceFrom(this.start)
    }
-   intersection(seg: Segment): Point | null {
-      return genericIntersection(this.start, this.end, seg.start, seg.end)
+   intersection(object: Line | Ray | Segment): Point | undefined {
+      return genericIntersection(this, object)
    }
    // Whether the given point projects onto the line segment.
    shadowedBy(point: Point): boolean {
@@ -311,15 +318,48 @@ export class Segment {
    }
 }
 
-// If the flag is false, compute the intersection between two line segments.
-// If the flag is true, compute the intersection between a segment and a ray.
+// A representation of two Segments that cross one another.
+export class Crossing extends Object2D {
+   seg1: Segment
+   seg2: Segment
+   point: Point
+   constructor(seg1: Segment, seg2: Segment, point: Point) {
+      super()
+      this.seg1 = seg1
+      this.seg2 = seg2
+      this.point = point
+   }
+   partClosestTo(point: Point): Point {
+      return this.point
+   }
+}
+
+// Computes the point of intersection of two line-like objects.
 function genericIntersection(
-   p1: Point,
-   p2: Point,
-   p3: Point,
-   p4: Point,
-   rayFrom3to4: boolean = false // Whether to interpret p3 and p4 as a ray
-): Point | null {
+   lineA: Line | Ray | Segment,
+   lineB: Line | Ray | Segment
+): Point | undefined {
+   if (lineA.axis === lineB.axis) return undefined
+   let p1, p2, p3, p4
+   let [p1Inf, p2Inf, p3Inf, p4Inf] = [false, false, false, false]
+   if (lineA instanceof Line) {
+      ;[p1, p2] = [lineA.origin, lineA.origin.displacedBy(lineA.axis)]
+      ;[p1Inf, p2Inf] = [true, true]
+   } else if (lineA instanceof Ray) {
+      ;[p1, p2] = [lineA.origin, lineA.origin.displacedBy(lineA.direction)]
+      p2Inf = true
+   } else {
+      ;[p1, p2] = [lineA.start, lineA.end]
+   }
+   if (lineB instanceof Line) {
+      ;[p3, p4] = [lineB.origin, lineB.origin.displacedBy(lineB.axis)]
+      ;[p3Inf, p4Inf] = [true, true]
+   } else if (lineB instanceof Ray) {
+      ;[p3, p4] = [lineB.origin, lineB.origin.displacedBy(lineB.direction)]
+      p4Inf = true
+   } else {
+      ;[p3, p4] = [lineB.start, lineB.end]
+   }
    let dx12 = p1.x - p2.x
    let dx34 = p3.x - p4.x
    let dx13 = p1.x - p3.x
@@ -331,21 +371,21 @@ function genericIntersection(
    let u = dx13 * dy12 - dy13 * dx12
    if (
       (denominator > 0 &&
-         t >= 0 &&
-         t <= denominator &&
-         u >= 0 &&
-         (rayFrom3to4 || u <= denominator)) ||
+         (p1Inf || t >= 0) &&
+         (p2Inf || t <= denominator) &&
+         (p3Inf || u >= 0) &&
+         (p4Inf || u <= denominator)) ||
       (denominator < 0 &&
-         t <= 0 &&
-         t >= denominator &&
-         u <= 0 &&
-         (rayFrom3to4 || u >= denominator))
+         (p1Inf || t <= 0) &&
+         (p2Inf || t >= denominator) &&
+         (p3Inf || u <= 0) &&
+         (p4Inf || u >= denominator))
    ) {
       t /= denominator
       let x = p1.x - dx12 * t
       let y = p1.y - dy12 * t
       return new Point(x, y)
-   } else return null
+   } else return undefined
 }
 
 export class Range1D {
@@ -367,14 +407,22 @@ export class Range2D {
    }
 }
 
-export class Rectangle {
+export class Rectangle extends Object2D {
    position: Point
    rotation: Rotation
    readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
+      super()
       this.position = position
       this.rotation = rotation
       this.range = range
+   }
+   partClosestTo(point: Point): Point {
+      let p = this.toRectCoordinates(point)
+      let { x, y } = this.range
+      let partX = p.x < x.low ? x.low : p.x > x.high ? x.high : p.x
+      let partY = p.y < y.low ? y.low : p.y > y.high ? y.high : p.y
+      return new Point(partX, partY)
    }
    toRectCoordinates(point: Point): Point {
       return Point.zero.displacedBy(
@@ -393,16 +441,6 @@ export class Rectangle {
       let { x, y } = this.range
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
    }
-   sqDistanceFrom(point: Point): number {
-      let p = this.toRectCoordinates(point)
-      let { x, y } = this.range
-      let dx = p.x < x.low ? p.x - x.low : p.x > x.high ? p.x - x.high : 0
-      let dy = p.y < y.low ? p.y - y.low : p.y > y.high ? p.y - y.high : 0
-      return dx * dx + dy * dy
-   }
-   distanceFrom(point: Point): number {
-      return Math.sqrt(this.sqDistanceFrom(point))
-   }
    corners(): Point[] {
       let { x, y } = this.range
       return [
@@ -412,4 +450,50 @@ export class Rectangle {
          new Point(x.low, y.high),
       ].map(this.fromRectCoordinates)
    }
+}
+
+export type ClosenessResult<T> =
+   | {
+        object: T
+        sqDistance: number
+        closestPart: Point
+     }
+   | undefined
+
+// Find the closest Object2D to the given Point.
+export function closestTo<T extends Object2D>(
+   point: Point,
+   ...objectSets: Iterable<T>[]
+): ClosenessResult<T> {
+   let closest: ClosenessResult<T>
+   for (let set of objectSets) {
+      for (let object of set) {
+         let closestPart = object.partClosestTo(point)
+         let sqDistance = closestPart.sqDistanceFrom(point)
+         if (!closest || sqDistance < closest.sqDistance) {
+            closest = { object, sqDistance, closestPart }
+         }
+      }
+   }
+   return closest
+}
+
+// A variant of closestTo() exclusively for Segments.
+// Distance is measured with respect to the given axis.
+export function closestSegmentTo(
+   point: Point,
+   alongAxis: Axis,
+   segments: Iterable<Segment>
+): ClosenessResult<Segment> {
+   let closest: ClosenessResult<Segment>
+   for (let segment of segments) {
+      if (segment.axis === alongAxis) continue
+      let closestPart = segment.intersection(new Line(point, alongAxis))
+      if (!closestPart) continue
+      let sqDistance = closestPart.sqDistanceFrom(point)
+      if (!closest || sqDistance < closest.sqDistance) {
+         closest = { object: segment, sqDistance, closestPart }
+      }
+   }
+   return closest
 }
