@@ -1,6 +1,12 @@
 <script lang="ts">
    // Imports
-   import { Tool, SymbolKind, SymbolInstance } from "~/shared/definitions"
+   import {
+      Tool,
+      Junction,
+      Port,
+      SymbolKind,
+      SymbolInstance,
+   } from "~/shared/definitions"
    import {
       Object2D,
       Vector,
@@ -8,14 +14,12 @@
       Rotation,
       Direction,
       Axis,
-      Segment,
-      Crossing,
-      Range1D,
       Range2D,
       ClosenessResult,
       closestTo,
       closestSegmentTo,
-   } from "~/shared/math"
+   } from "~/shared/geometry"
+   import * as Geometry from "~/shared/geometry"
    import {
       mouseInCoordinateSystemOf,
       DefaultMap,
@@ -23,8 +27,8 @@
    } from "~/shared/utilities"
    import FluidLine from "~/components/lines/FluidLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
-   import ConnectionPoint from "~/components/lines/ConnectionPoint.svelte"
-   import EndpointMarker from "~/components/lines/EndpointMarker.svelte"
+   import JunctionNode from "~/components/lines/JunctionNode.svelte"
+   import VertexMarker from "~/components/VertexMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
    // Root element
@@ -134,49 +138,63 @@
          return closest
       }
    }
-   type Attachable = Point | Segment // Something a line can be attached to.
-   type Toggleable = Point | Segment | Crossing
-   type Grabbable = Point | Segment | SymbolInstance // Grabbed or selected.
-   type Highlightable = Attachable | Toggleable | Grabbable
+   type Attachable = Vertex | Segment // Something a segment can be attached to.
+   type Toggleable = Vertex | Segment | Crossing
+   type Grabbable = Vertex | Segment | SymbolInstance // === Selectable
+   type Highlightable = Point | Segment | SymbolInstance
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
-      return (
-         closestNearTo(point, endpoints(), ports()) ||
-         closestNearTo(point, segments)
-      )
+      return closestNearTo(point, vertices()) || closestNearTo(point, segments)
    }
    function closestToggleable(point: Point): ClosenessResult<Toggleable> {
       return (
-         closestNearTo<Point | Crossing>(point, endpoints(), crossings()) ||
+         closestNearTo<Vertex | Crossing>(point, vertices(), crossings()) ||
+         closestNearTo(point, segments)
+      )
+   }
+   function closestAttachableOrToggleable(
+      point: Point
+   ): ClosenessResult<Attachable | Toggleable> {
+      // This additional function is necessary because the individual functions
+      // don't compose.
+      return (
+         closestNearTo<Vertex | Crossing>(point, vertices(), crossings()) ||
          closestNearTo(point, segments)
       )
    }
    function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
       return (
-         closestNearTo(point, endpoints()) ||
+         closestNearTo(point, vertices()) ||
          closestNearTo(point, symbols) ||
          closestNearTo(point, segments)
       )
    }
    // --------------- State ---------------
+   type Vertex = Junction | Port
+   function isVertex(thing: any): thing is Vertex {
+      return thing instanceof Junction || thing instanceof Port
+   }
+   // Specialize the notions of Segments and Crossings to our needs.
+   type Segment = Geometry.Segment<Vertex>
+   const Segment = Geometry.Segment // eslint-disable-line
+   type Crossing = Geometry.Crossing<Vertex>
+   const Crossing = Geometry.Crossing // eslint-disable-line
    // The primary encoding of the circuit is an adjacency list. This supports
    // efficient graph traversals. The edges are are given stable identities as
    // Segment objects so that they can be referenced from other data structures.
-   type OutgoingSegment = [Point, Segment]
-   type Circuit = DefaultMap<Point, Set<OutgoingSegment>>
+   type OutgoingEdge = [Segment, Vertex]
+   type Circuit = DefaultMap<Vertex, Set<OutgoingEdge>>
    let circuit: Circuit = new DefaultMap(() => new Set())
-   let endpoints = () => circuit.keys()
-   function* endpointsAndPorts() {
-      for (let p of endpoints()) yield p
+   function* vertices() {
+      for (let p of circuit.keys()) yield p
+      // TODO: This is a hack, because not all Ports are in the Circuit.
       for (let p of ports()) yield p
    }
    let segments = new Set<Segment>() // for direct access to circuit segments
    // We store the multiplicity of every axis in the circuit, so that if all
    // the segments aligned to a given axis are removed, the axis is forgotten.
    let circuitAxes = new DefaultMap<Axis, number>(() => 0)
-   // We store how each endpoint/junction in the circuit should be rendered.
-   let endpointGlyphs = new DefaultMap<Point, "default" | "plug">(
-      () => "default"
-   )
+   // We store how each vertex in the circuit should be rendered.
+   let vertexGlyphs = new DefaultMap<Point, "default" | "plug">(() => "default")
    // For each pair of segments, we store how their crossing should be rendered.
    type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
    let crossingTypes: DefaultMap<
@@ -218,7 +236,7 @@
          }
       }
    }
-   type Section = Segment
+   type Section = Geometry.Segment<Point>
    let segmentsToDraw: Map<Segment, Section[]>
    type Glyph =
       | {
@@ -229,9 +247,9 @@
            end: Point
            flip: boolean
         }
-      | { type: "connection node"; point: Point }
-      | { type: "plug"; point: Point }
-      | { type: "endpoint marker"; point: Point }
+      | { type: "junction node"; junction: Junction }
+      | { type: "plug"; vertex: Vertex }
+      | { type: "vertex marker"; point: Point }
    let glyphsToDraw: Set<Glyph>
    $: {
       segmentsToDraw = new Map()
@@ -239,7 +257,7 @@
       for (let segment of segments) {
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
-         let points = [segment.start, segment.end]
+         let points: Point[] = [segment.start, segment.end]
          for (let [other, crossPoint] of crossingMap.read(segment)) {
             // Determine which segment is the "horizontal" one.
             let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
@@ -273,7 +291,7 @@
                   flip,
                })
             } else if (type === "no hop" && highlighted.has(crossPoint)) {
-               glyphsToDraw.add({ type: "endpoint marker", point: crossPoint })
+               glyphsToDraw.add({ type: "vertex marker", point: crossPoint })
             }
          }
          // Compute the sections that need to be drawn.
@@ -281,25 +299,29 @@
          points.sort((a, b) => distanceOf(a) - distanceOf(b))
          let sections: Section[] = []
          for (let i = 0; i < points.length; i += 2) {
-            sections.push(new Segment(points[i], points[i + 1], segment.axis))
+            sections.push(
+               new Geometry.Segment(points[i], points[i + 1], segment.axis)
+            )
          }
          segmentsToDraw.set(segment, sections)
       }
-      // Determine the other glyphs that need to be drawn at endpoints.
+      // Determine the other glyphs that need to be drawn at vertices.
       for (let [p, edges] of circuit) {
-         if (endpointGlyphs.read(p) === "plug") {
-            glyphsToDraw.add({ type: "plug", point: p })
-         } else if (edges.size > 2) {
-            glyphsToDraw.add({ type: "connection node", point: p })
-         } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
-            glyphsToDraw.add({ type: "endpoint marker", point: p })
+         if (vertexGlyphs.read(p) === "plug") {
+            glyphsToDraw.add({ type: "plug", vertex: p })
+         } else if (p instanceof Junction) {
+            if (edges.size > 2) {
+               glyphsToDraw.add({ type: "junction node", junction: p })
+            } else if (straightAt(p) || highlighted.has(p) || selected.has(p)) {
+               glyphsToDraw.add({ type: "vertex marker", point: p })
+            }
          }
       }
       // Determine the glyphs that need to be drawn at symbol attachment points.
       for (let symbol of symbols) {
          for (let p of symbol.ports) {
             if (highlighted.has(p)) {
-               glyphsToDraw.add({ type: "endpoint marker", point: p })
+               glyphsToDraw.add({ type: "vertex marker", point: p })
             }
          }
       }
@@ -313,16 +335,16 @@
          s1.end === s2.end
       )
    }
-   function straightAt(point: Point) {
-      let edges = circuit.read(point)
+   function straightAt(junction: Junction) {
+      let edges = circuit.read(junction)
       if (edges.size !== 2) return false
       let axes = []
-      for (let [_, { axis }] of edges) axes.push(axis)
+      for (let [{ axis }] of edges) axes.push(axis)
       return axes[0] === axes[1]
    }
    function addSegment(segment: Segment) {
-      circuit.getOrCreate(segment.start).add([segment.end, segment])
-      circuit.getOrCreate(segment.end).add([segment.start, segment])
+      circuit.getOrCreate(segment.start).add([segment, segment.end])
+      circuit.getOrCreate(segment.end).add([segment, segment.start])
       segments.add(segment)
       circuitAxes.update(segment.axis, (c) => c + 1)
    }
@@ -332,7 +354,7 @@
       // Delete from "circuit"
       let startEdges = circuit.read(segment.start)
       for (let edge of startEdges) {
-         if (edge[1] === segment) {
+         if (edge[0] === segment) {
             startEdges.delete(edge)
             if (startEdges.size === 0) circuit.delete(segment.start)
             break
@@ -340,7 +362,7 @@
       }
       let endEdges = circuit.read(segment.end)
       for (let edge of endEdges) {
-         if (edge[1] === segment) {
+         if (edge[0] === segment) {
             endEdges.delete(edge)
             if (endEdges.size === 0) circuit.delete(segment.end)
             break
@@ -377,11 +399,11 @@
       deleteSegment(segment)
    }
    function deleteSelected() {
-      let junctionsToConvert = new Set<Point>()
+      let junctionsToConvert = new Set<Vertex>()
       for (let thing of selected) {
-         if (thing instanceof Point) {
+         if (thing instanceof Junction) {
             // Delete all neighbouring segments.
-            for (let [_, segment] of circuit.read(thing)) {
+            for (let [segment] of circuit.read(thing)) {
                deleteSegment(segment)
                junctionsToConvert.add(segment.start)
                junctionsToConvert.add(segment.end)
@@ -394,13 +416,13 @@
             symbols.delete(thing)
          }
       }
-      for (let junction of junctionsToConvert) {
-         if (circuit.has(junction) && circuit.read(junction).size === 2)
-            convertToCrossing(junction)
+      for (let vertex of junctionsToConvert) {
+         if (vertex instanceof Junction && circuit.read(vertex).size === 2)
+            convertToCrossing(vertex)
       }
       selected = new ToggleSet()
    }
-   function cutSegment(segment: Segment, cutPoint: Point) {
+   function cutSegment(segment: Segment, cutPoint: Junction) {
       let { start, end } = segment
       let axis = Axis.fromVector(start.displacementFrom(end))
       if (axis) {
@@ -414,7 +436,7 @@
    }
    // If the junction is an X-junction, or a pair of colinear segments,
    // convert it into a crossing.
-   function convertToCrossing(junction: Point) {
+   function convertToCrossing(junction: Junction) {
       let parts = partsOfJunction(junction)
       let crossing = []
       for (let segs of parts) {
@@ -456,22 +478,23 @@
       crossingTypes = crossingTypes
    }
    function convertToJunction(crossing: Crossing) {
-      cutSegment(crossing.seg1, crossing.point)
-      cutSegment(crossing.seg2, crossing.point)
+      let cutPoint = new Junction(crossing.point)
+      cutSegment(crossing.seg1, cutPoint)
+      cutSegment(crossing.seg2, cutPoint)
    }
    // If the junction is an X-junction, or a pair of colinear segments, return
    // each pair of colinear segments. Otherwise, return nothing.
-   function partsOfJunction(junction: Point): Set<[Segment, Segment]> {
+   function partsOfJunction(junction: Junction): Set<[Segment, Segment]> {
       let edges = circuit.read(junction)
       if (edges.size !== 2 && edges.size !== 4) return new Set()
-      let axes = new DefaultMap<Axis, OutgoingSegment[]>(() => [])
+      let axes = new DefaultMap<Axis, OutgoingEdge[]>(() => [])
       for (let edge of edges) {
-         axes.getOrCreate(edge[1].axis).push(edge)
+         axes.getOrCreate(edge[0].axis).push(edge)
       }
       let pairs = new Set<[Segment, Segment]>()
       for (let edgePair of axes.values()) {
          if (edgePair.length !== 2) return new Set()
-         pairs.add([edgePair[0][1], edgePair[1][1]])
+         pairs.add([edgePair[0][0], edgePair[1][0]])
       }
       return pairs
    }
@@ -486,9 +509,9 @@
       }
       return subject
    }
-   function axesAtPoint(point: Point): Axis[] {
+   function axesAt(junction: Junction): Axis[] {
       let axes: Axis[] = []
-      for (let [_, segment] of circuit.read(point))
+      for (let [segment] of circuit.read(junction))
          if (!axes.includes(segment.axis)) axes.push(segment.axis)
       return axes
    }
@@ -520,7 +543,7 @@
          let grab = closestGrabbable(mouse)
          if (grab) highlighted.add(grab.object)
       } else if (tool === "hydraulic line" && !move) {
-         let thing = closestAttachable(mouse) || closestToggleable(mouse)
+         let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
             if (thing.object instanceof Crossing) {
                highlighted.add(thing.closestPart)
@@ -592,12 +615,12 @@
       }
    }
    let selected: ToggleSet<Grabbable> = new ToggleSet()
-   function selectedPoints(): Set<Point> {
-      let s = new Set<Point>()
+   function selectedVertices(): Set<Vertex> {
+      let s = new Set<Vertex>()
       for (let thing of selected) {
-         if (thing instanceof Point) {
+         if (isVertex(thing)) {
             s.add(thing)
-         } else {
+         } else if (thing instanceof Segment) {
             s.add(thing.start)
             s.add(thing.end)
          }
@@ -613,12 +636,12 @@
       endObject?: Attachable
    } | null = null
    let move: {
-      points: Set<Point>
+      points: Set<Vertex>
       locationGrabbed: Point
       axisGrabbed: Axis
       offset: Vector
       distance: number
-      originalPositions: DefaultMap<Point, Point>
+      originalPositions: DefaultMap<Junction | SymbolInstance, Point>
    } | null = null
    let rectSelect: {
       start: Point
@@ -626,9 +649,9 @@
       highlighted: Set<Grabbable>
    } | null = null
 
-   function beginDraw(start: Point, axis: Axis) {
+   function beginDraw(start: Vertex, axis: Axis) {
       // Add the line being drawn to the circuit.
-      let end = start.clone()
+      let end = new Junction(start)
       let segment = new Segment(start, end, axis)
       addSegment(segment)
       draw = { mode: "strafing", segment, segmentIsNew: true }
@@ -655,8 +678,10 @@
                newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
                if (newAxis !== draw.segment.axis) {
                   // Replace the existing segment.
-                  let end = draw.segment.start.displacedBy(
-                     drawVector.projectionOnto(newAxis)
+                  let end = new Junction(
+                     draw.segment.start.displacedBy(
+                        drawVector.projectionOnto(newAxis)
+                     )
                   )
                   let newSegment = new Segment(draw.segment.start, end, newAxis)
                   replaceSegment(draw.segment, newSegment)
@@ -672,17 +697,17 @@
             // operation is restarted from scratch every update. (This is a bit
             // of a hack, but it's the simplest way to integrate "free
             // rotation" with the other drawing modes.)
-            function isAcceptableTEMP(point: Point) {
+            function isAcceptableTEMP(vertex: Vertex) {
                let start = draw!.segment.start
-               let maybeAxis = Axis.fromVector(point.displacementFrom(start))
+               let maybeAxis = Axis.fromVector(vertex.displacementFrom(start))
                if (!maybeAxis) return false
                let drawAxis = findExistingAxis(maybeAxis)
-               for (let [other, { axis }] of circuit.read(point)) {
+               for (let [{ axis }, other] of circuit.read(vertex)) {
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === drawAxis &&
                      other.distanceFrom(start) + 1 <
-                        point.distanceFrom(start) + other.distanceFrom(point)
+                        vertex.distanceFrom(start) + other.distanceFrom(vertex)
                   )
                      return false
                }
@@ -690,7 +715,7 @@
             }
             let closest = closestNearTo(
                mouse,
-               Array.from(endpointsAndPorts()).filter(isAcceptableTEMP)
+               Array.from(vertices()).filter(isAcceptableTEMP)
             )
             let maybeAxis = Axis.fromVector(
                closest
@@ -700,7 +725,7 @@
             if (maybeAxis) {
                let newAxis = findExistingAxis(maybeAxis)
                // Replace the existing segment.
-               let end = closest ? closest.object.clone() : mouse.clone()
+               let end = new Junction(closest ? closest.object : mouse)
                let newSegment = new Segment(draw.segment.start, end, newAxis)
                replaceSegment(draw.segment, newSegment)
                // Patch the draw and move operations.
@@ -733,7 +758,7 @@
       endMove()
       let segment = draw.segment
       function isAcceptableTEMP() {
-         for (let [other, s] of circuit.read(draw!.segment.start)) {
+         for (let [s, other] of circuit.read(draw!.segment.start)) {
             if (
                s !== segment &&
                s.axis === draw!.segment.axis &&
@@ -746,15 +771,15 @@
          return true
       }
       if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
-         if (draw.endObject instanceof Point) {
-            // Replace the drawn segment with one that ends at the Point.
+         if (draw.endObject instanceof Segment) {
+            // Turn the intersected Segment into a T-junction.
+            cutSegment(draw.endObject, segment.end as Junction)
+         } else if (draw.endObject) {
+            // Replace the drawn segment with one that ends at the Vertex.
             replaceSegment(
                segment,
                new Segment(segment.start, draw.endObject, segment.axis)
             )
-         } else if (draw.endObject instanceof Segment) {
-            // Turn the intersected Segment into a T-junction.
-            cutSegment(draw.endObject, segment.end)
          }
       } else deleteSelected()
       // Reset the drawing state.
@@ -766,24 +791,30 @@
       let axisGrabbed
       if (thingGrabbed instanceof Segment) {
          axisGrabbed = thingGrabbed.axis
+      } else if (thingGrabbed instanceof SymbolInstance) {
+         axisGrabbed = findExistingAxis(
+            Axis.fromDirection(thingGrabbed.direction())
+         )
       } else {
          let _
          let axis = Axis.horizontal
-         for ([_, { axis }] of circuit.read(thingGrabbed)) {
+         for ([{ axis }] of circuit.read(thingGrabbed)) {
             // Prefer horizontal and vertical axes.
             if (axis === Axis.horizontal || axis === Axis.vertical) break
          }
          axisGrabbed = axis
       }
-      // Make a copy of every Point in the circuit prior to movement.
-      // We need to use these copies as a reference, because we will be
-      // mutating the Point objects over the course of the movement.
-      let originalPositions = new DefaultMap<Point, Point>(() => Point.zero)
-      for (let point of endpoints()) {
-         originalPositions.set(point, point.clone())
+      // Record the position of every Grabbable in the circuit prior to movement.
+      // We need to use these positions as a reference, because we will be
+      // mutating the position (Point) objects over the course of the movement.
+      let originalPositions = new DefaultMap<Junction | SymbolInstance, Point>(
+         () => Point.zero
+      )
+      for (let vertex of vertices()) {
+         originalPositions.set(vertex, vertex.clone())
       }
       move = {
-         points: selectedPoints(),
+         points: selectedVertices(),
          locationGrabbed: pointGrabbed.clone(),
          axisGrabbed,
          offset: pointGrabbed.displacementFrom(mouse),
@@ -793,16 +824,19 @@
       // If moving a single Point which is a loose end, treat the move
       // operation as a draw operation.
       if (!draw && move.points.size === 1) {
-         let end = Point.zero
+         let end
          for (end of move.points) {
          }
+         end = end as Vertex
          let edges = circuit.read(end)
          if (edges.size === 1) {
-            let [start, existingSegment] = [Point.zero, Segment.zero]
-            for ([start, existingSegment] of edges) {
+            let existingSegment, start
+            for ([existingSegment, start] of edges) {
             }
+            existingSegment = existingSegment as Segment
+            start = start as Vertex
             // The existing segment may be "backwards". We need to replace
-            // it with a segment whose .end is the point being grabbed.
+            // it with a segment whose .end is the vertex being grabbed.
             let segment = new Segment(start, end, existingSegment.axis)
             replaceSegment(existingSegment, segment)
             draw = { mode: "strafing", segment, segmentIsNew: false }
@@ -812,40 +846,42 @@
    // ----- Compute the state of an in-progress move operation -----
    $: /* On a change to 'draw, 'move', or 'mouse' */ {
       if (move && draw?.mode !== "free rotation") {
-         let drawingEdgeCase =
-            draw && axesAtPoint(draw.segment.start).length !== 2
+         let drawingEdgeCase = draw && axesAt(draw.segment.start).length !== 2
+         type MoveInfo = {
+            moveType: "no move" | Axis | "full move"
+            vector: Vector
+         }
          // This is a "global variable" throughout the forthcoming operations.
-         let moveInfo = new DefaultMap(() => {
-            return {
-               moveType: "no move" as "no move" | Axis | "full move",
-               vector: zeroVector,
-            }
+         let moveInfo = new DefaultMap<Vertex, MoveInfo>(() => {
+            return { moveType: "no move", vector: zeroVector }
          })
          // Firstly, perform a simple movement that tracks the mouse.
          let fullMove = mouse.displacementFrom(move.locationGrabbed)
          if (move.distance < 15) {
+            // The user may have grabbed slightly-away from their target
+            // object. If so, pull the object towards the mouse cursor.
             fullMove = fullMove.add(
                move.offset.scaledBy(1 - move.distance / 15)
             )
          }
          if (draw && draw.mode === "fixed-axis rotation") {
             fullMove = fullMove.projectionOnto(draw.segment.axis)
-            movePoint(draw.segment.end, fullMove)
+            moveVertex(draw.segment.end, fullMove)
          } else {
             doMove(fullMove)
          }
          let snappedToPoint = false
          if (draw && draw.mode === "strafing") {
-            // Try snapping the moved endpoint to a nearby Point.
-            function isAcceptableTEMP(point: Point) {
-               if (moveInfo.read(point).moveType !== "no move") return false
+            // Try snapping the moved Vertex to another Vertex nearby.
+            function isAcceptableTEMP(vertex: Vertex) {
+               if (moveInfo.read(vertex).moveType !== "no move") return false
                let start = draw!.segment.start
-               for (let [other, { axis }] of circuit.read(point)) {
+               for (let [{ axis }, other] of circuit.read(vertex)) {
                   // Reject if the segment being drawn would overlap this seg.
                   if (
                      axis === draw!.segment.axis &&
                      other.distanceFrom(start) + 1 <
-                        point.distanceFrom(start) + other.distanceFrom(point)
+                        vertex.distanceFrom(start) + other.distanceFrom(vertex)
                   )
                      return false
                }
@@ -853,7 +889,7 @@
             }
             let closest = closestNearTo(
                draw.segment.end,
-               Array.from(endpointsAndPorts()).filter(isAcceptableTEMP)
+               Array.from(vertices()).filter(isAcceptableTEMP)
             )
             if (closest) {
                snappedToPoint = true
@@ -875,7 +911,7 @@
                   : fullMove.add(snapGap)
             if (draw && draw.mode === "fixed-axis rotation") {
                snappedMove = snappedMove.projectionOnto(draw.segment.axis)
-               movePoint(draw.segment.end, snappedMove)
+               moveVertex(draw.segment.end, snappedMove)
             } else {
                doMove(snappedMove)
             }
@@ -891,9 +927,9 @@
             }
          }
 
-         function movePoint(p: Point, vector: Vector) {
-            moveInfo.set(p, { moveType: "full move", vector })
-            p.moveTo(move!.originalPositions.read(p).displacedBy(vector))
+         function moveVertex(v: Vertex, vector: Vector) {
+            moveInfo.set(v, { moveType: "full move", vector })
+            v.moveTo(move!.originalPositions.read(v).displacedBy(vector))
             circuit = circuit
             segments = segments
          }
@@ -909,14 +945,14 @@
                   vector.rejectionFrom(draw!.segment.axis)
                )
             }
-            // Compute the movement of every Point in the circuit.
+            // Compute the movement of every Grabbable in the circuit.
             moveInfo.clear()
             if (draw && drawingEdgeCase) {
                specialMove()
             } else if (draw) {
                // Try a normal move.
-               for (let point of move!.points) {
-                  propagateMovement(point, null, vector)
+               for (let vertex of move!.points) {
+                  propagateMovement(vertex, null, vector)
                }
                // If we weren't able to alter the length of the segment being
                // drawn, resort to a special move.
@@ -926,28 +962,28 @@
                }
             } else {
                // Do a normal move.
-               for (let point of move!.points) {
-                  propagateMovement(point, null, vector)
+               for (let vertex of move!.points) {
+                  propagateMovement(vertex, null, vector)
                }
             }
-            // Update the position of each Point.
-            for (let point of endpoints()) {
-               point.moveTo(
+            // Update the position of each Grabbable.
+            for (let vertex of vertices()) {
+               vertex.moveTo(
                   move!.originalPositions
-                     .read(point)
-                     .displacedBy(moveInfo.read(point).vector)
+                     .read(vertex)
+                     .displacedBy(moveInfo.read(vertex).vector)
                )
             }
             circuit = circuit
             segments = segments
          }
          function propagateMovement(
-            currentPoint: Point, // The point we are moving.
+            currentPoint: Vertex, // The vertex we are moving.
             edgeAxis: Axis | null, // The axis of the edge we just followed.
             moveVector: Vector // The movement being propagated.
          ) {
             let current = moveInfo.getOrCreate(currentPoint)
-            let axes = axesAtPoint(currentPoint)
+            let axes = axesAt(currentPoint)
             if (edgeAxis && axes.length <= 2 && current.moveType == "no move") {
                // Keep only one component of the movement vector. This allows
                // parts of the circuit to stretch and contract as it is moved.
@@ -970,7 +1006,7 @@
                current.moveType = "full move"
                current.vector = moveVector
             }
-            for (let [nextPoint, nextSegment] of circuit.read(currentPoint)) {
+            for (let [nextSegment, nextPoint] of circuit.read(currentPoint)) {
                let nextEdgeAxis = nextSegment.axis
                let next = moveInfo.getOrCreate(nextPoint)
                let loneEdge = circuit.read(nextPoint).size === 1
@@ -1102,13 +1138,13 @@
          for (let [start, edges] of circuit) {
             if (range.contains(start)) {
                let segmentAdded = false
-               for (let [end, segment] of edges) {
+               for (let [segment, end] of edges) {
                   if (range.contains(end)) {
                      rectSelect.highlighted.add(segment)
                      segmentAdded = true
                   }
                }
-               if (!segmentAdded) {
+               if (!segmentAdded && !(start instanceof Port)) {
                   rectSelect.highlighted.add(start)
                }
             }
@@ -1124,10 +1160,6 @@
             // Highlight enclosed symbols.
             if (symbol.svgCorners().every((c) => range.contains(c))) {
                rectSelect.highlighted.add(symbol)
-            }
-            // Don't highlight endpoints which connect to ports.
-            for (let port of symbol.ports) {
-               rectSelect.highlighted.delete(port)
             }
          }
       }
@@ -1177,8 +1209,12 @@
       if (draw && move) {
          // Reset the reference information for the movement.
          move.locationGrabbed = draw.segment.end.clone()
-         for (let point of move.originalPositions.keys()) {
-            move.originalPositions.set(point, point.clone())
+         for (let grabbable of move.originalPositions.keys()) {
+            if (grabbable instanceof Junction) {
+               move.originalPositions.set(grabbable, grabbable.clone())
+            } else if (grabbable instanceof SymbolInstance) {
+               move.originalPositions.set(grabbable, grabbable.position.clone())
+            }
          }
       }
    }
@@ -1234,10 +1270,14 @@
                         : Axis.vertical
                   let attach = closestAttachable(waitingForDrag)
                   if (attach) {
-                     if (attach.object instanceof Segment)
-                        cutSegment(attach.object, attach.closestPart)
-                     beginDraw(attach.closestPart, drawAxis)
-                  } else beginDraw(waitingForDrag, drawAxis)
+                     if (attach.object instanceof Segment) {
+                        let cutPoint = new Junction(attach.closestPart)
+                        cutSegment(attach.object, cutPoint)
+                        beginDraw(cutPoint, drawAxis)
+                     } else {
+                        beginDraw(attach.object, drawAxis)
+                     }
+                  } else beginDraw(new Junction(waitingForDrag), drawAxis)
                   waitingForDrag = null
                }
                break
@@ -1269,17 +1309,19 @@
          case "hydraulic line": {
             let toggle = closestToggleable(mouse)
             if (!toggle) break
-            if (toggle.object instanceof Point) {
-               if (endpointGlyphs.read(toggle.object) === "default") {
-                  endpointGlyphs.set(toggle.object, "plug")
+            if (isVertex(toggle.object)) {
+               if (vertexGlyphs.read(toggle.object) === "default") {
+                  vertexGlyphs.set(toggle.object, "plug")
                } else {
-                  endpointGlyphs.set(toggle.object, "default")
-                  convertToCrossing(toggle.object)
+                  vertexGlyphs.set(toggle.object, "default")
+                  if (toggle.object instanceof Junction)
+                     convertToCrossing(toggle.object)
                }
-               endpointGlyphs = endpointGlyphs
+               vertexGlyphs = vertexGlyphs
             } else if (toggle.object instanceof Segment) {
-               cutSegment(toggle.object, toggle.closestPart)
-               endpointGlyphs.set(toggle.closestPart, "plug")
+               let cutPoint = new Junction(toggle.closestPart)
+               cutSegment(toggle.object, cutPoint)
+               vertexGlyphs.set(cutPoint, "plug")
             } else if (toggle.object instanceof Crossing) {
                // Change the crossing glyph.
                let { seg1, seg2 } = toggle.object
@@ -1327,7 +1369,7 @@
       if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
    }}
 >
-   <!-- Symbol highlight & selection layer -->
+   <!-- Symbol highlight/select layer -->
    <g>
       {#each [...symbols] as symbol}
          {@const c = symbol.svgCorners()}
@@ -1370,7 +1412,7 @@
          {/each}
       {/each}
    </g>
-   <!-- Glyph highlight & selection layer -->
+   <!-- Glyph highlight/select layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
          {#if glyph.type === "hopover" && (selected.has(glyph.segment) || highlighted.has(glyph.segment) || highlighted.has(glyph.point))}
@@ -1382,20 +1424,20 @@
                end={glyph.end}
                flip={glyph.flip}
             />
-         {:else if glyph.type === "connection node"}
-            {#if selected.has(glyph.point)}
-               <ConnectionPoint
+         {:else if glyph.type === "junction node"}
+            {#if selected.has(glyph.junction)}
+               <JunctionNode
                   renderType="selectLight"
-                  position={glyph.point}
+                  position={glyph.junction}
                />
-            {:else if highlighted.has(glyph.point)}
-               <ConnectionPoint renderType="highlight" position={glyph.point} />
+            {:else if highlighted.has(glyph.junction)}
+               <JunctionNode renderType="highlight" position={glyph.junction} />
             {/if}
          {:else if glyph.type === "plug"}
-            {#if selected.has(glyph.point)}
-               <Plug renderType="selectLight" position={glyph.point} />
-            {:else if highlighted.has(glyph.point)}
-               <Plug renderType="highlight" position={glyph.point} />
+            {#if selected.has(glyph.vertex)}
+               <Plug renderType="selectLight" position={glyph.vertex} />
+            {:else if highlighted.has(glyph.vertex)}
+               <Plug renderType="highlight" position={glyph.vertex} />
             {/if}
          {/if}
       {/each}
@@ -1405,10 +1447,10 @@
       {#each [...glyphsToDraw] as glyph}
          {#if glyph.type === "hopover"}
             <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
-         {:else if glyph.type === "connection node"}
-            <ConnectionPoint position={glyph.point} />
+         {:else if glyph.type === "junction node"}
+            <JunctionNode position={glyph.junction} />
          {:else if glyph.type === "plug"}
-            <Plug position={glyph.point} />
+            <Plug position={glyph.vertex} />
          {/if}
       {/each}
    </g>
@@ -1417,14 +1459,11 @@
    <!-- HUD highlight layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "endpoint marker"}
-            {#if selected.has(glyph.point)}
-               <EndpointMarker
-                  renderType="selectLight"
-                  position={glyph.point}
-               />
+         {#if glyph.type === "vertex marker"}
+            {#if isVertex(glyph.point) && selected.has(glyph.point)}
+               <VertexMarker renderType="selectLight" position={glyph.point} />
             {:else if highlighted.has(glyph.point)}
-               <EndpointMarker renderType="highlight" position={glyph.point} />
+               <VertexMarker renderType="highlight" position={glyph.point} />
             {/if}
          {/if}
       {/each}
@@ -1432,8 +1471,8 @@
    <!-- HUD layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "endpoint marker"}
-            <EndpointMarker position={glyph.point} />{/if}
+         {#if glyph.type === "vertex marker"}
+            <VertexMarker position={glyph.point} />{/if}
       {/each}
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />

@@ -103,17 +103,6 @@ export class Point extends Object2D {
    clone(): Point {
       return new Point(this.x, this.y)
    }
-   // These "move" operations are the only operations that mutate points.
-   // If we have these operations, we can implement circuit manipulations such
-   // as dragging without having to mutate the circuit data structure itself.
-   moveTo(p: Point): void {
-      ;(this.x as number) = p.x
-      ;(this.y as number) = p.y
-   }
-   moveBy(v: Vector): void {
-      ;(this.x as number) += v.x
-      ;(this.y as number) += v.y
-   }
 }
 
 // A Rotation is a _difference_ between two Directions.
@@ -148,22 +137,26 @@ export class Rotation {
 }
 
 export class Direction extends Vector {
+   static readonly positiveX = new Direction(1, 0)
+   static readonly negativeX = new Direction(-1, 0)
+   static readonly positiveY = new Direction(0, 1)
+   static readonly negativeY = new Direction(0, -1)
    protected constructor(x: number, y: number) {
       super(x, y)
-   }
-   protected asRotation(): Rotation {
-      // subvert constructor privacy
-      return new (Rotation as any)(this.x, this.y)
    }
    static fromVector(vec: Vector): Direction | undefined {
       let v = vec.normalized()
       if (v) return new Direction(v.x, v.y)
    }
+   protected rotationFromPositiveX(): Rotation {
+      // subvert constructor privacy
+      return new (Rotation as any)(this.x, this.y)
+   }
    rotationFrom(dir: Direction): Rotation {
-      return this.asRotation().sub(dir.asRotation())
+      return this.rotationFromPositiveX().sub(dir.rotationFromPositiveX())
    }
    rotatedBy(rotation: Rotation): Direction {
-      let r = this.asRotation().add(rotation)
+      let r = this.rotationFromPositiveX().add(rotation)
       return new Direction(r.x, r.y)
    }
 }
@@ -268,12 +261,13 @@ export class Ray extends Object2D {
 }
 
 // A line segment.
-export class Segment extends Object2D {
-   static readonly zero = new Segment(Point.zero, Point.zero, Axis.horizontal)
-   readonly start: Point
-   readonly end: Point
+// The endpoints of a Segment are parameterized to be a subclass of Point,
+// so that users can use their own "Point-like" objects.
+export class Segment<P extends Point = Point> extends Object2D {
+   readonly start: P
+   readonly end: P
    readonly axis: Axis
-   constructor(start: Point, end: Point, axis: Axis) {
+   constructor(start: P, end: P, axis: Axis) {
       super()
       this.start = start
       this.end = end
@@ -319,11 +313,11 @@ export class Segment extends Object2D {
 }
 
 // A representation of two Segments that cross one another.
-export class Crossing extends Object2D {
-   seg1: Segment
-   seg2: Segment
+export class Crossing<P extends Point> extends Object2D {
+   seg1: Segment<P>
+   seg2: Segment<P>
    point: Point
-   constructor(seg1: Segment, seg2: Segment, point: Point) {
+   constructor(seg1: Segment<P>, seg2: Segment<P>, point: Point) {
       super()
       this.seg1 = seg1
       this.seg2 = seg2
@@ -422,8 +416,8 @@ export class Range2D {
 }
 
 export class Rectangle extends Object2D {
-   protected position: Point
-   protected rotation: Rotation
+   readonly position: Point
+   readonly rotation: Rotation
    protected readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
       super()
@@ -485,12 +479,12 @@ export function closestTo<T extends Object2D>(
 
 // A variant of closestTo() exclusively for Segments.
 // Distance is measured with respect to the given axis.
-export function closestSegmentTo(
+export function closestSegmentTo<P extends Point>(
    point: Point,
    alongAxis: Axis,
-   segments: Iterable<Segment>
-): ClosenessResult<Segment> {
-   let closest: ClosenessResult<Segment>
+   segments: Iterable<Segment<P>>
+): ClosenessResult<Segment<P>> {
+   let closest: ClosenessResult<Segment<P>>
    for (let segment of segments) {
       if (segment.axis === alongAxis) continue
       let closestPart = segment.intersection(new Line(point, alongAxis))

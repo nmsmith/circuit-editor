@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Tool, SymbolKind } from "~/shared/definitions"
-   import { Vector, Point, Range1D, Range2D } from "~/shared/math"
+   import { Vector, Point, Range1D, Range2D } from "~/shared/geometry"
    import { mouseInCoordinateSystemOf } from "~/shared/utilities"
    import CircuitView from "~/components/CircuitView.svelte"
    // State
@@ -31,9 +31,9 @@
       let svgDocument = object.contentDocument
       if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
          let svg = svgDocument.firstChild as SVGElement
-         // Locate the bounding box and snap points of the symbol.
+         // Locate the bounding box and ports of the symbol.
          let boundingBox
-         let ports = []
+         let portLocations = []
          for (let element of svg.querySelectorAll("*")) {
             if (element.hasAttribute("id")) {
                if (element.id === "boundingBox") {
@@ -44,7 +44,7 @@
                   )
                } else if (element.id.endsWith("Snap")) {
                   let { x, y, width, height } = element.getBoundingClientRect()
-                  ports.push(new Point(x + width / 2, y + height / 2))
+                  portLocations.push(new Point(x + width / 2, y + height / 2))
                }
             }
          }
@@ -59,7 +59,7 @@
          // Add the symbol to the app's list of symbols.
          symbolKinds = [
             ...symbolKinds,
-            { filePath, svgTemplate: svg, boundingBox, ports },
+            { filePath, svgTemplate: svg, boundingBox, portLocations },
          ]
       }
    }

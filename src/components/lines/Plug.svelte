@@ -1,5 +1,5 @@
 <script lang="ts">
-   import type { Point } from "~/shared/math"
+   import type { Point } from "~/shared/geometry"
    export let renderType: "default" | "highlight" | "selectLight" = "default"
    export let position: Point
    const diagonalLength = 12

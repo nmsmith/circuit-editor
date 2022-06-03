@@ -1,4 +1,4 @@
-import { Point } from "~/shared/math"
+import { Point } from "~/shared/geometry"
 
 export function mouseInCoordinateSystemOf(
    element: Element,

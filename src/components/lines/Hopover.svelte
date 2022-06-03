@@ -1,10 +1,11 @@
 <script lang="ts">
-   import type { Point } from "~/shared/math"
+   import { Point, Direction } from "~/shared/geometry"
    export let renderType: "default" | "highlight" | "selectLight" = "default"
    export let start: Point
    export let end: Point
    export let flip: boolean = false
-   $: v = end.displacementFrom(start).normalized().scaledBy(4)
+   $: direction = end.directionFrom(start)
+   $: v = direction ? direction.scaledBy(4) : Direction.positiveX.scaledBy(4)
 </script>
 
 {#if renderType === "default"}
