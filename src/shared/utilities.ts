@@ -40,12 +40,38 @@ export class DefaultMap<K, V> extends Map<K, V> {
          return v
       }
    }
-   // A useful new method
    update(key: K, f: (existingValue: V) => V): void {
       this.set(key, f(this.getOrCreate(key)))
    }
    clone(): DefaultMap<K, V> {
       return new DefaultMap(this.defaultValue, this)
+   }
+}
+
+export class DefaultWeakMap<K extends Object, V> extends WeakMap<K, V> {
+   readonly defaultValue: () => V
+   constructor(defaultValue: () => V, entries?: readonly [K, V][]) {
+      super(entries)
+      this.defaultValue = defaultValue
+   }
+   read(key: K): V {
+      if (this.has(key)) {
+         return super.get(key) as V
+      } else {
+         return this.defaultValue()
+      }
+   }
+   getOrCreate(key: K): V {
+      if (this.has(key)) {
+         return super.get(key) as V
+      } else {
+         let v = this.defaultValue()
+         this.set(key, v)
+         return v
+      }
+   }
+   update(key: K, f: (existingValue: V) => V): void {
+      this.set(key, f(this.getOrCreate(key)))
    }
 }
 

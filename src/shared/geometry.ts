@@ -226,7 +226,7 @@ export class Line extends Object2D {
          point.displacementFrom(this.origin).projectionOnto(this.axis)
       )
    }
-   intersection(object: Line | Ray | Segment): Point | undefined {
+   intersection(object: Line | LineSegment | Ray): Point | undefined {
       return genericIntersection(this, object)
    }
 }
@@ -251,7 +251,7 @@ export class Ray extends Object2D {
          return this.origin.displacedBy(p)
       } else return this.origin
    }
-   intersection(object: Line | Ray | Segment): Point | undefined {
+   intersection(object: Line | LineSegment | Ray): Point | undefined {
       return genericIntersection(this, object)
    }
    // Whether the given point projects onto the ray.
@@ -260,10 +260,9 @@ export class Ray extends Object2D {
    }
 }
 
-// A line segment.
-// The endpoints of a Segment are parameterized to be a subclass of Point,
-// so that users can use their own "Point-like" objects.
-export class Segment<P extends Point = Point> extends Object2D {
+// The endpoints of a line segment are parameterized to be a subclass
+// of Point, so that users can use their own "Point-like" objects.
+export class LineSegment<P extends Point = Point> extends Object2D {
    readonly start: P
    readonly end: P
    readonly axis: Axis
@@ -275,7 +274,7 @@ export class Segment<P extends Point = Point> extends Object2D {
    }
    partClosestTo(point: Point): Point {
       let d = this.end.displacementFrom(this.start)
-      let p = point.displacementFrom(this.start).projectionOnto(this.axis)
+      let p = point.displacementFrom(this.start).projectionOnto(d)
       if (
          Math.sign(p.x) !== Math.sign(d.x) ||
          Math.sign(p.y) !== Math.sign(d.y)
@@ -293,7 +292,15 @@ export class Segment<P extends Point = Point> extends Object2D {
    length(): number {
       return this.end.distanceFrom(this.start)
    }
-   intersection(object: Line | Ray | Segment): Point | undefined {
+   connectsTo(segment: LineSegment): boolean {
+      return (
+         this.start === segment.start ||
+         this.start === segment.end ||
+         this.end === segment.start ||
+         this.end === segment.end
+      )
+   }
+   intersection(object: Line | LineSegment | Ray): Point | undefined {
       return genericIntersection(this, object)
    }
    // Whether the given point projects onto the line segment.
@@ -312,12 +319,12 @@ export class Segment<P extends Point = Point> extends Object2D {
    }
 }
 
-// A representation of two Segments that cross one another.
-export class Crossing<P extends Point> extends Object2D {
-   seg1: Segment<P>
-   seg2: Segment<P>
+// A representation of two line segments that cross one another.
+export class LineSegmentCrossing<S extends LineSegment> extends Object2D {
+   seg1: S
+   seg2: S
    point: Point
-   constructor(seg1: Segment<P>, seg2: Segment<P>, point: Point) {
+   constructor(seg1: S, seg2: S, point: Point) {
       super()
       this.seg1 = seg1
       this.seg2 = seg2
@@ -330,8 +337,8 @@ export class Crossing<P extends Point> extends Object2D {
 
 // Computes the point of intersection of two line-like objects.
 function genericIntersection(
-   lineA: Line | Ray | Segment,
-   lineB: Line | Ray | Segment
+   lineA: Line | LineSegment | Ray,
+   lineB: Line | LineSegment | Ray
 ): Point | undefined {
    if (lineA.axis === lineB.axis) return undefined
    let p1, p2, p3, p4
@@ -477,14 +484,14 @@ export function closestTo<T extends Object2D>(
    return closest
 }
 
-// A variant of closestTo() exclusively for Segments.
+// A variant of closestTo() exclusively for line segments.
 // Distance is measured with respect to the given axis.
-export function closestSegmentTo<P extends Point>(
+export function closestSegmentTo<S extends LineSegment>(
    point: Point,
    alongAxis: Axis,
-   segments: Iterable<Segment<P>>
-): ClosenessResult<Segment<P>> {
-   let closest: ClosenessResult<Segment<P>>
+   segments: Iterable<S>
+): ClosenessResult<S> {
+   let closest: ClosenessResult<S>
    for (let segment of segments) {
       if (segment.axis === alongAxis) continue
       let closestPart = segment.intersection(new Line(point, alongAxis))
