@@ -12,12 +12,14 @@
    function onSymbolLeave() {}
 
    // Callbacks obtained from circuitView
+   let onToolChanged: (newTool: Tool) => void
    let onDelete: () => void
    let onSymbolEnter: (
       kind: SymbolKind,
       grabOffset: Vector,
       event: MouseEvent
    ) => void
+   $: onToolChanged ? onToolChanged(tool) : {} // Called when the tool changes.
 
    // Data related to schematic symbols
    let symbolFiles = ["/symbols/animate/pump.svg", "/symbols/animate/valve.svg"]
@@ -113,11 +115,11 @@
    }}
 >
    <CircuitView
-      {tool}
       {shift}
       {alt}
       {cmd}
       {onSymbolLeave}
+      bind:onToolChanged
       bind:onDelete
       bind:onSymbolEnter
    />

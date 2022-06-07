@@ -11,19 +11,16 @@ import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap } from "./utilities"
 
 export type Tool = "select & move" | "hydraulic line"
+
 export type Vertex = Junction | Port
+export type VertexGlyph = "default" | "plug"
 export function isVertex(thing: any): thing is Vertex {
    return thing instanceof Junction || thing instanceof Port
 }
-export type Edge = [Segment, Vertex]
-// Global variable to keep track of:
-// • Each Axis that exists
-// • How many geometric objects hold a reference to the Axis
-// We use this to "merge" axes that are sufficiently close.
+
+// We use a global variable to keep track of the Axes that the circuit elements
+// in the scene "identify with", and the quantity thereof.
 const axes = new DefaultMap<Axis, number>(() => 0)
-// The error ratio (between 0 and 1) at which two axes should be considered
-// parallel. A non-zero tolerance is required to circumvent numerical error.
-const axisErrorTolerance = 0.004
 export function rememberAxis(axis: Axis) {
    axes.update(axis, (c) => c + 1)
 }
@@ -31,7 +28,9 @@ export function forgetAxis(axis: Axis) {
    let count = axes.read(axis)
    count > 1 ? axes.set(axis, count - 1) : axes.delete(axis)
 }
-// Attempt to find an existing Axis close to the given Axis.
+// The error ratio (∈ [0, 1]) at which two axes should be considered parallel.
+const axisErrorTolerance = 0.004
+// Find an Axis in the scene that has approx. the same value as the given Axis.
 export function findAxis(subject: Axis): Axis
 export function findAxis(subject: Axis | undefined): Axis | undefined
 export function findAxis(subject: Axis | undefined): Axis | undefined {
@@ -45,20 +44,26 @@ export function findAxis(subject: Axis | undefined): Axis | undefined {
 export interface Deletable {
    delete(): Set<Junction> // Returns all Junctions adjacent to the deleted obj.
 }
+
 export interface Moveable {
    moveTo(point: Point): void
    moveBy(displacement: Vector): void
 }
+
+export type Edge = [Segment, Vertex]
 interface HasEdges {
    addEdge(edge: Edge): void
    deleteEdge(edge: Edge): void
    axes(): Axis[]
 }
+
 export class Junction extends Point implements Deletable, Moveable, HasEdges {
    static s = new Set<Junction>()
+   glyph: VertexGlyph
    readonly edges = new Set<Edge>()
    constructor(point: Point) {
       super(point.x, point.y)
+      this.glyph = "default"
       Junction.s.add(this)
    }
    delete(): Set<Junction> {
@@ -93,14 +98,59 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    isStraightLine() {
       return this.edges.size === 2 && this.axes().length === 1
    }
+   // If the junction is an X-junction or a straight line, convert it to a
+   // crossing. Thereafter, all references to the junction should be discarded.
+   convertToCrossing(
+      currentCrossings: DefaultMap<Segment, Map<Segment, Point>>,
+      crossingType?: CrossingType
+   ) {
+      if (this.edges.size !== 2 && this.edges.size !== 4) return
+      // Gather all pairs of colinear edges.
+      let ax = new DefaultMap<Axis, Segment[]>(() => [])
+      for (let edge of this.edges) ax.getOrCreate(edge[0].axis).push(edge[0])
+      let pairs = new Set<[Segment, Segment]>()
+      for (let pair of ax.values()) {
+         if (pair.length !== 2) return
+         pairs.add([pair[0], pair[1]])
+      }
+      // Merge each pair of segments into a single segment.
+      let crossing = []
+      for (let segs of pairs) {
+         let mergedSegment = new Segment(
+            this === segs[0].start ? segs[0].end : segs[0].start,
+            this === segs[1].start ? segs[1].end : segs[1].start,
+            segs[0].axis
+         )
+         crossing.push(mergedSegment)
+         // Merge the crossing types of the old segments into the new one.
+         let seg0Crossings = currentCrossings.read(segs[0])
+         for (let s of Segment.s) {
+            let type = segs[seg0Crossings.has(s) ? 0 : 1].crossingTypes.read(s)
+            mergedSegment.crossingTypes.set(s, type)
+            s.crossingTypes.set(mergedSegment, type)
+         }
+         // Get rid of the old segments.
+         segs[0].delete()
+         segs[1].delete()
+      }
+      if (crossing.length === 2 && crossingType) {
+         // Set the crossing type of the crossing itself.
+         crossing[0].crossingTypes.set(crossing[1], crossingType)
+         crossing[1].crossingTypes.set(crossing[0], crossingType)
+      }
+      this.delete()
+   }
 }
+
 export class Port extends Point implements Moveable, HasEdges {
    static s = new Set<Port>()
    readonly symbol: SymbolInstance
+   glyph: VertexGlyph
    edge: Edge | null
    constructor(symbol: SymbolInstance, point: Point) {
       super(point.x, point.y)
       this.symbol = symbol
+      this.glyph = "default"
       this.edge = null
       Port.s.add(this)
    }
@@ -120,6 +170,7 @@ export class Port extends Point implements Moveable, HasEdges {
       return this.edge ? [this.edge[0].axis] : []
    }
 }
+
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(
@@ -152,7 +203,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       ;(this.axis as Axis) = newAxis
    }
    // Replace this segment with another (or several), transferring all of its
-   // properties. Thereafter, the segment should be forgotten.
+   // properties. Thereafter, all references to the segment should be discarded.
    replaceWith(...newSegments: Segment[]) {
       for (let newSegment of newSegments) {
          // Transfer the crossing types.
@@ -164,7 +215,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       this.delete()
    }
    // Split the segment at the given point, which is assumed to lie on the
-   // segment. Thereafter, the segment should be forgotten.
+   // segment. Thereafter, all references to the segment should be discarded.
    cutAt(point: Junction) {
       let { start, end, axis } = this
       this.replaceWith(
@@ -173,14 +224,22 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       )
    }
 }
+
 export type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
 export class Crossing extends Geometry.LineSegmentCrossing<Segment> {}
+export function convertToJunction(crossing: Crossing) {
+   let cutPoint = new Junction(crossing.point)
+   crossing.seg1.cutAt(cutPoint)
+   crossing.seg2.cutAt(cutPoint)
+}
+
 export type SymbolKind = {
    readonly filePath: string
    readonly svgTemplate: SVGElement
    readonly boundingBox: Range2D
    readonly portLocations: Point[]
 }
+
 export class SymbolInstance extends Rectangle implements Deletable, Moveable {
    static s = new Set<SymbolInstance>()
    private static nextUUID = 0

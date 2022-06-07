@@ -1,5 +1,4 @@
 <script lang="ts">
-   // Imports
    import {
       Tool,
       Vertex,
@@ -13,6 +12,7 @@
       Crossing,
       SymbolKind,
       SymbolInstance,
+      convertToJunction,
    } from "~/shared/definitions"
    import {
       Object2D,
@@ -30,7 +30,6 @@
    import {
       mouseInCoordinateSystemOf,
       DefaultMap,
-      DefaultWeakMap,
       ToggleSet,
    } from "~/shared/utilities"
    import FluidLine from "~/components/lines/FluidLine.svelte"
@@ -39,10 +38,9 @@
    import VertexMarker from "~/components/VertexMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
-   // Root element
-   let canvas: SVGElement
-   // Input props
-   export let tool: Tool
+
+   // ---------------------- Props (for input & output) -----------------------
+   // Props that must be bound by the parent component.
    export let shift: boolean
    export let alt: boolean
    export let cmd: boolean
@@ -51,22 +49,17 @@
       grabOffset: Vector,
       event: MouseEvent
    ) => void
-   // Output props
+   // Values shared with the parent component.
+   export const onToolChanged = toolChanged
    export const onDelete = deleteSelected
    export const onSymbolEnter = spawnSymbol
-   // Response to props changing
-   $: {
-      if (tool === "hydraulic line") selected = new ToggleSet()
-   }
-   $: {
-      shift ? shiftDown() : shiftUp()
-   }
-   $: {
-      alt ? altDown() : altUp()
-   }
-   $: {
-      cmd ? cmdDown() : cmdUp()
-   }
+   // Events triggered by updates to props.
+   $: shift ? shiftDown() : shiftUp()
+   $: alt ? altDown() : altUp()
+   $: cmd ? cmdDown() : cmdUp()
+
+   // ------------------------------ Constants --------------------------------
+   let canvas: SVGElement // the root element of this component
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -91,8 +84,27 @@
       Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
    snapAxes.forEach(rememberAxis)
-   // ✨ A magical easing function for aesthetically-pleasing snapping. We
-   // displace the source from its true position as it approaches the target.
+   // The toggle order of the glyphs that appear at crossings.
+   const crossingToggleSeq: CrossingType[] = [
+      "no hop",
+      "V right",
+      "H down",
+      "V left",
+      "H up",
+   ]
+
+   // ---------------------- Supplementary definitions ------------------------
+   function* vertices() {
+      for (let v of Junction.s) yield v
+      for (let v of Port.s) yield v
+   }
+   function* crossings() {
+      for (let [seg1, map] of crossingMap) {
+         for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
+      }
+   }
+   // ✨ A magical easing function for aesthetically-pleasing snapping. The
+   // source is displaced from its true position as it approaches the target.
    function easeFn(distance: number) {
       const a =
          (snapRadius - snapJump) /
@@ -100,25 +112,6 @@
       const b = -2 * a * easeRadius
       const c = -a * sqEaseRadius - b * easeRadius
       return a * distance * distance + b * distance + c
-   }
-   type EasingOutcome =
-      | { outcome: "snapped"; point: Point }
-      | { outcome: "eased"; point: Point }
-      | { outcome: "no easing"; point: Point }
-   function easeToTarget(source: Point, target?: Point): EasingOutcome {
-      if (!target) return { outcome: "no easing", point: source }
-      // Easing constants
-      let sqDistance = source.sqDistanceFrom(target)
-      if (sqDistance < sqSnapRadius) {
-         return { outcome: "snapped", point: target }
-      } else if (sqDistance < sqEaseRadius) {
-         let easeDir = target.directionFrom(source) as Direction
-         let distance = Math.sqrt(sqDistance)
-         return {
-            outcome: "eased",
-            point: source.displacedBy(easeDir.scaledBy(easeFn(distance))),
-         }
-      } else return { outcome: "no easing", point: source }
    }
    function closestNearTo<T extends Object2D>(
       point: Point,
@@ -174,36 +167,55 @@
          closestNearTo(point, Segment.s)
       )
    }
-   // -------------------------------------
-   function* vertices() {
-      for (let v of Junction.s) yield v
-      for (let v of Port.s) yield v
-   }
-   function* crossings() {
-      for (let [seg1, map] of crossingMap) {
-         for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
-      }
-   }
+
+   // ---------------------------- Primary state ------------------------------
+   // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let mouse: Point = Point.zero
+   let waitingForDrag: Point | null = null
+   let tool: Tool = "hydraulic line"
+   let draw: {
+      segment: Segment
+      segmentIsNew: boolean
+      endObject?: Attachable
+   } | null = null
+   let move: {
+      points: Set<Vertex>
+      locationGrabbed: Point
+      axisGrabbed: Axis
+      offset: Vector
+      distance: number
+      originalPositions: DefaultMap<Junction | SymbolInstance, Point>
+   } | null = null
+   let rectSelect: {
+      start: Point
+      end: Point
+      highlighted: Set<Grabbable>
+   } | null = null
    let currentSymbol: { instance: SymbolInstance; grabOffset: Vector } | null =
       null
-   // We store how each vertex in the circuit should be rendered.
-   // TODO: I should store this directly on Ports and Junctions themselves??
-   // Then I wouldn't need to use a WeakMap.
-   let vertexGlyphs = new DefaultWeakMap<Point, "default" | "plug">(
-      () => "default"
-   )
-   const crossingToggleSeq: CrossingType[] = [
-      "no hop",
-      "V right",
-      "H down",
-      "V left",
-      "H up",
-   ]
-   // Because the presence of hopovers is independent of the circuit topology,
-   // the circuit topology does not directly determine the SVG paths & lines
-   // that need to be rendered. We compute the required SVG paths & lines below.
-   let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
+   let selected: ToggleSet<Grabbable> = new ToggleSet()
+   $: /* TODO: This is temporary. Make the currentSymbol follow the mouse. */ {
+      if (currentSymbol) {
+         currentSymbol.instance.moveTo(
+            mouse.displacedBy(currentSymbol.grabOffset)
+         )
+         SymbolInstance.s = SymbolInstance.s
+         Port.s = Port.s
+      }
+   }
+
+   // ---------------------------- Derived state ------------------------------
+   let drawMode: "strafing" | "fixed-axis rotation" | "free rotation"
    $: {
+      drawMode = alt
+         ? shift
+            ? "free rotation"
+            : "fixed-axis rotation"
+         : "strafing"
+      updateMove() // Treat changes to drawMode as events.
+   }
+   let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
+   $: /* Determine which Segments are crossing, and where they cross. */ {
       crossingMap = new DefaultMap(() => new Map())
       for (let seg1 of Segment.s) {
          for (let seg2 of Segment.s) {
@@ -222,161 +234,8 @@
          }
       }
    }
-   type Section = Geometry.LineSegment<Point>
-   let segmentsToDraw: Map<Segment, Section[]>
-   type Glyph =
-      | {
-           type: "hopover"
-           segment: Segment
-           point: Point
-           start: Point
-           end: Point
-           flip: boolean
-        }
-      | { type: "junction node"; junction: Junction }
-      | { type: "plug"; vertex: Vertex }
-      | { type: "vertex marker"; point: Point }
-   let glyphsToDraw: Set<Glyph>
-   $: {
-      segmentsToDraw = new Map()
-      glyphsToDraw = new Set()
-      for (let segment of Segment.s) {
-         // This array will collect the segment endpoints, and all of the
-         // points at which the hopovers should be spliced into the segment.
-         let points: Point[] = [segment.start, segment.end]
-         for (let [other, crossPoint] of crossingMap.read(segment)) {
-            // Determine which segment is the "horizontal" one.
-            let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
-            let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
-            let hSegment: Segment
-            if (Math.abs(segReject) < Math.abs(otherReject)) {
-               hSegment = segment
-            } else if (Math.abs(segReject) > Math.abs(otherReject)) {
-               hSegment = other
-            } else {
-               hSegment = segReject < otherReject ? segment : other
-            }
-            // Determine which segment will hop over the other.
-            let type = segment.crossingTypes.read(other)
-            if (
-               (hSegment === segment && (type == "H up" || type == "H down")) ||
-               (hSegment === other && (type == "V left" || type == "V right"))
-            ) {
-               let [start, end] = [
-                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
-                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
-               ]
-               points.push(start, end)
-               let flip = type === "H down" || type === "V right"
-               glyphsToDraw.add({
-                  type: "hopover",
-                  segment,
-                  point: crossPoint,
-                  start,
-                  end,
-                  flip,
-               })
-            } else if (type === "no hop" && highlighted.has(crossPoint)) {
-               glyphsToDraw.add({ type: "vertex marker", point: crossPoint })
-            }
-         }
-         // Compute the sections that need to be drawn.
-         let distanceOf = (p: Point) => p.sqDistanceFrom(segment.start)
-         points.sort((a, b) => distanceOf(a) - distanceOf(b))
-         let sections: Section[] = []
-         for (let i = 0; i < points.length; i += 2) {
-            sections.push(
-               new Geometry.LineSegment(points[i], points[i + 1], segment.axis)
-            )
-         }
-         segmentsToDraw.set(segment, sections)
-      }
-      // Determine the other glyphs that need to be drawn at vertices.
-      for (let v of vertices()) {
-         if (vertexGlyphs.read(v) === "plug") {
-            glyphsToDraw.add({ type: "plug", vertex: v })
-         } else if (v instanceof Junction) {
-            if (v.edges.size > 2) {
-               glyphsToDraw.add({ type: "junction node", junction: v })
-            } else if (
-               v.isStraightLine() ||
-               highlighted.has(v) ||
-               selected.has(v)
-            ) {
-               glyphsToDraw.add({ type: "vertex marker", point: v })
-            }
-         }
-      }
-      // Determine the glyphs that need to be drawn at symbol attachment points.
-      for (let symbol of SymbolInstance.s) {
-         for (let p of symbol.ports) {
-            if (highlighted.has(p)) {
-               glyphsToDraw.add({ type: "vertex marker", point: p })
-            }
-         }
-      }
-   }
-   // If the junction is an X-junction, or a pair of colinear segments,
-   // convert it into a crossing.
-   function convertToCrossing(junction: Junction) {
-      let parts = partsOfJunction(junction)
-      let crossing = []
-      for (let segs of parts) {
-         let mergedSegment = new Segment(
-            junction === segs[0].start ? segs[0].end : segs[0].start,
-            junction === segs[1].start ? segs[1].end : segs[1].start,
-            segs[0].axis
-         )
-         crossing.push(mergedSegment)
-         // Merge the crossing types of the old segments into the new one.
-         // The merge strategy is: if segs[0] is currently crossing another
-         // segment, use that crossing type. Otherwise, use seg[1]'s type.
-         let seg0Crossings = crossingMap.read(segs[0])
-         for (let s of Segment.s) {
-            let type = segs[seg0Crossings.has(s) ? 0 : 1].crossingTypes.read(s)
-            mergedSegment.crossingTypes.set(s, type)
-            s.crossingTypes.set(mergedSegment, type)
-         }
-         // Get rid of the old segments.
-         segs[0].delete()
-         segs[1].delete()
-      }
-      if (crossing.length === 2) {
-         // Set the crossing type of the crossing itself.
-         crossing[0].crossingTypes.set(crossing[1], crossingToggleSeq[0])
-         crossing[1].crossingTypes.set(crossing[0], crossingToggleSeq[0])
-      }
-      junction.delete()
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-   }
-   function convertToJunction(crossing: Crossing) {
-      let cutPoint = new Junction(crossing.point)
-      crossing.seg1.cutAt(cutPoint)
-      crossing.seg2.cutAt(cutPoint)
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-   }
-   // If the junction is an X-junction, or a pair of colinear segments, return
-   // each pair of colinear segments. Otherwise, return nothing.
-   function partsOfJunction(junction: Junction): Set<[Segment, Segment]> {
-      if (junction.edges.size !== 2 && junction.edges.size !== 4)
-         return new Set()
-      let axes = new DefaultMap<Axis, Segment[]>(() => [])
-      for (let edge of junction.edges) {
-         axes.getOrCreate(edge[0].axis).push(edge[0])
-      }
-      let pairs = new Set<[Segment, Segment]>()
-      for (let segmentPair of axes.values()) {
-         if (segmentPair.length !== 2) return new Set()
-         pairs.add([segmentPair[0], segmentPair[1]])
-      }
-      return pairs
-   }
-   // Input state
-   let mouse: Point = Point.zero
    let cursor: "auto" | "grab" | "grabbing" | "cell"
-   $: {
+   $: /* Where helpful, change the appearance of the mouse cursor. */ {
       if (move) {
          cursor = "grabbing"
       } else {
@@ -387,9 +246,8 @@
          }
       }
    }
-   let waitingForDrag: Point | null = null
    let highlighted: Set<Highlightable>
-   $: {
+   $: /* Highlight objects near the mouse cursor. */ {
       highlighted = new Set()
       if (draw?.endObject instanceof Segment) {
          highlighted.add(draw.endObject)
@@ -472,17 +330,99 @@
          bulkHighlighted = new Set()
       }
    }
-   let selected: ToggleSet<Grabbable> = new ToggleSet()
-   function deleteSelected() {
-      let junctionsToConvert = new Set<Junction>()
-      for (let thing of selected) {
-         if (thing instanceof Port) continue // Ports are not deletable.
-         thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
+   type Section = Geometry.LineSegment<Point>
+   type Glyph =
+      | {
+           type: "hopover"
+           segment: Segment
+           point: Point
+           start: Point
+           end: Point
+           flip: boolean
+        }
+      | { type: "junction node"; junction: Junction }
+      | { type: "plug"; vertex: Vertex }
+      | { type: "vertex marker"; point: Point }
+   let segmentsToDraw: Map<Segment, Section[]>
+   let glyphsToDraw: Set<Glyph>
+   $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
+      segmentsToDraw = new Map()
+      glyphsToDraw = new Set()
+      for (let segment of Segment.s) {
+         // This array will collect the segment endpoints, and all of the
+         // points at which the hopovers should be spliced into the segment.
+         let points: Point[] = [segment.start, segment.end]
+         for (let [other, crossPoint] of crossingMap.read(segment)) {
+            // Determine which segment is the "horizontal" one.
+            let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
+            let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
+            let hSegment: Segment
+            if (Math.abs(segReject) < Math.abs(otherReject)) {
+               hSegment = segment
+            } else if (Math.abs(segReject) > Math.abs(otherReject)) {
+               hSegment = other
+            } else {
+               hSegment = segReject < otherReject ? segment : other
+            }
+            // Determine which segment will hop over the other.
+            let type = segment.crossingTypes.read(other)
+            if (
+               (hSegment === segment && (type == "H up" || type == "H down")) ||
+               (hSegment === other && (type == "V left" || type == "V right"))
+            ) {
+               let [start, end] = [
+                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
+                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
+               ]
+               points.push(start, end)
+               let flip = type === "H down" || type === "V right"
+               glyphsToDraw.add({
+                  type: "hopover",
+                  segment,
+                  point: crossPoint,
+                  start,
+                  end,
+                  flip,
+               })
+            } else if (type === "no hop" && highlighted.has(crossPoint)) {
+               glyphsToDraw.add({ type: "vertex marker", point: crossPoint })
+            }
+         }
+         // Compute the sections that need to be drawn.
+         let distanceOf = (p: Point) => p.sqDistanceFrom(segment.start)
+         points.sort((a, b) => distanceOf(a) - distanceOf(b))
+         let sections: Section[] = []
+         for (let i = 0; i < points.length; i += 2) {
+            sections.push(
+               new Geometry.LineSegment(points[i], points[i + 1], segment.axis)
+            )
+         }
+         segmentsToDraw.set(segment, sections)
       }
-      for (let junction of junctionsToConvert) {
-         if (junction.edges.size === 2) convertToCrossing(junction)
+      // Determine the other glyphs that need to be drawn at vertices.
+      for (let v of vertices()) {
+         if (v.glyph === "plug") {
+            glyphsToDraw.add({ type: "plug", vertex: v })
+         } else if (v instanceof Junction) {
+            if (v.edges.size > 2) {
+               glyphsToDraw.add({ type: "junction node", junction: v })
+            } else if (
+               v.isStraightLine() ||
+               highlighted.has(v) ||
+               selected.has(v)
+            ) {
+               glyphsToDraw.add({ type: "vertex marker", point: v })
+            }
+         }
       }
-      selected = new ToggleSet()
+      // Determine the glyphs that need to be drawn at symbol attachment points.
+      for (let symbol of SymbolInstance.s) {
+         for (let p of symbol.ports) {
+            if (highlighted.has(p)) {
+               glyphsToDraw.add({ type: "vertex marker", point: p })
+            }
+         }
+      }
    }
    function selectedVertices(): Set<Vertex> {
       let s = new Set<Vertex>()
@@ -498,26 +438,179 @@
       }
       return s
    }
-   let draw: {
-      mode: "strafing" | "fixed-axis rotation" | "free rotation"
-      segment: Segment
-      segmentIsNew: boolean
-      endObject?: Attachable
-   } | null = null
-   let move: {
-      points: Set<Vertex>
-      locationGrabbed: Point
-      axisGrabbed: Axis
-      offset: Vector
-      distance: number
-      originalPositions: DefaultMap<Junction | SymbolInstance, Point>
-   } | null = null
-   let rectSelect: {
-      start: Point
-      end: Point
-      highlighted: Set<Grabbable>
-   } | null = null
 
+   // ---------------------------- Primary events -----------------------------
+   function toolChanged(newTool: Tool) {
+      tool = newTool
+      if (tool === "hydraulic line") selected = new ToggleSet()
+   }
+   function deleteSelected() {
+      let junctionsToConvert = new Set<Junction>()
+      for (let thing of selected) {
+         if (thing instanceof Port) continue // Ports are not deletable.
+         thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
+      }
+      for (let junction of junctionsToConvert) {
+         if (junction.edges.size === 2) junction.convertToCrossing(crossingMap)
+      }
+      selected = new ToggleSet()
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+   }
+   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
+      let initPos = mouseInCoordinateSystemOf(canvas, e).displacedBy(grabOffset)
+      let instance = new SymbolInstance(kind, initPos, Rotation.zero)
+      currentSymbol = { instance, grabOffset }
+   }
+   function shiftDown() {}
+   function shiftUp() {}
+   function altDown() {
+      if (draw && move) {
+         // Reset the reference information for the movement.
+         move.locationGrabbed = draw.segment.end.clone()
+         for (let grabbable of move.originalPositions.keys()) {
+            if (grabbable instanceof Junction) {
+               move.originalPositions.set(grabbable, grabbable.clone())
+            } else if (grabbable instanceof SymbolInstance) {
+               move.originalPositions.set(grabbable, grabbable.position.clone())
+            }
+         }
+      }
+   }
+   function altUp() {}
+   function cmdDown() {}
+   function cmdUp() {}
+   // The state the left mouse button SHOULD be in (omitting browser mayhem.)
+   let leftMouseShouldBeDown = false
+   // The state the left mouse button is ACTUALLY in.
+   function leftMouseIsDown(event: MouseEvent) {
+      return (event.buttons & 0b1) === 1
+   }
+   function leftMouseDown(clickPoint: Point) {
+      leftMouseShouldBeDown = true
+      switch (tool) {
+         case "select & move": {
+            let grab = closestGrabbable(clickPoint)
+            if (grab && !shift && !alt) {
+               if (cmd) {
+                  selected.clear()
+                  for (let s of bulkHighlighted) selected.add(s)
+               } else if (!selected.has(grab.object)) {
+                  selected = new ToggleSet([grab.object])
+               }
+               beginMove(grab.object, grab.closestPart, true)
+            } else waitingForDrag = clickPoint
+            break
+         }
+         case "hydraulic line":
+            waitingForDrag = clickPoint
+            break
+      }
+   }
+   function mouseMoved(newMouse: Point) {
+      if (move) move.distance += newMouse.distanceFrom(mouse)
+      mouse = newMouse
+      // Check if the mouse has moved enough to trigger an action.
+      if (waitingForDrag) {
+         let d = mouse.displacementFrom(waitingForDrag)
+         switch (tool) {
+            case "select & move":
+               if (d.sqLength() > 16) {
+                  beginRectSelect(waitingForDrag)
+                  waitingForDrag = null
+               }
+               break
+            case "hydraulic line":
+               if (d.sqLength() > sqSnapRadius) {
+                  let drawAxis =
+                     Math.abs(d.x) >= Math.abs(d.y)
+                        ? Axis.horizontal
+                        : Axis.vertical
+                  let attach = closestAttachable(waitingForDrag)
+                  if (attach) {
+                     if (attach.object instanceof Segment) {
+                        let cutPoint = new Junction(attach.closestPart)
+                        attach.object.cutAt(cutPoint)
+                        beginDraw(cutPoint, drawAxis)
+                     } else {
+                        beginDraw(attach.object, drawAxis)
+                     }
+                  } else beginDraw(new Junction(waitingForDrag), drawAxis)
+                  waitingForDrag = null
+               }
+               break
+         }
+      }
+      // Update state that depends on mouse movement.
+      if (move) updateMove()
+      if (rectSelect) updateRectSelect()
+   }
+   function leftMouseUp(unexpectedly?: boolean) {
+      if (draw) endDraw()
+      if (move) endMove()
+      if (rectSelect) endRectSelect(unexpectedly)
+      waitingForDrag = null
+      leftMouseShouldBeDown = false
+   }
+   function leftMouseClicked() {
+      switch (tool) {
+         case "select & move": {
+            let grab = closestGrabbable(mouse)
+            if (!grab) selected.clear()
+            else if (shift && cmd)
+               for (let s of bulkHighlighted) selected.add(s)
+            else if (shift && !cmd) selected.toggle(grab.object)
+            else if (alt && cmd)
+               for (let s of bulkHighlighted) selected.delete(s)
+            else if (alt && !cmd) selected.delete(grab.object)
+            else selected = new ToggleSet([grab.object])
+            selected = selected
+            break
+         }
+         case "hydraulic line": {
+            let toggle = closestToggleable(mouse)
+            if (!toggle) break
+            if (isVertex(toggle.object)) {
+               if (toggle.object.glyph === "default") {
+                  toggle.object.glyph = "plug"
+               } else {
+                  toggle.object.glyph = "default"
+                  if (toggle.object instanceof Junction)
+                     toggle.object.convertToCrossing(
+                        crossingMap,
+                        crossingToggleSeq[0]
+                     )
+               }
+               Junction.s = Junction.s
+               Port.s = Port.s
+            } else if (toggle.object instanceof Segment) {
+               let cutPoint = new Junction(toggle.closestPart)
+               toggle.object.cutAt(cutPoint)
+               cutPoint.glyph = "plug"
+               Junction.s = Junction.s
+            } else if (toggle.object instanceof Crossing) {
+               // Change the crossing glyph.
+               let { seg1, seg2 } = toggle.object
+               let oldType = seg1.crossingTypes.read(seg2)
+               let i = crossingToggleSeq.indexOf(oldType) + 1
+               if (i < crossingToggleSeq.length) {
+                  seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
+                  seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
+                  Segment.s = Segment.s
+               } else {
+                  convertToJunction(toggle.object)
+                  Junction.s = Junction.s
+                  Segment.s = Segment.s
+               }
+            }
+            break
+         }
+      }
+   }
+
+   // ---------------------------- Derived events -----------------------------
    function beginDraw(start: Vertex, axis: Axis) {
       // Add the line being drawn to the circuit.
       let end = new Junction(start)
@@ -526,93 +619,6 @@
       // Configure the endpoint of the line to be dragged as the mouse moves.
       selected = new ToggleSet([end])
       beginMove(end, end, true)
-   }
-   $: {
-      if (draw && move) {
-         if (alt) {
-            draw.mode = shift ? "free rotation" : "fixed-axis rotation"
-         } else {
-            draw.mode = "strafing"
-         }
-         if (draw.mode === "fixed-axis rotation") {
-            // Check which axis the mouse is closest to. If the axis has
-            // changed, restart the drawing operation along the new axis.
-            let drawVector = mouse.displacementFrom(draw.segment.start)
-            let newAxis = findAxis(Axis.fromVector(drawVector))
-            if (newAxis) {
-               // Snap to the nearest standard axis.
-               let scores = snapAxes.map((axis) =>
-                  Math.abs((newAxis as Axis).dot(axis))
-               )
-               newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
-               if (newAxis !== draw.segment.axis) {
-                  let newEnd = draw.segment.start.displacedBy(
-                     drawVector.projectionOnto(newAxis)
-                  )
-                  draw.segment.moveEndTo(newEnd, newAxis)
-                  // Reset the move operation.
-                  beginMove(draw.segment.end, newEnd, false)
-               }
-            }
-            Junction.s = Junction.s
-         } else if (draw.mode === "free rotation") {
-            // To accommodate for the constantly-changing drawing axis, the draw
-            // operation is restarted from scratch every update. (This is a bit
-            // of a hack, but it's the simplest way to integrate "free
-            // rotation" with the other drawing modes.)
-            function isAcceptableTEMP(vertex: Vertex) {
-               if (vertex === draw!.segment.end) return false
-               if (vertex instanceof Port) return true
-               let start = draw!.segment.start
-               let drawAxis = findAxis(
-                  Axis.fromVector(vertex.displacementFrom(start))
-               )
-               if (!drawAxis) return false
-               for (let [{ axis }, other] of vertex.edges) {
-                  // Reject if the segment being drawn would overlap this seg.
-                  if (
-                     axis === drawAxis &&
-                     other.distanceFrom(start) + 1 <
-                        vertex.distanceFrom(start) + other.distanceFrom(vertex)
-                  )
-                     return false
-               }
-               return true
-            }
-            let closest = closestNearTo(
-               mouse,
-               Array.from(vertices()).filter(isAcceptableTEMP)
-            )
-            let newAxis = findAxis(
-               Axis.fromVector(
-                  closest
-                     ? closest.object.displacementFrom(draw.segment.start)
-                     : mouse.displacementFrom(draw.segment.start)
-               )
-            )
-            if (newAxis) {
-               let newEnd = closest ? closest.object : mouse
-               draw.segment.moveEndTo(newEnd, newAxis)
-               // Reset the move operation.
-               beginMove(draw.segment.end, newEnd, false)
-               // Do snapping.
-               if (closest) {
-                  draw.endObject = closest.object
-               } else {
-                  let s = closestSegmentNearTo(mouse, newAxis)
-                  if (s) {
-                     draw.segment.end.moveTo(s.closestPart)
-                     draw.endObject = s.object
-                  } else {
-                     draw.endObject = undefined
-                  }
-               }
-            }
-            Junction.s = Junction.s
-         } else {
-            // The rest of the drawing logic is co-located with the move logic.
-         }
-      }
    }
    function endDraw() {
       if (!draw) return
@@ -705,9 +711,83 @@
          }
       }
    }
-   // ----- Compute the state of an in-progress move operation -----
-   $: /* On a change to 'draw, 'move', or 'mouse' */ {
-      if (move && draw?.mode !== "free rotation") {
+   function updateMove() {
+      if (!move) return
+      if (draw && drawMode === "fixed-axis rotation") {
+         // Check which axis the mouse is closest to. If the axis has
+         // changed, restart the move operation along the new axis.
+         let drawVector = mouse.displacementFrom(draw.segment.start)
+         let newAxis = findAxis(Axis.fromVector(drawVector))
+         if (newAxis) {
+            // Snap to the nearest standard axis.
+            let scores = snapAxes.map((axis) =>
+               Math.abs((newAxis as Axis).dot(axis))
+            )
+            newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
+            if (newAxis !== draw.segment.axis) {
+               let newEnd = draw.segment.start.displacedBy(
+                  drawVector.projectionOnto(newAxis)
+               )
+               draw.segment.moveEndTo(newEnd, newAxis)
+               // Reset the move operation.
+               beginMove(draw.segment.end, newEnd, false)
+            }
+         }
+         Junction.s = Junction.s
+      } else if (draw && drawMode === "free rotation") {
+         // To accommodate for the constantly-changing drawing axis,
+         // the move operation is restarted from scratch every update.
+         function isAcceptableTEMP(vertex: Vertex) {
+            if (vertex === draw!.segment.end) return false
+            if (vertex instanceof Port) return true
+            let start = draw!.segment.start
+            let drawAxis = findAxis(
+               Axis.fromVector(vertex.displacementFrom(start))
+            )
+            if (!drawAxis) return false
+            for (let [{ axis }, other] of vertex.edges) {
+               // Reject if the segment being drawn would overlap this seg.
+               if (
+                  axis === drawAxis &&
+                  other.distanceFrom(start) + 1 <
+                     vertex.distanceFrom(start) + other.distanceFrom(vertex)
+               )
+                  return false
+            }
+            return true
+         }
+         let closest = closestNearTo(
+            mouse,
+            Array.from(vertices()).filter(isAcceptableTEMP)
+         )
+         let newAxis = findAxis(
+            Axis.fromVector(
+               closest
+                  ? closest.object.displacementFrom(draw.segment.start)
+                  : mouse.displacementFrom(draw.segment.start)
+            )
+         )
+         if (newAxis) {
+            let newEnd = closest ? closest.object : mouse
+            draw.segment.moveEndTo(newEnd, newAxis)
+            // Reset the move operation.
+            beginMove(draw.segment.end, newEnd, false)
+            // Do snapping.
+            if (closest) {
+               draw.endObject = closest.object
+            } else {
+               let s = closestSegmentNearTo(mouse, newAxis)
+               if (s) {
+                  draw.segment.end.moveTo(s.closestPart)
+                  draw.endObject = s.object
+               } else {
+                  draw.endObject = undefined
+               }
+            }
+         }
+         Junction.s = Junction.s
+      }
+      if (draw?.mode !== "free rotation") {
          let drawingEdgeCase = draw && draw.segment.start.axes().length !== 2
          type MoveInfo = {
             moveType: "no move" | Axis | "full move"
@@ -726,14 +806,14 @@
                move.offset.scaledBy(1 - move.distance / 15)
             )
          }
-         if (draw && draw.mode === "fixed-axis rotation") {
+         if (draw && drawMode === "fixed-axis rotation") {
             fullMove = fullMove.projectionOnto(draw.segment.axis)
             moveVertex(draw.segment.end, fullMove)
          } else {
             doMove(fullMove)
          }
          let snappedToPoint = false
-         if (draw && draw.mode === "strafing") {
+         if (draw && drawMode === "strafing") {
             // Try snapping the moved Vertex to another Vertex nearby.
             function isAcceptableTEMP(vertex: Vertex) {
                if (vertex instanceof Port) return true
@@ -772,7 +852,7 @@
                move.distance < 15
                   ? fullMove.add(snapGap.scaledBy(move.distance / 15))
                   : fullMove.add(snapGap)
-            if (draw && draw.mode === "fixed-axis rotation") {
+            if (draw && drawMode === "fixed-axis rotation") {
                snappedMove = snappedMove.projectionOnto(draw.segment.axis)
                moveVertex(draw.segment.end, snappedMove)
             } else {
@@ -994,38 +1074,37 @@
          highlighted: new Set(),
       }
    }
-   $: /* On a change to 'rectSelect' or 'mouse' */ {
-      if (rectSelect) {
-         rectSelect.end = mouse
-         rectSelect.highlighted = new Set()
-         let range = Range2D.fromCorners(rectSelect.start, rectSelect.end)
-         // Highlight Junctions and Segments.
-         for (let start of Junction.s) {
-            if (range.contains(start)) {
-               let segmentAdded = false
-               for (let [segment, end] of start.edges) {
-                  if (range.contains(end)) {
-                     rectSelect.highlighted.add(segment)
-                     segmentAdded = true
-                  }
-               }
-               if (!segmentAdded) {
-                  rectSelect.highlighted.add(start)
+   function updateRectSelect() {
+      if (!rectSelect) return
+      rectSelect.end = mouse
+      rectSelect.highlighted = new Set()
+      let range = Range2D.fromCorners(rectSelect.start, rectSelect.end)
+      // Highlight Junctions and Segments.
+      for (let start of Junction.s) {
+         if (range.contains(start)) {
+            let segmentAdded = false
+            for (let [segment, end] of start.edges) {
+               if (range.contains(end)) {
+                  rectSelect.highlighted.add(segment)
+                  segmentAdded = true
                }
             }
-         }
-         // Don't highlight Junctions if their Segment is already selected.
-         for (let thing of selected) {
-            if (thing instanceof Segment) {
-               rectSelect.highlighted.delete(thing.start as Junction)
-               rectSelect.highlighted.delete(thing.end as Junction)
+            if (!segmentAdded) {
+               rectSelect.highlighted.add(start)
             }
          }
-         for (let symbol of SymbolInstance.s) {
-            // Highlight enclosed symbols.
-            if (symbol.svgCorners().every((c) => range.contains(c))) {
-               rectSelect.highlighted.add(symbol)
-            }
+      }
+      // Don't highlight Junctions if their Segment is already selected.
+      for (let thing of selected) {
+         if (thing instanceof Segment) {
+            rectSelect.highlighted.delete(thing.start as Junction)
+            rectSelect.highlighted.delete(thing.end as Junction)
+         }
+      }
+      for (let symbol of SymbolInstance.s) {
+         // Highlight enclosed symbols.
+         if (symbol.svgCorners().every((c) => range.contains(c))) {
+            rectSelect.highlighted.add(symbol)
          }
       }
    }
@@ -1040,156 +1119,6 @@
          selected = selected
       }
       rectSelect = null
-   }
-   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
-      let initPos = mouseInCoordinateSystemOf(canvas, e).displacedBy(grabOffset)
-      let instance = new SymbolInstance(kind, initPos, Rotation.zero)
-      currentSymbol = { instance, grabOffset }
-   }
-   $: {
-      if (currentSymbol) {
-         currentSymbol.instance.moveTo(
-            mouse.displacedBy(currentSymbol.grabOffset)
-         )
-         SymbolInstance.s = SymbolInstance.s
-         Port.s = Port.s
-      }
-   }
-   function shiftDown() {}
-   function shiftUp() {}
-   function altDown() {
-      if (draw && move) {
-         // Reset the reference information for the movement.
-         move.locationGrabbed = draw.segment.end.clone()
-         for (let grabbable of move.originalPositions.keys()) {
-            if (grabbable instanceof Junction) {
-               move.originalPositions.set(grabbable, grabbable.clone())
-            } else if (grabbable instanceof SymbolInstance) {
-               move.originalPositions.set(grabbable, grabbable.position.clone())
-            }
-         }
-      }
-   }
-   function altUp() {}
-   function cmdDown() {}
-   function cmdUp() {}
-   // The state the left mouse button SHOULD be in (if the browser hasn't
-   // concealed any events from us).
-   let leftMouseShouldBeDown = false
-   // The state the left mouse button is ACTUALLY in.
-   function leftMouseIsDown(event: MouseEvent) {
-      return (event.buttons & 0b1) === 1
-   }
-   function leftMouseDown(clickPoint: Point) {
-      leftMouseShouldBeDown = true
-      switch (tool) {
-         case "select & move": {
-            let grab = closestGrabbable(clickPoint)
-            if (grab && !shift && !alt) {
-               if (cmd) {
-                  selected.clear()
-                  for (let s of bulkHighlighted) selected.add(s)
-               } else if (!selected.has(grab.object)) {
-                  selected = new ToggleSet([grab.object])
-               }
-               beginMove(grab.object, grab.closestPart, true)
-            } else waitingForDrag = clickPoint
-            break
-         }
-         case "hydraulic line":
-            waitingForDrag = clickPoint
-            break
-      }
-   }
-   function mouseMoved(newMouse: Point) {
-      if (move) move.distance += newMouse.distanceFrom(mouse)
-      mouse = newMouse
-      // Check if the mouse has moved enough to trigger an action.
-      if (waitingForDrag) {
-         let d = mouse.displacementFrom(waitingForDrag)
-         switch (tool) {
-            case "select & move":
-               if (d.sqLength() > 16) {
-                  beginRectSelect(waitingForDrag)
-                  waitingForDrag = null
-               }
-               break
-            case "hydraulic line":
-               if (d.sqLength() > sqSnapRadius) {
-                  let drawAxis =
-                     Math.abs(d.x) >= Math.abs(d.y)
-                        ? Axis.horizontal
-                        : Axis.vertical
-                  let attach = closestAttachable(waitingForDrag)
-                  if (attach) {
-                     if (attach.object instanceof Segment) {
-                        let cutPoint = new Junction(attach.closestPart)
-                        attach.object.cutAt(cutPoint)
-                        beginDraw(cutPoint, drawAxis)
-                     } else {
-                        beginDraw(attach.object, drawAxis)
-                     }
-                  } else beginDraw(new Junction(waitingForDrag), drawAxis)
-                  waitingForDrag = null
-               }
-               break
-         }
-      }
-   }
-   function leftMouseUp(unexpectedly?: boolean) {
-      if (draw) endDraw()
-      if (move) endMove()
-      if (rectSelect) endRectSelect(unexpectedly)
-      waitingForDrag = null
-      leftMouseShouldBeDown = false
-   }
-   function leftMouseClicked() {
-      switch (tool) {
-         case "select & move": {
-            let grab = closestGrabbable(mouse)
-            if (!grab) selected.clear()
-            else if (shift && cmd)
-               for (let s of bulkHighlighted) selected.add(s)
-            else if (shift && !cmd) selected.toggle(grab.object)
-            else if (alt && cmd)
-               for (let s of bulkHighlighted) selected.delete(s)
-            else if (alt && !cmd) selected.delete(grab.object)
-            else selected = new ToggleSet([grab.object])
-            selected = selected
-            break
-         }
-         case "hydraulic line": {
-            let toggle = closestToggleable(mouse)
-            if (!toggle) break
-            if (isVertex(toggle.object)) {
-               if (vertexGlyphs.read(toggle.object) === "default") {
-                  vertexGlyphs.set(toggle.object, "plug")
-               } else {
-                  vertexGlyphs.set(toggle.object, "default")
-                  if (toggle.object instanceof Junction)
-                     convertToCrossing(toggle.object)
-               }
-               vertexGlyphs = vertexGlyphs
-            } else if (toggle.object instanceof Segment) {
-               let cutPoint = new Junction(toggle.closestPart)
-               toggle.object.cutAt(cutPoint)
-               vertexGlyphs.set(cutPoint, "plug")
-            } else if (toggle.object instanceof Crossing) {
-               // Change the crossing glyph.
-               let { seg1, seg2 } = toggle.object
-               let oldType = seg1.crossingTypes.read(seg2)
-               let i = crossingToggleSeq.indexOf(oldType) + 1
-               if (i < crossingToggleSeq.length) {
-                  seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
-                  seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
-                  Segment.s = Segment.s
-               } else {
-                  convertToJunction(toggle.object)
-               }
-            }
-            break
-         }
-      }
    }
 </script>
 
