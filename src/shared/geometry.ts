@@ -59,7 +59,15 @@ export class Vector {
          ? this.length()
          : (this.y * v.x - this.x * v.y) / vLength
    }
-   // Express the vector in terms of the coordinate system implied by the
+   approxEquals(other: this, absoluteError: number): boolean {
+      return (
+         other.x - absoluteError <= this.x &&
+         other.x + absoluteError >= this.x &&
+         other.y - absoluteError <= this.y &&
+         other.y + absoluteError >= this.y
+      )
+   }
+   // Express the Vector in terms of the coordinate system implied by the
    // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
    relativeTo(axis: Axis): Vector {
       let [cos, sin] = [axis.x, axis.y]
@@ -102,6 +110,18 @@ export class Point extends Object2D {
    }
    clone(): Point {
       return new Point(this.x, this.y)
+   }
+   // A copy of Vector.relativeTo().
+   relativeTo(axis: Axis): Point {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
+      return new Point(cos * x + sin * y, -sin * x + cos * y)
+   }
+   // A copy of Vector.undoRelativeTo().
+   undoRelativeTo(axis: Axis): Point {
+      let [cos, sin] = [axis.x, axis.y]
+      let [x, y] = [this.x, this.y]
+      return new Point(cos * x - sin * y, sin * x + cos * y)
    }
 }
 
@@ -200,15 +220,6 @@ export class Axis extends Vector {
    }
    negDirection(): Direction {
       return Direction.fromVector(this.scaledBy(-1)) as Direction
-   }
-   approxEquals(axis: Axis, errorRatio: number): boolean {
-      let absoluteError = errorRatio // For axes, these are the same.
-      return (
-         axis.x - absoluteError <= this.x &&
-         axis.x + absoluteError >= this.x &&
-         axis.y - absoluteError <= this.y &&
-         axis.y + absoluteError >= this.y
-      )
    }
 }
 
@@ -425,7 +436,7 @@ export class Range2D {
 export class Rectangle extends Object2D {
    readonly position: Point
    readonly rotation: Rotation
-   protected readonly range: Range2D
+   readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
       super()
       this.position = position
@@ -455,6 +466,15 @@ export class Rectangle extends Object2D {
       let p = this.toRectCoordinates(point)
       let { x, y } = this.range
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
+   }
+   corners(): Point[] {
+      let { x, y } = this.range
+      return [
+         new Point(x.low, y.low),
+         new Point(x.high, y.low),
+         new Point(x.high, y.high),
+         new Point(x.low, y.high),
+      ].map((p) => this.fromRectCoordinates(p))
    }
 }
 

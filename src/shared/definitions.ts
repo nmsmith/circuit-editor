@@ -54,7 +54,6 @@ export type Edge = [Segment, Vertex]
 interface HasEdges {
    addEdge(edge: Edge): void
    deleteEdge(edge: Edge): void
-   axes(): Axis[]
 }
 
 export class Junction extends Point implements Deletable, Moveable, HasEdges {
@@ -142,7 +141,7 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    }
 }
 
-export class Port extends Point implements Moveable, HasEdges {
+export class Port extends Point implements HasEdges {
    static s = new Set<Port>()
    readonly symbol: SymbolInstance
    glyph: VertexGlyph
@@ -154,12 +153,12 @@ export class Port extends Point implements Moveable, HasEdges {
       this.edge = null
       Port.s.add(this)
    }
-   moveTo(point: Point) {
-      this.symbol.moveTo(point)
-   }
-   moveBy(displacement: Vector) {
-      this.symbol.moveBy(displacement)
-   }
+   // moveTo(point: Point) {
+   //    this.symbol.moveTo(point)
+   // }
+   // moveBy(displacement: Vector) {
+   //    this.symbol.moveBy(displacement)
+   // }
    addEdge(edge: Edge) {
       this.edge = edge
    }
@@ -197,10 +196,6 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       if (this.start instanceof Junction) junctions.add(this.start)
       if (this.end instanceof Junction) junctions.add(this.end)
       return junctions
-   }
-   moveEndTo(point: Point, newAxis: Axis) {
-      this.end.moveTo(point)
-      ;(this.axis as Axis) = newAxis
    }
    // Replace this segment with another (or several), transferring all of its
    // properties. Thereafter, all references to the segment should be discarded.
@@ -285,6 +280,12 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
          }
       }
       return neighbours
+   }
+   axes(): Axis[] {
+      let a: Axis[] = []
+      let edges = this.ports.flatMap((p) => (p.edge ? [p.edge] : []))
+      for (let [{ axis }] of edges) if (!a.includes(axis)) a.push(axis)
+      return a
    }
    moveTo(point: Point) {
       ;(this.position.x as number) = point.x

@@ -1,7 +1,7 @@
 <script lang="ts">
-   import type { Point, Segment } from "~/shared/geometry"
+   import type { Point, LineSegment } from "~/shared/geometry"
    export let renderType: "default" | "highlight" | "selectLight" = "default"
-   export let segment: Segment
+   export let segment: LineSegment
    $: start = segment.start
    $: end = segment.end
 </script>

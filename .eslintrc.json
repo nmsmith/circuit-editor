@@ -21,6 +21,7 @@
       "prefer-const": "off",
       "no-empty": "off",
       "no-inner-declarations": "off",
+      "no-redeclare": "off",
       "no-debugger": "warn",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": "off",
