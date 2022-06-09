@@ -22,7 +22,12 @@
    $: onToolChanged ? onToolChanged(tool) : {} // Called when the tool changes.
 
    // Data related to schematic symbols
-   let symbolFiles = ["/symbols/animate/pump.svg", "/symbols/animate/valve.svg"]
+   let symbolFiles = [
+      "/symbols/animate/pump.svg",
+      "/symbols/animate/valve.svg",
+      "/symbols/illustrator/limit switch.svg",
+      "/symbols/illustrator/prox sensor.svg",
+   ]
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
@@ -33,14 +38,24 @@
       let svgDocument = object.contentDocument
       if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
          let svg = svgDocument.firstChild as SVGElement
-         // Locate the bounding box and ports of the symbol.
-         let boundingBox
+         // Compute the bounding box of the whole SVG.
+         let svgBox
+         {
+            svg.getBoundingClientRect() // hack to fix Safari's calculations
+            let { x, y, width, height } = svg.getBoundingClientRect()
+            svgBox = Range2D.fromXY(
+               new Range1D(x, x + width),
+               new Range1D(y, y + height)
+            )
+         }
+         // Locate the collision box and ports of the symbol.
+         let collisionBox
          let portLocations = []
          for (let element of svg.querySelectorAll("*")) {
             if (element.hasAttribute("id")) {
-               if (element.id === "boundingBox") {
+               if (element.id === "collisionBox") {
                   let { x, y, width, height } = element.getBoundingClientRect()
-                  boundingBox = Range2D.fromXY(
+                  collisionBox = Range2D.fromXY(
                      new Range1D(x, x + width),
                      new Range1D(y, y + height)
                   )
@@ -50,18 +65,12 @@
                }
             }
          }
-         // If the symbol has no defined bounding box, create a default one.
-         if (!boundingBox) {
-            let { x, y, width, height } = svg.getBoundingClientRect()
-            boundingBox = Range2D.fromXY(
-               new Range1D(x, x + width),
-               new Range1D(y, y + height)
-            )
-         }
+         // If the symbol has no defined collision box, use the SVG's box.
+         if (!collisionBox) collisionBox = svgBox
          // Add the symbol to the app's list of symbols.
          symbolKinds = [
             ...symbolKinds,
-            { filePath, svgTemplate: svg, boundingBox, portLocations },
+            { filePath, svgTemplate: svg, svgBox, collisionBox, portLocations },
          ]
       }
    }

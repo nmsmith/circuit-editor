@@ -1,4 +1,5 @@
 <script lang="ts">
+   import { onMount } from "svelte"
    import {
       Tool,
       Vertex,
@@ -107,6 +108,10 @@
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
    }
+   function* attachableVertices(): Generator<Vertex> {
+      for (let v of Junction.s) yield v
+      for (let v of Port.s) if (!v.edge) yield v
+   }
    function* crossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
          for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
@@ -141,7 +146,10 @@
       }
    }
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
-      return closestNearTo(point, vertices()) || closestNearTo(point, Segment.s)
+      return (
+         closestNearTo(point, attachableVertices()) ||
+         closestNearTo(point, Segment.s)
+      )
    }
    function closestToggleable(point: Point): ClosenessResult<Toggleable> {
       return (
@@ -466,7 +474,7 @@
    // ---------------------------- Primary events -----------------------------
    function toolChanged(newTool: Tool) {
       tool = newTool
-      if (tool === "hydraulic line") selected = new ToggleSet()
+      if (tool === "hydraulic line" && !move) selected = new ToggleSet()
    }
    function deleteSelected() {
       let junctionsToConvert = new Set<Junction>()
@@ -618,13 +626,10 @@
                         crossingToggleSeq[0]
                      )
                }
-               Junction.s = Junction.s
-               Port.s = Port.s
             } else if (toggle.object instanceof Segment) {
                let cutPoint = new Junction(toggle.closestPart)
                toggle.object.cutAt(cutPoint)
                cutPoint.glyph = "plug"
-               Junction.s = Junction.s
             } else if (toggle.object instanceof Crossing) {
                // Change the crossing glyph.
                let { seg1, seg2 } = toggle.object
@@ -633,13 +638,13 @@
                if (i < crossingToggleSeq.length) {
                   seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
                   seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
-                  Segment.s = Segment.s
                } else {
                   convertToJunction(toggle.object)
-                  Junction.s = Junction.s
-                  Segment.s = Segment.s
                }
             }
+            Junction.s = Junction.s
+            Segment.s = Segment.s
+            Port.s = Port.s
             break
          }
       }
@@ -652,36 +657,40 @@
    function beginMove(type: "move", info: MoveInfo): void
    function beginMove(type: "draw" | "move", info: DrawInfo | MoveInfo) {
       let draw = null
-      let axisGrabbed, locationGrabbed, offset
+      let locationGrabbed, offset
+      // For the time being, I am hard-coding the 30px snapping to only occur
+      // amongst circuit elements that are oriented horizontally and vertically.
+      // If the code below is commented out, then snapping will occur amongst
+      // elements whose axis is the same as the element being grabbed.
+      let axisGrabbed = Axis.horizontal
       if (type === "draw") {
          info = info as DrawInfo // hack to tell TypeScript the correct type
          // Add the line being drawn to the circuit.
          let end = new Junction(info.start)
+         selected = new ToggleSet([end]) // enables the endpoint to be dragged
          let segment = new Segment(info.start, end, info.axis)
          draw = { segment, segmentIsNew: true }
-         axisGrabbed = info.axis
          locationGrabbed = end.clone()
          offset = zeroVector
-         // Configure the endpoint of the line to be dragged as the mouse moves.
-         selected = new ToggleSet([end])
+         //axisGrabbed = info.axis
       } else {
          info = info as MoveInfo // hack to tell TypeScript the correct type
-         // Find the Axis that moved objects should snap along & orthogonal to.
-         if (info.grabbed instanceof Segment) {
-            axisGrabbed = info.grabbed.axis
-         } else if (info.grabbed instanceof SymbolInstance) {
-            axisGrabbed = findAxis(Axis.fromDirection(info.grabbed.direction()))
-         } else {
-            let _
-            let axis = Axis.horizontal
-            for ([{ axis }] of info.grabbed.edges) {
-               // Prefer horizontal and vertical axes.
-               if (axis === Axis.horizontal || axis === Axis.vertical) break
-            }
-            axisGrabbed = axis
-         }
          locationGrabbed = info.atPoint.clone()
          offset = locationGrabbed.displacementFrom(mouse)
+         // Find the Axis that moved objects should snap along & orthogonal to.
+         // if (info.grabbed instanceof Segment) {
+         //    axisGrabbed = info.grabbed.axis
+         // } else if (info.grabbed instanceof SymbolInstance) {
+         //    axisGrabbed = findAxis(Axis.fromDirection(info.grabbed.direction()))
+         // } else {
+         //    let _
+         //    let axis = Axis.horizontal
+         //    for ([{ axis }] of info.grabbed.edges) {
+         //       // Prefer horizontal and vertical axes.
+         //       if (axis === Axis.horizontal || axis === Axis.vertical) break
+         //    }
+         //    axisGrabbed = axis
+         // }
       }
       // Before movement commences, record the position of every Movable.
       // We need to use the original positions as a reference, because we will
@@ -724,6 +733,12 @@
    }
    function updateMove() {
       if (!move) return
+      // Tell Svelte all of these things could have changed.
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+
       let draw = move.draw
       if (draw && drawMode === "fixed-axis rotation") {
          // Check which axis the mouse is closest to. If the axis has
@@ -748,9 +763,9 @@
                   atPoint: newEnd,
                })
                move.offset = zeroVector
+               draw = move.draw
             }
          }
-         Junction.s = Junction.s
       } else if (draw && drawMode === "free rotation") {
          // To accommodate for the constantly-changing drawing axis,
          // the move operation is restarted from scratch every update.
@@ -775,7 +790,7 @@
          }
          let closest = closestNearTo(
             mouse,
-            Array.from(vertices()).filter(isAcceptableTEMP)
+            Array.from(attachableVertices()).filter(isAcceptableTEMP)
          )
          let newAxis = findAxis(
             Axis.fromVector(
@@ -794,20 +809,22 @@
                atPoint: newEnd,
             })
             move.offset = zeroVector
-            // Do snapping.
-            if (closest) {
-               draw.endObject = closest.object
-            } else {
-               let s = closestSegmentNearTo(mouse, newAxis)
-               if (s) {
-                  ;(draw.segment.end as Junction).moveTo(s.closestPart)
-                  draw.endObject = s.object
+            draw = move.draw
+            if (draw !== null /* This should always be true. */) {
+               // Do snapping.
+               if (closest) {
+                  draw.endObject = closest.object
                } else {
-                  draw.endObject = undefined
+                  let s = closestSegmentNearTo(mouse, newAxis)
+                  if (s) {
+                     ;(draw.segment.end as Junction).moveTo(s.closestPart)
+                     draw.endObject = s.object
+                  } else {
+                     draw.endObject = undefined
+                  }
                }
-            }
+            } else console.warn("move.draw was unexpectedly null.")
          }
-         Junction.s = Junction.s
       }
       if (!draw || drawMode !== "free rotation") {
          let drawingEdgeCase = draw && draw.segment.start.axes().length !== 2
@@ -854,7 +871,7 @@
             }
             let closest = closestNearTo(
                draw.segment.end,
-               Array.from(vertices()).filter(isAcceptableTEMP)
+               Array.from(attachableVertices()).filter(isAcceptableTEMP)
             )
             if (closest) {
                snappedToPoint = true
@@ -895,8 +912,6 @@
          function moveOne(m: Movable, vector: Vector) {
             moveStates.set(m, { moveType: "full move", vector })
             m.moveTo(move!.originalPositions.read(m).displacedBy(vector))
-            Junction.s = Junction.s
-            Segment.s = Segment.s
          }
          function movableAt(vertex: Vertex): Movable {
             return vertex instanceof Junction ? vertex : vertex.symbol
@@ -945,10 +960,6 @@
                      .displacedBy(moveStates.read(movable).vector)
                )
             }
-            Junction.s = Junction.s
-            Segment.s = Segment.s
-            SymbolInstance.s = SymbolInstance.s
-            Port.s = Port.s
          }
          function propagateMovement(
             moveVector: Vector, // The movement being propagated.
@@ -1167,6 +1178,7 @@
             selected = new ToggleSet()
       }
       move = null
+      if (tool === "hydraulic line") selected = new ToggleSet()
    }
    function beginRectSelect(start: Point) {
       rectSelect = {
@@ -1221,6 +1233,12 @@
       }
       rectSelect = null
    }
+
+   // --------------------- Development-time behaviours -----------------------
+   onMount(() => {
+      // After a hot reload, the SVGs of symbols must re-inserted into the DOM.
+      for (let symbol of SymbolInstance.s) symbol.refresh()
+   })
 </script>
 
 <svg

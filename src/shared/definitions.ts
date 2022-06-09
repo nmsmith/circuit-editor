@@ -53,7 +53,7 @@ export interface Moveable {
 export type Edge = [Segment, Vertex]
 interface HasEdges {
    addEdge(edge: Edge): void
-   deleteEdge(edge: Edge): void
+   removeEdge(edge: Edge): void
 }
 
 export class Junction extends Point implements Deletable, Moveable, HasEdges {
@@ -85,7 +85,7 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    addEdge(edge: Edge) {
       this.edges.add(edge)
    }
-   deleteEdge(edge: Edge) {
+   removeEdge(edge: Edge) {
       this.edges.delete(edge)
       if (this.edges.size === 0) this.delete()
    }
@@ -153,16 +153,12 @@ export class Port extends Point implements HasEdges {
       this.edge = null
       Port.s.add(this)
    }
-   // moveTo(point: Point) {
-   //    this.symbol.moveTo(point)
-   // }
-   // moveBy(displacement: Vector) {
-   //    this.symbol.moveBy(displacement)
-   // }
    addEdge(edge: Edge) {
       this.edge = edge
+      // It is the responsibility of the caller to make sure that the old edge
+      // is deleted.
    }
-   deleteEdge(edge: Edge) {
+   removeEdge(edge: Edge) {
       if (this.edge === edge) this.edge = null
    }
    axes(): Axis[] {
@@ -190,8 +186,8 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    delete(): Set<Junction> {
       Segment.s.delete(this)
       forgetAxis(this.axis)
-      this.start.deleteEdge(this.edgeS)
-      this.end.deleteEdge(this.edgeE)
+      this.start.removeEdge(this.edgeS)
+      this.end.removeEdge(this.edgeE)
       let junctions = new Set<Junction>()
       if (this.start instanceof Junction) junctions.add(this.start)
       if (this.end instanceof Junction) junctions.add(this.end)
@@ -231,7 +227,8 @@ export function convertToJunction(crossing: Crossing) {
 export type SymbolKind = {
    readonly filePath: string
    readonly svgTemplate: SVGElement
-   readonly boundingBox: Range2D
+   readonly svgBox: Range2D
+   readonly collisionBox: Range2D
    readonly portLocations: Point[]
 }
 
@@ -244,7 +241,7 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
    readonly ports: Port[]
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
-      super(position, rotation, kind.boundingBox)
+      super(position, rotation, kind.collisionBox)
       this.kind = kind
       this.svg = kind.svgTemplate.cloneNode(true) as SVGElement
       this.idSuffix = ":" + SymbolInstance.nextUUID++
@@ -266,6 +263,10 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
          }
       }
       SymbolInstance.s.add(this)
+      document.getElementById("symbol layer")?.appendChild(this.svg)
+   }
+   refresh() {
+      // Add the SVG back to the DOM after a hot reload. (only needed for dev.)
       document.getElementById("symbol layer")?.appendChild(this.svg)
    }
    delete(): Set<Junction> {
@@ -305,12 +306,12 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
       return Direction.positiveX.rotatedBy(this.rotation)
    }
    svgCorners(): Point[] {
-      let { x, y, width, height } = this.svg.getBoundingClientRect()
+      let { x, y } = this.kind.svgBox
       return [
-         new Point(x, y),
-         new Point(x + width, y),
-         new Point(x + width, y + height),
-         new Point(x, y + height),
-      ]
+         new Point(x.low, y.low),
+         new Point(x.high, y.low),
+         new Point(x.high, y.high),
+         new Point(x.low, y.high),
+      ].map((p) => this.fromRectCoordinates(p))
    }
 }

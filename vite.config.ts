@@ -4,7 +4,7 @@ import * as path from "path"
 
 // https://vitejs.dev/config/
 export default defineConfig({
-   plugins: [svelte()],
+   plugins: [svelte()], // to turn off hot reload, add {hot: false} to svelte()
    resolve: {
       alias: {
          "~": path.resolve(__dirname, "src"),
