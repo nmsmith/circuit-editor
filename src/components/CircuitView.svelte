@@ -35,7 +35,7 @@
    import FluidLine from "~/components/lines/FluidLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
    import JunctionNode from "~/components/lines/JunctionNode.svelte"
-   import VertexMarker from "~/components/VertexMarker.svelte"
+   import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
 
@@ -97,7 +97,8 @@
    type Highlightable = Point | Segment | SymbolInstance
    type Attachable = Vertex | Segment // Something a segment can be attached to.
    type Toggleable = Vertex | Segment | Crossing
-   type Grabbable = Junction | Segment | SymbolInstance // === Selectable
+   type Grabbable = Junction | Segment | SymbolInstance
+   type Selectable = Grabbable
    type Movable = Junction | SymbolInstance // Things that move when dragged.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
@@ -175,6 +176,16 @@
       const c = -a * sqEaseRadius - b * easeRadius
       return a * distance * distance + b * distance + c
    }
+   type HighlightStyle = "highlight" | "selectLight" | undefined
+   function styleOf(thing: Highlightable | Selectable): HighlightStyle {
+      if (selected.has(thing as Selectable)) return "selectLight"
+      if (highlighted.has(thing)) return "highlight"
+   }
+   function layerOf(point: Point): "lower" | "upper" {
+      return point instanceof Port || point === move?.draw?.segment.end
+         ? "upper"
+         : "lower"
+   }
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
@@ -197,9 +208,9 @@
    let rectSelect: null | {
       start: Point
       end: Point
-      highlighted: Set<Grabbable>
+      highlighted: Set<Selectable>
    } = null
-   let selected: ToggleSet<Grabbable> = new ToggleSet()
+   let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
    let drawMode:
@@ -340,10 +351,11 @@
            start: Point
            end: Point
            flip: boolean
+           style: HighlightStyle
         }
-      | { type: "junction node"; junction: Junction }
-      | { type: "plug"; vertex: Vertex }
-      | { type: "vertex marker"; point: Point }
+      | { type: "junction node"; junction: Junction; style: HighlightStyle }
+      | { type: "plug"; vertex: Vertex; style: HighlightStyle }
+      | { type: "point marker"; point: Point; style: HighlightStyle }
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
@@ -384,9 +396,14 @@
                   start,
                   end,
                   flip,
+                  style: styleOf(segment) || styleOf(crossPoint),
                })
             } else if (type === "no hop" && highlighted.has(crossPoint)) {
-               glyphsToDraw.add({ type: "vertex marker", point: crossPoint })
+               glyphsToDraw.add({
+                  type: "point marker",
+                  point: crossPoint,
+                  style: styleOf(crossPoint),
+               })
             }
          }
          // Compute the sections that need to be drawn.
@@ -403,25 +420,31 @@
       // Determine the other glyphs that need to be drawn at vertices.
       for (let v of vertices()) {
          if (v.glyph === "plug") {
-            glyphsToDraw.add({ type: "plug", vertex: v })
+            glyphsToDraw.add({ type: "plug", vertex: v, style: styleOf(v) })
          } else if (v instanceof Junction) {
             if (v.edges.size > 2) {
-               glyphsToDraw.add({ type: "junction node", junction: v })
+               glyphsToDraw.add({
+                  type: "junction node",
+                  junction: v,
+                  style: styleOf(v),
+               })
             } else if (
                v.isStraightLine() ||
                highlighted.has(v) ||
                selected.has(v)
             ) {
-               glyphsToDraw.add({ type: "vertex marker", point: v })
+               glyphsToDraw.add({
+                  type: "point marker",
+                  point: v,
+                  style: styleOf(v),
+               })
             }
-         }
-      }
-      // Determine the glyphs that need to be drawn at symbol attachment points.
-      for (let symbol of SymbolInstance.s) {
-         for (let p of symbol.ports) {
-            if (highlighted.has(p)) {
-               glyphsToDraw.add({ type: "vertex marker", point: p })
-            }
+         } else if (v instanceof Port && highlighted.has(v)) {
+            glyphsToDraw.add({
+               type: "point marker",
+               point: v,
+               style: styleOf(v),
+            })
          }
       }
    }
@@ -1223,7 +1246,7 @@
       if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
    }}
 >
-   <!-- Symbol highlight/select layer -->
+   <!-- Symbol highlight/selection layer -->
    <g>
       {#each [...SymbolInstance.s] as symbol}
          {@const c = symbol.svgCorners()}
@@ -1243,7 +1266,7 @@
       {#each [...segmentsToDraw] as [segment, sections]}
          {#if highlighted.has(segment)}
             {#each sections as section}
-               <FluidLine renderType="highlight" segment={section} />
+               <FluidLine renderStyle="highlight" segment={section} />
             {/each}
          {/if}
       {/each}
@@ -1253,7 +1276,7 @@
       {#each [...segmentsToDraw] as [segment, sections]}
          {#if selected.has(segment)}
             {#each sections as section}
-               <FluidLine renderType="selectLight" segment={section} />
+               <FluidLine renderStyle="selectLight" segment={section} />
             {/each}
          {/if}
       {/each}
@@ -1266,68 +1289,63 @@
          {/each}
       {/each}
    </g>
-   <!-- Glyph highlight/select layer -->
+   <!-- Lower glyph highlight/selection layer -->
    <g>
-      {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "hopover" && (selected.has(glyph.segment) || highlighted.has(glyph.segment) || highlighted.has(glyph.point))}
+      {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+         {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+            <PointMarker renderStyle={glyph.style} position={glyph.point} />
+         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+            <Plug renderStyle={glyph.style} position={glyph.vertex} />
+         {:else if glyph.type === "junction node"}
+            <JunctionNode renderStyle={glyph.style} position={glyph.junction} />
+         {:else if glyph.type === "hopover"}
             <Hopover
-               renderType={selected.has(glyph.segment)
-                  ? "selectLight"
-                  : "highlight"}
+               renderStyle={glyph.style}
                start={glyph.start}
                end={glyph.end}
                flip={glyph.flip}
             />
-         {:else if glyph.type === "junction node"}
-            {#if selected.has(glyph.junction)}
-               <JunctionNode
-                  renderType="selectLight"
-                  position={glyph.junction}
-               />
-            {:else if highlighted.has(glyph.junction)}
-               <JunctionNode renderType="highlight" position={glyph.junction} />
-            {/if}
-         {:else if glyph.type === "plug"}
-            {#if glyph.vertex instanceof Junction && selected.has(glyph.vertex)}
-               <Plug renderType="selectLight" position={glyph.vertex} />
-            {:else if highlighted.has(glyph.vertex)}
-               <Plug renderType="highlight" position={glyph.vertex} />
-            {/if}
          {/if}
       {/each}
    </g>
-   <!-- Glyph layer -->
+   <!-- Lower glyph layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "hopover"}
-            <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
+         {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+            <PointMarker position={glyph.point} />
+         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+            <Plug position={glyph.vertex} />
          {:else if glyph.type === "junction node"}
             <JunctionNode position={glyph.junction} />
-         {:else if glyph.type === "plug"}
-            <Plug position={glyph.vertex} />
+         {:else if glyph.type === "hopover"}
+            <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
          {/if}
       {/each}
    </g>
    <!-- Symbol layer -->
    <g id="symbol layer" />
-   <!-- HUD highlight layer -->
+   <!-- Upper glyph highlight/selection layer -->
+   <g>
+      {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+         {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+            <PointMarker renderStyle={glyph.style} position={glyph.point} />
+         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+            <Plug renderStyle={glyph.style} position={glyph.vertex} />
+         {/if}
+      {/each}
+   </g>
+   <!-- Upper glyph layer -->
    <g>
       {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "vertex marker"}
-            {#if glyph.point instanceof Junction && selected.has(glyph.point)}
-               <VertexMarker renderType="selectLight" position={glyph.point} />
-            {:else if highlighted.has(glyph.point)}
-               <VertexMarker renderType="highlight" position={glyph.point} />
-            {/if}
+         {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+            <PointMarker position={glyph.point} />
+         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+            <Plug position={glyph.vertex} />
          {/if}
       {/each}
    </g>
    <!-- HUD layer -->
    <g>
-      {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "vertex marker"}
-            <VertexMarker position={glyph.point} />{/if}
-      {/each}
       {#if rectSelect}
          <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
       {/if}

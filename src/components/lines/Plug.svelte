@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderType: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
    export let position: Point
    const diagonalLength = 12
    $: width = Math.sqrt(0.5 * diagonalLength * diagonalLength) // x/y width
@@ -16,7 +16,7 @@
 </script>
 
 <path
-   class="plug {renderType}"
+   class="plug {renderStyle}"
    d="M{topLeft.x},{topLeft.y} l {w},{w} M{bottomLeft.x},{bottomLeft.y} l{w},{-w}"
 />
 

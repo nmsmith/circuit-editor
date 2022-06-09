@@ -1,14 +1,14 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderType: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
    export let position: Point
 </script>
 
 <circle
-   class={renderType}
+   class={renderStyle}
    cx={position.x}
    cy={position.y}
-   r={renderType === "default" ? 6 : 10}
+   r={renderStyle === "default" ? 6 : 10}
 />
 
 <style>

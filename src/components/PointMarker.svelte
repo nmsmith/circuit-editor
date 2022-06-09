@@ -1,13 +1,13 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderType: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
    export let position: Point
    const w = 6
    $: [x, y] = [position.x, position.y]
 </script>
 
 <polygon
-   class={renderType}
+   class={renderStyle}
    points="{x - w},{y} {x},{y - w} {x + w},{y} {x},{y + w}"
 />
 
