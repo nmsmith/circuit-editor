@@ -194,6 +194,17 @@
          ? "upper"
          : "lower"
    }
+   function shouldExtendTheLineAt(
+      vertex: Vertex,
+      drawAxis: Axis
+   ): vertex is Junction {
+      return (
+         vertex instanceof Junction &&
+         vertex.axes().length === 1 &&
+         vertex.axes()[0] === drawAxis &&
+         !alt
+      )
+   }
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
@@ -571,6 +582,16 @@
                         let cutPoint = new Junction(attach.closestPart)
                         attach.object.cutAt(cutPoint)
                         beginMove("draw", { start: cutPoint, axis: drawAxis })
+                     } else if (
+                        shouldExtendTheLineAt(attach.object, drawAxis)
+                     ) {
+                        // Extend the current line, to match the user's
+                        // probable intent.
+                        selected = new ToggleSet([attach.object])
+                        beginMove("move", {
+                           grabbed: attach.object,
+                           atPoint: attach.object,
+                        })
                      } else {
                         beginMove("draw", {
                            start: attach.object,
@@ -760,7 +781,7 @@
                // Reset the move operation.
                beginMove("move", {
                   grabbed: draw.segment.end as Junction,
-                  atPoint: newEnd,
+                  atPoint: draw.segment.end,
                })
                move.offset = zeroVector
                draw = move.draw
@@ -806,7 +827,7 @@
             // Reset the move operation.
             beginMove("move", {
                grabbed: draw.segment.end as Junction,
-               atPoint: newEnd,
+               atPoint: draw.segment.end,
             })
             move.offset = zeroVector
             draw = move.draw
@@ -1148,6 +1169,7 @@
       if (!move) return
       if (move.draw) {
          let segment = move.draw.segment
+         let endObject = move.draw.endObject
          function isAcceptableTEMP() {
             if (segment.start instanceof Port) return true
             for (let [s, other] of segment.start.edges) {
@@ -1163,19 +1185,20 @@
             return true
          }
          if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
-            if (move.draw.endObject instanceof Segment) {
+            if (endObject instanceof Segment) {
                // Turn the intersected Segment into a T-junction.
-               move.draw.endObject.cutAt(segment.end as Junction)
-            } else if (move.draw.endObject) {
+               endObject.cutAt(segment.end as Junction)
+            } else if (endObject) {
                // Replace the drawn segment with one that ends at the Vertex.
                segment.replaceWith(
-                  new Segment(segment.start, move.draw.endObject, segment.axis)
+                  new Segment(segment.start, endObject, segment.axis)
                )
+               if (shouldExtendTheLineAt(endObject, segment.axis))
+                  endObject.convertToCrossing(crossingMap)
             }
          } else deleteSelected()
          // Reset the drawing state.
-         if (move.draw.segmentIsNew || move.draw.endObject)
-            selected = new ToggleSet()
+         if (move.draw.segmentIsNew || endObject) selected = new ToggleSet()
       }
       move = null
       if (tool === "hydraulic line") selected = new ToggleSet()
