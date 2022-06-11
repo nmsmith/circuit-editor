@@ -81,8 +81,8 @@
    const snapAxes = [
       Axis.horizontal,
       Axis.vertical,
-      Axis.fromAngle(0.125 * tau), // 45 degrees
-      Axis.fromAngle(0.375 * tau), // 135 degrees
+      findAxis(Axis.fromAngle(0.125 * tau)), // 45 degrees
+      findAxis(Axis.fromAngle(0.375 * tau)), // 135 degrees
    ]
    snapAxes.forEach(rememberAxis)
    // The toggle order of the glyphs that appear at crossings.
@@ -530,6 +530,7 @@
    function cmdUp() {}
    // The state the left mouse button SHOULD be in (omitting browser mayhem.)
    let leftMouseShouldBeDown = false
+   let waitedOneFrame = false
    // The state the left mouse button is ACTUALLY in.
    function leftMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b1) === 1
@@ -615,7 +616,7 @@
    }
    function leftMouseUp(unexpectedly?: boolean) {
       if (move) endMove()
-      if (rectSelect) endRectSelect(unexpectedly)
+      if (rectSelect) endRectSelect()
       waitingForDrag = null
       leftMouseShouldBeDown = false
    }
@@ -911,9 +912,7 @@
          // Snap axis-aligned objects to a "standardGap" distance apart.
          let snapGap = computeStandardGapEase()
          let snappedMove =
-            move.distance < 15
-               ? fullMove.add(snapGap.scaledBy(move.distance / 15))
-               : fullMove.add(snapGap)
+            move.distance === 0 ? fullMove : fullMove.add(snapGap)
          if (draw && drawMode === "fixed-axis rotation") {
             snappedMove = snappedMove.projectionOnto(draw.segment.axis)
             moveOne(draw.segment.end as Junction, snappedMove)
@@ -1060,40 +1059,48 @@
             } else return zeroVector
             shouldEase = { x: drawAxis !== "x", y: drawAxis !== "y" }
          }
-
-         // Output: How the movable should move along the given axis.
-         type EaseType = null | "gap" | "gapOrProtrude"
-         function easeType(axis: "x" | "y", movable: Movable): EaseType {
+         // Output: Whether the Movable can freely move along the given axis.
+         function moves(axis: "x" | "y", movable: Movable): boolean {
             let movement = movements.read(movable)
-            if (
+            return (
                movement.type === "full move" ||
                (movement.type === "axis move" &&
                   (movement.moveAxis === easeAxes[axis] ||
                      findAxis(movement.absorbAxis.orthogonal()) ===
                         easeAxes[axis]))
-            ) {
-               return movable instanceof Junction ? "gapOrProtrude" : "gap"
-            } else return null
+            )
          }
-         type SideInfo = { value: number; eases: EaseType }
+         type SideType = "symbol" | "port" | "junction" | "flank"
+         type SideInfo = { type: SideType; value: number; moves: boolean }
          type AxisInfo = { low: SideInfo; high: SideInfo }
          type BoxInfo = { x: AxisInfo; y: AxisInfo }
          // Input: The two opposing corners of an object's bounding box, and
          // the movement info associated with each corner.
          // Output: The position of each side of the box along the two easeAxes,
          // and the manner in which the side can/should move along that axis.
-         function boxInfo(
-            cornerA: Point,
-            cornerB: Point,
-            movableAtA: Movable,
-            movableAtB: Movable
-         ): BoxInfo {
-            let a = cornerA.relativeTo(easeAxes.x)
-            let b = cornerB.relativeTo(easeAxes.x)
-            let axSide = { value: a.x, eases: easeType("x", movableAtA) }
-            let aySide = { value: a.y, eases: easeType("y", movableAtA) }
-            let bxSide = { value: b.x, eases: easeType("x", movableAtB) }
-            let bySide = { value: b.y, eases: easeType("y", movableAtB) }
+         function boxInfo(thing: Snappable): BoxInfo {
+            let a: Point, axType: SideType, ayType: SideType, moveA: Movable
+            let b: Point, bxType: SideType, byType: SideType, moveB: Movable
+            if (thing instanceof SymbolInstance) {
+               let corners = thing.corners()
+               a = corners[0].relativeTo(easeAxes.x)
+               b = corners[2].relativeTo(easeAxes.x)
+               ;[axType, ayType, moveA] = ["symbol", "symbol", thing]
+               ;[bxType, byType, moveB] = ["symbol", "symbol", thing]
+            } else {
+               a = thing.start.relativeTo(easeAxes.x)
+               b = thing.end.relativeTo(easeAxes.x)
+               axType = ayType =
+                  thing.start instanceof Port ? "port" : "junction"
+               bxType = byType = thing.end instanceof Port ? "port" : "junction"
+               if (a.x === b.x) axType = bxType = "flank"
+               if (a.y === b.y) ayType = byType = "flank"
+               ;[moveA, moveB] = [movableAt(thing.start), movableAt(thing.end)]
+            }
+            let axSide = { type: axType, value: a.x, moves: moves("x", moveA) }
+            let aySide = { type: ayType, value: a.y, moves: moves("y", moveA) }
+            let bxSide = { type: bxType, value: b.x, moves: moves("x", moveB) }
+            let bySide = { type: byType, value: b.y, moves: moves("y", moveB) }
             let x =
                a.x <= b.x
                   ? { low: axSide, high: bxSide }
@@ -1109,21 +1116,12 @@
          let snappables = new Map<Snappable, BoxInfo>()
          for (let symbol of SymbolInstance.s) {
             let axis = findAxis(Axis.fromDirection(symbol.direction()))
-            if (axis === easeAxes.x || axis === easeAxes.y) {
-               let corners = symbol.corners()
-               snappables.set(
-                  symbol,
-                  boxInfo(corners[0], corners[2], symbol, symbol)
-               )
-            }
+            if (axis === easeAxes.x || axis === easeAxes.y)
+               snappables.set(symbol, boxInfo(symbol))
          }
-         for (let s of Segment.s) {
-            if (s.axis === easeAxes.x || s.axis === easeAxes.y) {
-               snappables.set(
-                  s,
-                  boxInfo(s.start, s.end, movableAt(s.start), movableAt(s.end))
-               )
-            }
+         for (let segment of Segment.s) {
+            if (segment.axis === easeAxes.x || segment.axis === easeAxes.y)
+               snappables.set(segment, boxInfo(segment))
          }
          // Using the details computed above, find the Snappables that are the
          // closest to being "standardGap" apart in each of the axial directions
@@ -1143,28 +1141,37 @@
                      a[other].high.value >= b[other].low.value - standardGap
                   ) {
                      // Check if thingA can ease towards thingB along this axis.
-                     considerSides(axis, "low", "high")
-                     considerSides(axis, "high", "low")
-                     if (a[axis].low.eases === "gapOrProtrude")
-                        considerSides(axis, "low", "low")
-                     if (a[axis].high.eases === "gapOrProtrude")
-                        considerSides(axis, "high", "high")
+                     considerSides(axis, "low", "high", true)
+                     considerSides(axis, "high", "low", false)
+                     if (a[axis].low.type === "junction")
+                        considerSides(axis, "low", "low", false)
+                     if (b[axis].low.type === "junction")
+                        considerSides(axis, "low", "low", true)
+                     if (a[axis].high.type === "junction")
+                        considerSides(axis, "high", "high", true)
+                     if (b[axis].high.type === "junction")
+                        considerSides(axis, "high", "high", false)
                   }
                }
                function considerSides(
                   axis: "x" | "y",
                   aSide: "low" | "high",
-                  bSide: "low" | "high"
+                  bSide: "low" | "high",
+                  flip: boolean
                ) {
                   let condition1 =
                      shouldEase[axis] &&
-                     a[axis][aSide].eases &&
-                     !b[axis][bSide].eases
+                     a[axis][aSide].moves &&
+                     !b[axis][bSide].moves &&
+                     a[axis][aSide].type !== "port" &&
+                     b[axis][bSide].type !== "port"
                   let condition2 =
-                     thingA === draw?.segment && aSide === drawEndSide
+                     thingA === draw?.segment &&
+                     a[axis][aSide].type === "junction" &&
+                     aSide === drawEndSide
                   if (condition1 || condition2) {
                      let displace = b[axis][bSide].value - a[axis][aSide].value
-                     if (bSide === "high") {
+                     if (flip) {
                         displace += standardGap
                      } else {
                         displace -= standardGap
@@ -1282,8 +1289,8 @@
          }
       }
    }
-   function endRectSelect(cancel?: boolean) {
-      if (rectSelect && !cancel) {
+   function endRectSelect() {
+      if (rectSelect) {
          if (!shift && !alt) selected.clear()
          if (alt) {
             for (let thing of rectSelect.highlighted) selected.delete(thing)
@@ -1306,7 +1313,12 @@
    bind:this={canvas}
    style="cursor: {cursor}"
    on:mousemove={(event) => {
-      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
+      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) {
+         if (waitedOneFrame) {
+            leftMouseUp(true)
+            waitedOneFrame = false
+         } else waitedOneFrame = true
+      }
       mouseMoved(mouseInCoordinateSystemOf(event.currentTarget, event))
    }}
    on:mousedown={(event) => {

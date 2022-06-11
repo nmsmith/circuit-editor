@@ -272,15 +272,19 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
    delete(): Set<Junction> {
       SymbolInstance.s.delete(this)
       this.svg.remove()
-      let neighbours = new Set<Junction>()
       for (let port of this.ports) {
          Port.s.delete(port)
          if (port.edge) {
-            if (port.edge[1] instanceof Junction) neighbours.add(port.edge[1])
+            // Convert the Port to a Junction, and replace the Segment with
+            // one that points to the new Junction.
+            let [oldSegment, otherJunction] = port.edge
+            oldSegment.replaceWith(
+               new Segment(new Junction(port), otherJunction, oldSegment.axis)
+            )
             port.edge = null
          }
       }
-      return neighbours
+      return new Set()
    }
    axes(): Axis[] {
       let a: Axis[] = []
