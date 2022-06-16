@@ -108,6 +108,9 @@ export class Point extends Object2D {
    displacedBy(v: Vector): Point {
       return new Point(this.x + v.x, this.y + v.y)
    }
+   interpolatedToward(point: Point, percent: number) {
+      return this.displacedBy(point.displacementFrom(this).scaledBy(percent))
+   }
    clone(): Point {
       return new Point(this.x, this.y)
    }

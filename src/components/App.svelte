@@ -51,18 +51,16 @@
          // Locate the collision box and ports of the symbol.
          let collisionBox
          let portLocations = []
-         for (let element of svg.querySelectorAll("*")) {
-            if (element.hasAttribute("id")) {
-               if (element.id === "collisionBox") {
-                  let { x, y, width, height } = element.getBoundingClientRect()
-                  collisionBox = Range2D.fromXY(
-                     new Range1D(x, x + width),
-                     new Range1D(y, y + height)
-                  )
-               } else if (element.id.endsWith("Snap")) {
-                  let { x, y, width, height } = element.getBoundingClientRect()
-                  portLocations.push(new Point(x + width / 2, y + height / 2))
-               }
+         for (let element of svg.querySelectorAll("[id]")) {
+            if (element.id === "collisionBox") {
+               let { x, y, width, height } = element.getBoundingClientRect()
+               collisionBox = Range2D.fromXY(
+                  new Range1D(x, x + width),
+                  new Range1D(y, y + height)
+               )
+            } else if (element.id.endsWith("Snap")) {
+               let { x, y, width, height } = element.getBoundingClientRect()
+               portLocations.push(new Point(x + width / 2, y + height / 2))
             }
          }
          // If the symbol has no defined collision box, use the SVG's box.

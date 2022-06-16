@@ -29,7 +29,7 @@ export function forgetAxis(axis: Axis) {
    count > 1 ? axes.set(axis, count - 1) : axes.delete(axis)
 }
 // The error ratio (∈ [0, 1]) at which two axes should be considered parallel.
-const axisErrorTolerance = 0.004
+const axisErrorTolerance = 0.00001
 // Find an Axis in the scene that has approx. the same value as the given Axis.
 export function findAxis(subject: Axis): Axis
 export function findAxis(subject: Axis | undefined): Axis | undefined
@@ -254,12 +254,13 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
             element.setAttribute("id", element.id + this.idSuffix)
          }
          if (element.nodeName === "use") {
+            let xlink = "http://www.w3.org/1999/xlink"
             let ref = element.getAttribute("href")
-            let xRef = element.getAttribute("xlink:href")
+            let xRef = element.getAttributeNS(xlink, "href")
             if (ref && ref[0] === "#")
                element.setAttribute("href", ref + this.idSuffix)
             else if (xRef && xRef[0] === "#")
-               element.setAttribute("xlink:href", xRef + this.idSuffix)
+               element.setAttributeNS(xlink, "href", xRef + this.idSuffix)
          }
       }
       SymbolInstance.s.add(this)

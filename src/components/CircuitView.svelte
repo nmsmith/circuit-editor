@@ -176,7 +176,7 @@
    }
    // ✨ A magical easing function for aesthetically-pleasing snapping. The
    // source is displaced from its true position as it approaches the target.
-   function easeFn(distance: number) {
+   function easeFn(distance: number): number {
       const a =
          (snapRadius - snapJump) /
          (sqSnapRadius + sqEaseRadius - 2 * snapRadius * easeRadius)
@@ -214,11 +214,11 @@
    let move: null | {
       movables: Set<Movable>
       axisGrabbed: Axis
-      locationGrabbed: Point
-      offset: Vector
+      partGrabbed: Point
+      mouseDownLocation: Point
       distance: number
       originalPositions: DefaultMap<Movable, Point>
-      draw: null | {
+      draw?: {
          segment: Segment
          segmentIsNew: boolean
          endObject?: Attachable
@@ -269,7 +269,7 @@
          }
       }
    }
-   let cursor: "auto" | "grab" | "grabbing" | "cell"
+   let cursor: "auto" | "grab" | "grabbing"
    $: /* Where helpful, change the appearance of the mouse cursor. */ {
       if (move) {
          cursor = "grabbing"
@@ -288,8 +288,8 @@
          highlighted.add(move.draw.endObject)
       } else if (rectSelect) {
          highlighted = new Set(rectSelect.highlighted)
-      } else if (bulkHighlighted.size > 0) {
-         for (let s of bulkHighlighted) highlighted.add(s)
+      } else if (gapHighlighted.size > 0) {
+         for (let s of gapHighlighted) highlighted.add(s)
       } else if (tool === "select & move" && !move) {
          let grab = closestGrabbable(mouse)
          if (grab) highlighted.add(grab.object)
@@ -304,13 +304,13 @@
          }
       }
    }
-   let bulkHighlighted: Set<Segment>
+   let gapHighlighted: Set<Segment>
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
       if (tool === "select & move" && !move && cmd) {
-         bulkHighlighted = new Set()
+         gapHighlighted = new Set()
          let s = closestNearTo(mouse, Segment.s)
          if (s) {
-            // Do bulk highlighting (and later, selection) along the axis
+            // Do gap highlighting (and later, selection) along the axis
             // orthogonal to the segment's axis. To achieve this, we
             // re-coordinatize every object that has the same orientation as
             // the segment as an AABB, and search along the resultant y-axis.
@@ -336,7 +336,7 @@
                0
                   ? [0, 1]
                   : [1, 0]
-            bulkHighlighted.add(s.object)
+            gapHighlighted.add(s.object)
             let startInfo = info.get(s.object) as SegmentInfo
             startInfo.visited = true
             highlightFrom(startInfo)
@@ -350,7 +350,7 @@
                      i.x[0] <= current.x[1] + standardGap &&
                      i.x[1] >= current.x[0] - standardGap
                   ) {
-                     bulkHighlighted.add(i.segment)
+                     gapHighlighted.add(i.segment)
                      i.visited = true
                      highlightFrom(i)
                   }
@@ -358,7 +358,7 @@
             }
          }
       } else {
-         bulkHighlighted = new Set()
+         gapHighlighted = new Set()
       }
    }
    type Section = Geometry.LineSegment<Point>
@@ -508,14 +508,14 @@
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       selected = new ToggleSet([symbol])
-      beginMove("move", { grabbed: symbol, atPoint: mouse })
+      beginMove("move", { grabbed: symbol, atPart: mouse })
    }
    function shiftDown() {}
    function shiftUp() {}
    function altDown() {
       if (move?.draw) {
          // Reset the reference information for the movement.
-         move.locationGrabbed = move.draw.segment.end.clone()
+         move.partGrabbed = move.draw.segment.end.clone()
          for (let movable of move.originalPositions.keys()) {
             if (movable instanceof Junction) {
                move.originalPositions.set(movable, movable.clone())
@@ -543,13 +543,13 @@
             if (grab && !shift && !alt) {
                if (cmd) {
                   selected.clear()
-                  for (let s of bulkHighlighted) selected.add(s)
+                  for (let s of gapHighlighted) selected.add(s)
                } else if (!selected.has(grab.object)) {
                   selected = new ToggleSet([grab.object])
                }
                beginMove("move", {
                   grabbed: grab.object,
-                  atPoint: grab.closestPart,
+                  atPart: grab.closestPart,
                })
             } else waitingForDrag = clickPoint
             break
@@ -562,6 +562,11 @@
    function mouseMoved(newMouse: Point) {
       if (move) move.distance += newMouse.distanceFrom(mouse)
       mouse = newMouse
+      // Update the actions that depend on mouse movement. (It's important that
+      // these updates are invoked BEFORE any begin___() functions. The begin___
+      // funcs may induce changes to derived data that the updates need to see.)
+      if (move) updateMove()
+      if (rectSelect) updateRectSelect()
       // Check if the mouse has moved enough to trigger an action.
       if (waitingForDrag) {
          let d = mouse.displacementFrom(waitingForDrag)
@@ -592,7 +597,7 @@
                         selected = new ToggleSet([attach.object])
                         beginMove("move", {
                            grabbed: attach.object,
-                           atPoint: attach.object,
+                           atPart: attach.object,
                         })
                      } else {
                         beginMove("draw", {
@@ -610,9 +615,6 @@
                break
          }
       }
-      // Update state that depends on mouse movement.
-      if (move) updateMove()
-      if (rectSelect) updateRectSelect()
    }
    function leftMouseUp(unexpectedly?: boolean) {
       if (move) endMove()
@@ -625,11 +627,10 @@
          case "select & move": {
             let grab = closestGrabbable(mouse)
             if (!grab) selected.clear()
-            else if (shift && cmd)
-               for (let s of bulkHighlighted) selected.add(s)
+            else if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
             else if (shift && !cmd) selected.toggle(grab.object)
             else if (alt && cmd)
-               for (let s of bulkHighlighted) selected.delete(s)
+               for (let s of gapHighlighted) selected.delete(s)
             else if (alt && !cmd) selected.delete(grab.object)
             else selected = new ToggleSet([grab.object])
             selected = selected
@@ -675,12 +676,12 @@
 
    // ---------------------------- Derived events -----------------------------
    type DrawInfo = { start: Vertex; axis: Axis }
-   type MoveInfo = { grabbed: Grabbable; atPoint: Point }
+   type MoveInfo = { grabbed: Grabbable; atPart: Point }
    function beginMove(type: "draw", info: DrawInfo): void
    function beginMove(type: "move", info: MoveInfo): void
    function beginMove(type: "draw" | "move", info: DrawInfo | MoveInfo) {
-      let draw = null
-      let locationGrabbed, offset
+      let draw
+      let partGrabbed
       // For the time being, I am hard-coding the 30px snapping to only occur
       // amongst circuit elements that are oriented horizontally and vertically.
       // If the code below is commented out, then snapping will occur amongst
@@ -693,13 +694,11 @@
          selected = new ToggleSet([end]) // enables the endpoint to be dragged
          let segment = new Segment(info.start, end, info.axis)
          draw = { segment, segmentIsNew: true }
-         locationGrabbed = end.clone()
-         offset = zeroVector
+         partGrabbed = end.clone()
          //axisGrabbed = info.axis
       } else {
          info = info as MoveInfo // hack to tell TypeScript the correct type
-         locationGrabbed = info.atPoint.clone()
-         offset = locationGrabbed.displacementFrom(mouse)
+         partGrabbed = info.atPart.clone()
          // Find the Axis that moved objects should snap along & orthogonal to.
          // if (info.grabbed instanceof Segment) {
          //    axisGrabbed = info.grabbed.axis
@@ -747,8 +746,8 @@
       move = {
          movables: selectedMovables_,
          axisGrabbed,
-         locationGrabbed,
-         offset,
+         partGrabbed,
+         mouseDownLocation: mouse,
          distance: 0,
          originalPositions,
          draw,
@@ -783,9 +782,8 @@
                // Reset the move operation.
                beginMove("move", {
                   grabbed: draw.segment.end as Junction,
-                  atPoint: draw.segment.end,
+                  atPart: draw.segment.end,
                })
-               move.offset = zeroVector
                draw = move.draw
             }
          }
@@ -829,11 +827,10 @@
             // Reset the move operation.
             beginMove("move", {
                grabbed: draw.segment.end as Junction,
-               atPoint: draw.segment.end,
+               atPart: draw.segment.end,
             })
-            move.offset = zeroVector
             draw = move.draw
-            if (draw !== null /* This should always be true. */) {
+            if (draw /* This should always be true. */) {
                // Do snapping.
                if (closest) {
                   draw.endObject = closest.object
@@ -862,11 +859,21 @@
       let movements = new DefaultMap<Movable, Movement>(() => {
          return { type: "no move", vector: zeroVector }
       })
-      let fullMove = mouse.displacementFrom(move.locationGrabbed)
-      if (move.distance < 15) {
-         // The user may have grabbed slightly-away from their target
-         // object. If so, pull the object towards the mouse cursor.
-         fullMove = fullMove.add(move.offset.scaledBy(1 - move.distance / 15))
+      let fullMove
+      if (
+         move.distance < 15 &&
+         (!draw || (drawMode === "strafing" && !draw.segmentIsNew))
+      ) {
+         // The user may have grabbed slightly-away from their target object.
+         // If so, gradually pull the object towards the mouse cursor.
+         fullMove = mouse.displacementFrom(
+            move.mouseDownLocation.interpolatedToward(
+               move.partGrabbed,
+               move.distance / 15
+            )
+         )
+      } else {
+         fullMove = mouse.displacementFrom(move.partGrabbed)
       }
       // Firstly, perform a simple movement that tracks the mouse.
       if (draw && drawMode === "fixed-axis rotation") {
@@ -899,9 +906,7 @@
          )
          if (closest) {
             snappedToPoint = true
-            let snappedMove = closest.object.displacementFrom(
-               move.locationGrabbed
-            )
+            let snappedMove = closest.object.displacementFrom(move.partGrabbed)
             moveSelected(snappedMove)
             draw.endObject = closest.object
          } else {

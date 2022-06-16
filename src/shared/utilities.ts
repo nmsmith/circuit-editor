@@ -10,8 +10,8 @@ export function mouseInCoordinateSystemOf(
 
 // A very handy extension of "Map".
 // When a DefaultMap is constructed, the user gives it a default value,
-// and if get0() would fail, it returns that default value instead.
-// Thus, get0() always succeeds.
+// and if read() would fail, it returns that default value instead.
+// Thus, read() always succeeds.
 export class DefaultMap<K, V> extends Map<K, V> {
    readonly defaultValue: () => V
    constructor(defaultValue: () => V, entries?: Iterable<[K, V]>) {
