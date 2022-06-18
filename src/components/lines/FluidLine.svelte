@@ -20,6 +20,6 @@
    }
    .hover,
    .select {
-      stroke-width: 9px;
+      stroke-width: 8px;
    }
 </style>

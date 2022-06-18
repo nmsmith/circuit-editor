@@ -10,8 +10,6 @@ import {
 import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap } from "./utilities"
 
-export type Tool = "select & move" | "hydraulic line"
-
 export type Vertex = Junction | Port
 export type VertexGlyph = "default" | "plug"
 export function isVertex(thing: any): thing is Vertex {

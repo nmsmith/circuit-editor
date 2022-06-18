@@ -1,18 +1,19 @@
 <script lang="ts">
-   import type { Tool, SymbolKind } from "~/shared/definitions"
+   import type { SymbolKind } from "~/shared/definitions"
    import { Vector, Point, Range1D, Range2D } from "~/shared/geometry"
    import { mouseInCoordinateSystemOf } from "~/shared/utilities"
-   import CircuitView from "~/components/CircuitView.svelte"
+   import CircuitView, { Tool } from "~/components/CircuitView.svelte"
    // State
    let mouse: Point = Point.zero
 
    // State passed to CircuitView
-   let tool: Tool = "hydraulic line"
+   let tool: Tool = "draw"
    let [shift, alt, cmd] = [false, false, false]
    function onSymbolLeave() {}
 
    // Callbacks obtained from circuitView
    let onToolChanged: (newTool: Tool) => void
+   let onNextLineType: () => void
    let onDelete: () => void
    let onSymbolEnter: (
       kind: SymbolKind,
@@ -91,9 +92,13 @@
          case "S":
             tool = "select & move"
             break
-         case "f":
-         case "F":
-            tool = "hydraulic line"
+         case "d":
+         case "D":
+            tool = "draw"
+            break
+         case "e":
+         case "E":
+            onNextLineType()
             break
          case "Backspace":
          case "Delete": {
@@ -127,6 +132,7 @@
       {cmd}
       {onSymbolLeave}
       bind:onToolChanged
+      bind:onNextLineType
       bind:onDelete
       bind:onSymbolEnter
    />

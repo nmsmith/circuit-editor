@@ -1,7 +1,12 @@
+<script lang="ts" context="module">
+   // ------------------------- Exported definitions --------------------------
+   export type Tool = "select & move" | "draw"
+   export type LineType = "hydraulic" | "pilot" | "drain"
+</script>
+
 <script lang="ts">
    import { onMount } from "svelte"
    import {
-      Tool,
       Vertex,
       isVertex,
       rememberAxis,
@@ -52,6 +57,7 @@
    ) => void
    // Values shared with the parent component.
    export const onToolChanged = toolChanged
+   export const onNextLineType = nextLineType
    export const onDelete = deleteSelected
    export const onSymbolEnter = spawnSymbol
    // Events triggered by updates to props.
@@ -212,14 +218,17 @@
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
-   let mouse: Point = Point.zero
-   let waitingForDrag: Point | null = null
-   let tool: Tool = "hydraulic line"
+   let mouse: { position: Point } & (
+      | { state: "up" }
+      // Pressing, but not yet moved enough to constitute a drag.
+      | { state: "pressing"; downPosition: Point }
+      | { state: "dragging"; downPosition: Point }
+   ) = { position: Point.zero, state: "up" }
+   let tool: Tool = "draw"
    let move: null | {
       movables: Set<Movable>
       axisGrabbed: Axis
       partGrabbed: Point
-      mouseDownLocation: Point
       distance: number
       originalPositions: DefaultMap<Movable, Point>
       draw?: {
@@ -228,11 +237,7 @@
          endObject?: Attachable
       }
    } = null
-   let rectSelect: null | {
-      start: Point
-      end: Point
-      highlighted: Set<Selectable>
-   } = null
+   let rectSelect: null | Set<Selectable> = null
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
@@ -275,15 +280,15 @@
    }
    let cursor: "default" | "cell" | "grab" | "grabbing"
    $: /* Where helpful, change the appearance of the mouse cursor. */ {
-      if (tool === "hydraulic line") {
+      if (tool === "draw") {
          cursor = "cell"
       } else if (move) {
          cursor = "grabbing"
       } else {
          cursor = "default"
-         let grab = closestGrabbable(mouse)
+         let grab = closestGrabbable(mouse.position)
          if (tool === "select & move" && grab && !shift && !alt && !cmd) {
-            cursor = waitingForDrag ? "grabbing" : "grab"
+            cursor = mouse.state === "pressing" ? "grabbing" : "grab"
          }
       }
    }
@@ -293,14 +298,14 @@
       if (move?.draw?.endObject instanceof Segment) {
          highlighted.add(move.draw.endObject)
       } else if (rectSelect) {
-         highlighted = new Set(rectSelect.highlighted)
+         highlighted = new Set(rectSelect)
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
       } else if (tool === "select & move" && !move) {
-         let grab = closestGrabbable(mouse)
+         let grab = closestGrabbable(mouse.position)
          if (grab) highlighted.add(grab.object)
-      } else if (tool === "hydraulic line" && !move) {
-         let thing = closestAttachableOrToggleable(mouse)
+      } else if (tool === "draw" && !move) {
+         let thing = closestAttachableOrToggleable(mouse.position)
          if (thing) {
             if (thing.object instanceof Crossing) {
                highlighted.add(thing.closestPart)
@@ -314,7 +319,7 @@
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
       if (tool === "select & move" && !move && cmd) {
          gapHighlighted = new Set()
-         let s = closestNearTo(mouse, Segment.s)
+         let s = closestNearTo(mouse.position, Segment.s)
          if (s) {
             // Do gap highlighting (and later, selection) along the axis
             // orthogonal to the segment's axis. To achieve this, we
@@ -338,8 +343,9 @@
                info.set(seg, { segment: seg, x, y, visited: false })
             }
             let [front, back] =
-               s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
-               0
+               s.closestPart
+                  .displacementFrom(mouse.position)
+                  .relativeTo(selectAxis).y > 0
                   ? [0, 1]
                   : [1, 0]
             gapHighlighted.add(s.object)
@@ -491,7 +497,10 @@
    // ---------------------------- Primary events -----------------------------
    function toolChanged(newTool: Tool) {
       tool = newTool
-      if (tool === "hydraulic line" && !move) selected = new ToggleSet()
+      if (tool === "draw" && !move) selected = new ToggleSet()
+   }
+   function nextLineType() {
+      // TODO — toggle through line types.
    }
    function deleteSelected() {
       let junctionsToConvert = new Set<Junction>()
@@ -510,11 +519,11 @@
       Port.s = Port.s
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
-      mouse = mouseInCoordinateSystemOf(canvas, e)
-      let spawnPosition = mouse.displacedBy(grabOffset)
+      mouse.position = mouseInCoordinateSystemOf(canvas, e)
+      let spawnPosition = mouse.position.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       selected = new ToggleSet([symbol])
-      beginMove("move", { grabbed: symbol, atPart: mouse })
+      beginMove("move", { grabbed: symbol, atPart: mouse.position })
    }
    function shiftDown() {}
    function shiftUp() {}
@@ -534,62 +543,59 @@
    function altUp() {}
    function cmdDown() {}
    function cmdUp() {}
-   // The state the left mouse button SHOULD be in (omitting browser mayhem.)
-   let leftMouseShouldBeDown = false
    let waitedOneFrame = false
-   // The state the left mouse button is ACTUALLY in.
    function leftMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b1) === 1
    }
-   function leftMouseDown(clickPoint: Point) {
-      leftMouseShouldBeDown = true
-      switch (tool) {
-         case "select & move": {
-            let grab = closestGrabbable(clickPoint)
-            if (grab && !shift && !alt) {
-               if (cmd) {
-                  selected.clear()
-                  for (let s of gapHighlighted) selected.add(s)
-               } else if (!selected.has(grab.object)) {
-                  selected = new ToggleSet([grab.object])
-               }
-               beginMove("move", {
-                  grabbed: grab.object,
-                  atPart: grab.closestPart,
-               })
-            } else waitingForDrag = clickPoint
-            break
+   function leftMouseDown() {
+      let grab = closestGrabbable(mouse.position)
+      if (tool === "select & move" && grab && !shift && !alt) {
+         // Immediately treat the operation as a drag.
+         mouse = { ...mouse, state: "dragging", downPosition: mouse.position }
+         if (cmd) {
+            selected.clear()
+            for (let s of gapHighlighted) selected.add(s)
+         } else if (!selected.has(grab.object)) {
+            selected = new ToggleSet([grab.object])
          }
-         case "hydraulic line":
-            waitingForDrag = clickPoint
-            break
+         beginMove("move", {
+            grabbed: grab.object,
+            atPart: grab.closestPart,
+         })
+      } else {
+         mouse = { ...mouse, state: "pressing", downPosition: mouse.position }
       }
    }
-   function mouseMoved(newMouse: Point) {
-      if (move) move.distance += newMouse.distanceFrom(mouse)
-      mouse = newMouse
+   function mouseMoved(previousMousePosition: Point) {
+      if (move)
+         move.distance += mouse.position.distanceFrom(previousMousePosition)
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
       if (move) updateMove()
       if (rectSelect) updateRectSelect()
-      // Check if the mouse has moved enough to trigger an action.
-      if (waitingForDrag) {
-         let d = mouse.displacementFrom(waitingForDrag)
-         switch (tool) {
-            case "select & move":
-               if (d.sqLength() > 16) {
-                  beginRectSelect(waitingForDrag)
-                  waitingForDrag = null
-               }
-               break
-            case "hydraulic line":
-               if (d.sqLength() > sqSnapRadius) {
+      if (mouse.state === "pressing") {
+         // Check if the mouse has moved enough to constitute a drag.
+         let dragVector = mouse.position.displacementFrom(mouse.downPosition)
+         let sqLengthRequiredForDragStart = {
+            "select & move": 4 * 4,
+            draw: sqSnapRadius, // a larger value helps us deduce draw direction
+         }
+         if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
+            mouse = { ...mouse, state: "dragging" }
+            switch (tool) {
+               case "select & move":
+                  beginRectSelect(mouse.downPosition)
+                  break
+               case "draw": {
+                  let c = closestAttachableOrToggleable(mouse.downPosition)
+                  // Disallow the initiation of a draw operation at a crossing.
+                  if (c?.object instanceof Crossing) break
                   let drawAxis =
-                     Math.abs(d.x) >= Math.abs(d.y)
+                     Math.abs(dragVector.x) >= Math.abs(dragVector.y)
                         ? Axis.horizontal
                         : Axis.vertical
-                  let attach = closestAttachable(waitingForDrag)
+                  let attach = closestAttachable(mouse.downPosition)
                   if (attach) {
                      if (attach.object instanceof Segment) {
                         let cutPoint = new Junction(attach.closestPart)
@@ -613,25 +619,27 @@
                      }
                   } else
                      beginMove("draw", {
-                        start: new Junction(waitingForDrag),
+                        start: new Junction(mouse.downPosition),
                         axis: drawAxis,
                      })
-                  waitingForDrag = null
+                  break
                }
-               break
+            }
          }
       }
    }
-   function leftMouseUp(unexpectedly?: boolean) {
+   function leftMousePressEnded(unexpectedly: true) {
+      mouse = { ...mouse, state: "up" }
+   }
+   function leftMouseDragEnded(unexpectedly: boolean = false) {
       if (move) endMove()
       if (rectSelect) endRectSelect()
-      waitingForDrag = null
-      leftMouseShouldBeDown = false
+      mouse = { ...mouse, state: "up" }
    }
    function leftMouseClicked() {
       switch (tool) {
          case "select & move": {
-            let grab = closestGrabbable(mouse)
+            let grab = closestGrabbable(mouse.position)
             if (!grab) selected.clear()
             else if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
             else if (shift && !cmd) selected.toggle(grab.object)
@@ -642,8 +650,8 @@
             selected = selected
             break
          }
-         case "hydraulic line": {
-            let toggle = closestToggleable(mouse)
+         case "draw": {
+            let toggle = closestToggleable(mouse.position)
             if (!toggle) break
             if (isVertex(toggle.object)) {
                if (toggle.object.glyph === "default") {
@@ -753,14 +761,13 @@
          movables: selectedMovables_,
          axisGrabbed,
          partGrabbed,
-         mouseDownLocation: mouse,
          distance: 0,
          originalPositions,
          draw,
       }
    }
    function updateMove() {
-      if (!move) return
+      if (!move || mouse.state === "up") return
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -771,7 +778,7 @@
       if (draw && drawMode === "fixed-axis rotation") {
          // Check which axis the mouse is closest to. If the axis has
          // changed, restart the move operation along the new axis.
-         let drawVector = mouse.displacementFrom(draw.segment.start)
+         let drawVector = mouse.position.displacementFrom(draw.segment.start)
          let newAxis = findAxis(Axis.fromVector(drawVector))
          if (newAxis) {
             // Snap to the nearest standard axis.
@@ -816,18 +823,18 @@
             return true
          }
          let closest = closestNearTo(
-            mouse,
+            mouse.position,
             Array.from(attachableVertices()).filter(isAcceptableTEMP)
          )
          let newAxis = findAxis(
             Axis.fromVector(
                closest
                   ? closest.object.displacementFrom(draw.segment.start)
-                  : mouse.displacementFrom(draw.segment.start)
+                  : mouse.position.displacementFrom(draw.segment.start)
             )
          )
          if (newAxis) {
-            let newEnd = closest ? closest.object : mouse
+            let newEnd = closest ? closest.object : mouse.position
             ;(draw.segment.end as Junction).moveTo(newEnd)
             ;(draw.segment.axis as Axis) = newAxis
             // Reset the move operation.
@@ -841,7 +848,7 @@
                if (closest) {
                   draw.endObject = closest.object
                } else {
-                  let s = closestSegmentNearTo(mouse, newAxis)
+                  let s = closestSegmentNearTo(mouse.position, newAxis)
                   if (s) {
                      ;(draw.segment.end as Junction).moveTo(s.closestPart)
                      draw.endObject = s.object
@@ -872,14 +879,14 @@
       ) {
          // The user may have grabbed slightly-away from their target object.
          // If so, gradually pull the object towards the mouse cursor.
-         fullMove = mouse.displacementFrom(
-            move.mouseDownLocation.interpolatedToward(
+         fullMove = mouse.position.displacementFrom(
+            mouse.downPosition.interpolatedToward(
                move.partGrabbed,
                move.distance / 15
             )
          )
       } else {
-         fullMove = mouse.displacementFrom(move.partGrabbed)
+         fullMove = mouse.position.displacementFrom(move.partGrabbed)
       }
       // Firstly, perform a simple movement that tracks the mouse.
       if (draw && drawMode === "fixed-axis rotation") {
@@ -1253,7 +1260,7 @@
          if (move.draw.segmentIsNew || endObject) selected = new ToggleSet()
       }
       move = null
-      if (tool === "hydraulic line") selected = new ToggleSet()
+      if (tool === "draw") selected = new ToggleSet()
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -1261,43 +1268,38 @@
       Port.s = Port.s
    }
    function beginRectSelect(start: Point) {
-      rectSelect = {
-         start,
-         end: start, // Updated elsewhere
-         highlighted: new Set(),
-      }
+      rectSelect = new Set()
    }
    function updateRectSelect() {
-      if (!rectSelect) return
-      rectSelect.end = mouse
-      rectSelect.highlighted = new Set()
-      let range = Range2D.fromCorners(rectSelect.start, rectSelect.end)
+      if (!rectSelect || mouse.state === "up") return
+      rectSelect = new Set()
+      let range = Range2D.fromCorners(mouse.downPosition, mouse.position)
       // Highlight Junctions and Segments.
       for (let start of Junction.s) {
          if (range.contains(start)) {
             let segmentAdded = false
             for (let [segment, end] of start.edges) {
                if (range.contains(end)) {
-                  rectSelect.highlighted.add(segment)
+                  rectSelect.add(segment)
                   segmentAdded = true
                }
             }
             if (!segmentAdded) {
-               rectSelect.highlighted.add(start)
+               rectSelect.add(start)
             }
          }
       }
       // Don't highlight Junctions if their Segment is already selected.
       for (let thing of selected) {
          if (thing instanceof Segment) {
-            rectSelect.highlighted.delete(thing.start as Junction)
-            rectSelect.highlighted.delete(thing.end as Junction)
+            rectSelect.delete(thing.start as Junction)
+            rectSelect.delete(thing.end as Junction)
          }
       }
       for (let symbol of SymbolInstance.s) {
          // Highlight enclosed symbols.
          if (symbol.svgCorners().every((c) => range.contains(c))) {
-            rectSelect.highlighted.add(symbol)
+            rectSelect.add(symbol)
          }
       }
    }
@@ -1305,9 +1307,9 @@
       if (rectSelect) {
          if (!shift && !alt) selected.clear()
          if (alt) {
-            for (let thing of rectSelect.highlighted) selected.delete(thing)
+            for (let thing of rectSelect) selected.delete(thing)
          } else {
-            for (let thing of rectSelect.highlighted) selected.add(thing)
+            for (let thing of rectSelect) selected.add(thing)
          }
          selected = selected
       }
@@ -1324,29 +1326,35 @@
 <svg
    bind:this={canvas}
    style="cursor: {cursor}"
+   on:mousedown={(event) => {
+      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      if (leftMouseIsDown(event)) leftMouseDown()
+   }}
    on:mousemove={(event) => {
-      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) {
+      let previousMousePosition = mouse.position
+      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      if (!leftMouseIsDown(event) && mouse.state !== "up") {
          if (waitedOneFrame) {
-            leftMouseUp(true)
+            if (mouse.state === "pressing") leftMousePressEnded(true)
+            if (mouse.state === "dragging") leftMouseDragEnded(true)
             waitedOneFrame = false
          } else waitedOneFrame = true
       }
-      mouseMoved(mouseInCoordinateSystemOf(event.currentTarget, event))
-   }}
-   on:mousedown={(event) => {
-      if (event.button === 0 /* Left mouse button */) {
-         leftMouseDown(mouseInCoordinateSystemOf(event.currentTarget, event))
-      }
+      mouseMoved(previousMousePosition)
    }}
    on:mouseup={(event) => {
-      if (event.button === 0 /* Left mouse button */) {
-         let mouseWasClicked = waitingForDrag
-         leftMouseUp()
-         if (mouseWasClicked) leftMouseClicked()
+      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      if (!leftMouseIsDown(event)) {
+         if (mouse.state === "pressing") leftMouseClicked()
+         if (mouse.state === "dragging") leftMouseDragEnded()
       }
    }}
    on:mouseenter={(event) => {
-      if (leftMouseShouldBeDown && !leftMouseIsDown(event)) leftMouseUp(true)
+      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      if (!leftMouseIsDown(event)) {
+         if (mouse.state === "pressing") leftMousePressEnded(true)
+         if (mouse.state === "dragging") leftMouseDragEnded(true)
+      }
    }}
 >
    <!-- Symbol highlight/selection layer -->
@@ -1450,8 +1458,8 @@
    </g>
    <!-- HUD layer -->
    <g>
-      {#if rectSelect}
-         <RectSelectBox start={rectSelect.start} end={rectSelect.end} />
+      {#if rectSelect && mouse.state !== "up"}
+         <RectSelectBox start={mouse.downPosition} end={mouse.position} />
       {/if}
    </g>
 </svg>
