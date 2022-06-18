@@ -1,6 +1,6 @@
 <script lang="ts">
    import { Point, Direction } from "~/shared/geometry"
-   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "hover" | "select" = "default"
    export let start: Point
    export let end: Point
    export let flip: boolean = false
@@ -11,7 +11,7 @@
 {#if renderStyle === "default"}
    <!-- Add little "wings" to the ends of the hopover. -->
    <path
-      class="fluidLine {renderStyle}"
+      class="fluid line {renderStyle} stroke"
       d="M{start.x - v.x},{start.y -
          v.y} L{start.x},{start.y} A 7.5,7.5 0 0 {+flip} {end.x},{end.y} L{end.x +
          v.x},{end.y + v.y}"
@@ -19,7 +19,7 @@
 {:else}
    <!-- Draw the highlight/selection without wings. -->
    <path
-      class="fluidLine {renderStyle}"
+      class="fluid line {renderStyle} stroke"
       d="M{start.x},{start.y} A 7.5,7.5 0 0 {+flip} {end.x},{end.y}"
    />
 {/if}
@@ -28,8 +28,8 @@
    .default {
       stroke-width: 3px;
    }
-   .highlight,
-   .selectLight {
+   .hover,
+   .select {
       stroke-width: 9px;
    }
 </style>

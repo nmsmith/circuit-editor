@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "hover" | "select" = "default"
    export let position: Point
    const diagonalLength = 12
    $: width = Math.sqrt(0.5 * diagonalLength * diagonalLength) // x/y width
@@ -16,25 +16,20 @@
 </script>
 
 <path
-   class="plug {renderStyle}"
+   class="plug {renderStyle} stroke"
    d="M{topLeft.x},{topLeft.y} l {w},{w} M{bottomLeft.x},{bottomLeft.y} l{w},{-w}"
 />
 
 <style>
    .plug {
-      fill: none;
       stroke-linecap: round;
    }
    .default {
       stroke: black;
       stroke-width: 3px;
    }
-   .highlight {
-      stroke: rgb(0, 234, 255);
-      stroke-width: 10px;
-   }
-   .selectLight {
-      stroke: yellow;
+   .hover,
+   .select {
       stroke-width: 10px;
    }
 </style>

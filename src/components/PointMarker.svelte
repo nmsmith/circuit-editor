@@ -1,13 +1,13 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderStyle: "default" | "highlight" | "selectLight" = "default"
+   export let renderStyle: "default" | "hover" | "select" = "default"
    export let position: Point
    const w = 6
    $: [x, y] = [position.x, position.y]
 </script>
 
 <polygon
-   class={renderStyle}
+   class="{renderStyle} fill stroke"
    points="{x - w},{y} {x},{y - w} {x + w},{y} {x},{y + w}"
 />
 
@@ -17,14 +17,8 @@
       stroke: black;
       stroke-width: 3px;
    }
-   .highlight {
-      fill: rgb(0, 234, 255);
-      stroke: rgb(0, 234, 255);
-      stroke-width: 10px;
-   }
-   .selectLight {
-      fill: yellow;
-      stroke: yellow;
+   .hover,
+   .select {
       stroke-width: 10px;
    }
 </style>

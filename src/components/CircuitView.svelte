@@ -73,10 +73,11 @@
    const gapSelectError = 1 // diff from standardGap acceptable to gap select
    // Snapping constants
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
-   const snapRadius = 15 // dist btw mouse & snap point at which snapping occurs
+   const snapRadius = 12 // dist btw mouse & snap point at which snapping occurs
    const snapJump = 5 // the distance things move at the moment they snap
    const sqEaseRadius = easeRadius * easeRadius
    const sqSnapRadius = snapRadius * snapRadius
+   const sqInteractRadius = sqSnapRadius
    // The default axes used for snapping.
    const snapAxes = [
       Axis.horizontal,
@@ -126,7 +127,10 @@
       ...objectSets: Iterable<T>[]
    ): ClosenessResult<T> {
       let closest = closestTo(point, ...objectSets)
-      if (closest && closest.closestPart.sqDistanceFrom(point) < sqSnapRadius) {
+      if (
+         closest &&
+         closest.closestPart.sqDistanceFrom(point) < sqInteractRadius
+      ) {
          return closest
       }
    }
@@ -138,7 +142,7 @@
       let sqBuffer = hopoverRadius * hopoverRadius
       if (
          closest &&
-         closest.closestPart.sqDistanceFrom(point) < sqSnapRadius &&
+         closest.closestPart.sqDistanceFrom(point) < sqInteractRadius &&
          closest.closestPart.sqDistanceFrom(closest.object.start) >= sqBuffer &&
          closest.closestPart.sqDistanceFrom(closest.object.end) >= sqBuffer
       ) {
@@ -184,10 +188,10 @@
       const c = -a * sqEaseRadius - b * easeRadius
       return a * distance * distance + b * distance + c
    }
-   type HighlightStyle = "highlight" | "selectLight" | undefined
+   type HighlightStyle = "hover" | "select" | undefined
    function styleOf(thing: Highlightable | Selectable): HighlightStyle {
-      if (selected.has(thing as Selectable)) return "selectLight"
-      if (highlighted.has(thing)) return "highlight"
+      if (selected.has(thing as Selectable)) return "select"
+      if (highlighted.has(thing)) return "hover"
    }
    function layerOf(point: Point): "lower" | "upper" {
       return point instanceof Port || point === move?.draw?.segment.end
@@ -269,12 +273,14 @@
          }
       }
    }
-   let cursor: "auto" | "grab" | "grabbing"
+   let cursor: "default" | "cell" | "grab" | "grabbing"
    $: /* Where helpful, change the appearance of the mouse cursor. */ {
-      if (move) {
+      if (tool === "hydraulic line") {
+         cursor = "cell"
+      } else if (move) {
          cursor = "grabbing"
       } else {
-         cursor = "auto"
+         cursor = "default"
          let grab = closestGrabbable(mouse)
          if (tool === "select & move" && grab && !shift && !alt && !cmd) {
             cursor = waitingForDrag ? "grabbing" : "grab"
@@ -847,7 +853,7 @@
          }
       }
       if (draw && drawMode === "free rotation") return
-      let drawingEdgeCase = draw && draw.segment.start.axes().length !== 2
+      let drawingSpecialCase = draw && draw.segment.start.axes().length !== 2
       type Movement = {
          vector: Vector
       } & (
@@ -915,9 +921,10 @@
       }
       if (!snappedToPoint) {
          // Snap axis-aligned objects to a "standardGap" distance apart.
-         let snapGap = computeStandardGapEase()
          let snappedMove =
-            move.distance === 0 ? fullMove : fullMove.add(snapGap)
+            move.distance === 0
+               ? fullMove
+               : fullMove.add(computeStandardGapEase())
          if (draw && drawMode === "fixed-axis rotation") {
             snappedMove = snappedMove.projectionOnto(draw.segment.axis)
             moveOne(draw.segment.end as Junction, snappedMove)
@@ -956,7 +963,7 @@
                let remainingMove = vector.rejectionFrom(segment.axis)
                propagateMovement(remainingMove, movableAt(segment.start))
             }
-            if (drawingEdgeCase) {
+            if (drawingSpecialCase) {
                specialMove()
             } else {
                // Try a normal move.
@@ -1052,7 +1059,7 @@
          let drawAxis: "x" | "y" | undefined
          let drawEndSide: "low" | "high" | undefined
          let shouldEase = { x: true, y: true }
-         if (draw && drawingEdgeCase) {
+         if (draw && drawingSpecialCase) {
             let start = draw.segment.start.relativeTo(easeAxes.x)
             let end = draw.segment.end.relativeTo(easeAxes.x)
             if (draw.segment.axis === easeAxes.x) {
@@ -1348,9 +1355,10 @@
          {@const c = symbol.svgCorners()}
          {#if highlighted.has(symbol) || selected.has(symbol)}
             <polygon
-               class={selected.has(symbol)
-                  ? "symbolSelectLight"
-                  : "symbolHighlight"}
+               style="stroke-width: 8px"
+               class="symbolHighlight fill stroke {selected.has(symbol)
+                  ? 'select'
+                  : 'hover'}"
                points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
                   .y} {c[3].x},{c[3].y}"
             />
@@ -1362,7 +1370,7 @@
       {#each [...segmentsToDraw] as [segment, sections]}
          {#if highlighted.has(segment)}
             {#each sections as section}
-               <FluidLine renderStyle="highlight" segment={section} />
+               <FluidLine renderStyle="hover" segment={section} />
             {/each}
          {/if}
       {/each}
@@ -1372,7 +1380,7 @@
       {#each [...segmentsToDraw] as [segment, sections]}
          {#if selected.has(segment)}
             {#each sections as section}
-               <FluidLine renderStyle="selectLight" segment={section} />
+               <FluidLine renderStyle="select" segment={section} />
             {/each}
          {/if}
       {/each}
@@ -1453,15 +1461,5 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
-   }
-   .symbolHighlight {
-      fill: rgb(0, 234, 255);
-      stroke: rgb(0, 234, 255);
-      stroke-width: 8px;
-   }
-   .symbolSelectLight {
-      fill: yellow;
-      stroke: yellow;
-      stroke-width: 8px;
    }
 </style>

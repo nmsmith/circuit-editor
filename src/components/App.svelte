@@ -191,18 +191,30 @@
       margin: 0;
       overflow: hidden;
    }
-   :global(.fluidLine) {
-      fill: none;
-      stroke: blue;
+   :global(.fluid.line) {
       stroke-linejoin: round;
       stroke-linecap: round;
-      stroke-width: 0;
    }
-   :global(.fluidLine.highlight) {
+   :global(.fluid.stroke) {
+      stroke: blue;
+      fill: none;
+   }
+   :global(.fluid.fill) {
+      fill: blue;
+   }
+   :global(.hover.stroke) {
       stroke: rgb(0, 234, 255);
+      fill: none;
    }
-   :global(.fluidLine.selectLight) {
-      stroke: yellow;
+   :global(.hover.fill) {
+      fill: rgb(0, 234, 255);
+   }
+   :global(.select.stroke) {
+      stroke: white;
+      fill: none;
+   }
+   :global(.select.fill) {
+      fill: white;
    }
    .paneTitle {
       font: bold 24px sans-serif;
