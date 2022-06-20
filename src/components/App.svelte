@@ -12,7 +12,7 @@
    function onSymbolLeave() {}
 
    // Callbacks obtained from circuitView
-   let onToolChanged: (newTool: Tool) => void
+   let onToolSelected: (newTool: Tool) => void
    let onNextLineType: () => void
    let onDelete: () => void
    let onSymbolEnter: (
@@ -20,7 +20,6 @@
       grabOffset: Vector,
       event: MouseEvent
    ) => void
-   $: onToolChanged ? onToolChanged(tool) : {} // Called when the tool changes.
 
    // Data related to schematic symbols
    let symbolFiles = [
@@ -87,17 +86,17 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      switch (event.key) {
-         case "s":
-         case "S":
+      if (event.repeat) return // Ignore repeated events from held-down keys.
+      switch (event.code) {
+         case "KeyS":
             tool = "select & move"
+            onToolSelected(tool) // called even if the tool is the same
             break
-         case "d":
-         case "D":
+         case "KeyD":
             tool = "draw"
+            onToolSelected(tool) // called even if the tool is the same
             break
-         case "e":
-         case "E":
+         case "KeyE":
             onNextLineType()
             break
          case "Backspace":
@@ -131,7 +130,7 @@
       {alt}
       {cmd}
       {onSymbolLeave}
-      bind:onToolChanged
+      bind:onToolSelected
       bind:onNextLineType
       bind:onDelete
       bind:onSymbolEnter

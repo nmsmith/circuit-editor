@@ -56,7 +56,7 @@
       event: MouseEvent
    ) => void
    // Values shared with the parent component.
-   export const onToolChanged = toolChanged
+   export const onToolSelected = toolSelected
    export const onNextLineType = nextLineType
    export const onDelete = deleteSelected
    export const onSymbolEnter = spawnSymbol
@@ -84,7 +84,8 @@
    const sqEaseRadius = easeRadius * easeRadius
    const sqSnapRadius = snapRadius * snapRadius
    const sqInteractRadius = sqSnapRadius
-   // The default axes used for snapping.
+   // The major axes that drawing occurs along.
+   const primaryAxes = [Axis.horizontal, Axis.vertical]
    const snapAxes = [
       Axis.horizontal,
       Axis.vertical,
@@ -215,8 +216,8 @@
    let mouse: { position: Point } & (
       | { state: "up" }
       // Pressing, but not yet moved enough to constitute a drag.
-      | { state: "pressing"; downPosition: Point }
-      | { state: "dragging"; downPosition: Point }
+      | { state: "pressing"; downPosition: Point; downJunction?: Junction }
+      | { state: "dragging"; downPosition: Point; downJunction?: Junction }
    ) = { position: Point.zero, state: "up" }
    let tool: Tool = "draw"
    let move: null | {
@@ -235,12 +236,12 @@
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
-   let drawMode: "strafing" | "fixed-axis rotation" | "free rotation"
+   let drawMode: "strafing" | "snapped rotation" | "free rotation"
    $: {
       drawMode = alt
          ? shift
             ? "free rotation"
-            : "fixed-axis rotation"
+            : "snapped rotation"
          : "strafing"
       if (move) updateMove() // Treat changes to drawMode as events.
    }
@@ -481,9 +482,22 @@
    }
 
    // ---------------------------- Primary events -----------------------------
-   function toolChanged(newTool: Tool) {
-      tool = newTool
-      if (tool === "draw" && !move) selected = new ToggleSet()
+   function toolSelected(newTool: Tool) {
+      if (tool === newTool && tool === "draw" && move?.draw) {
+         // Start a new draw operation at the current draw endpoint.
+         let endpoint = move.draw.segment.end as Junction
+         move.draw.endObject = undefined // Don't connect to anything else.
+         endMove(false)
+         mouse = {
+            state: "pressing",
+            position: mouse.position,
+            downPosition: mouse.position,
+            downJunction: endpoint,
+         }
+      } else {
+         tool = newTool
+         if (tool === "draw" && !move) selected = new ToggleSet()
+      }
    }
    function nextLineType() {
       // TODO — toggle through line types.
@@ -577,12 +591,12 @@
       }
    }
    function leftMousePressEnded(unexpectedly: true) {
-      mouse = { ...mouse, state: "up" }
+      mouse = { state: "up", position: mouse.position }
    }
    function leftMouseDragEnded(unexpectedly: boolean = false) {
       if (move) endMove()
       if (rectSelect) endRectSelect()
-      mouse = { ...mouse, state: "up" }
+      mouse = { state: "up", position: mouse.position }
    }
    function leftMouseClicked() {
       switch (tool) {
@@ -644,25 +658,45 @@
             beginRectSelect(mouse.downPosition)
             break
          case "draw": {
-            let c = closestAttachableOrToggleable(mouse.downPosition)
-            // Disallow the initiation of a draw operation at a crossing.
-            if (c?.object instanceof Crossing) break
+            if (mouse.downJunction) {
+               // Start the draw operation at the endpoint of the previous
+               // draw operation.
+               let lastDrawAxis = mouse.downJunction.axes()[0]
+               // Determine the axis the draw operation should begin along.
+               let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+               if (drawMode === "strafing") {
+                  drawAxis = nearestAxis(
+                     drawAxis,
+                     primaryAxes.filter((axis) => axis !== lastDrawAxis)
+                  )
+               } else if (drawMode === "snapped rotation") {
+                  drawAxis = nearestAxis(
+                     drawAxis,
+                     snapAxes.filter((axis) => axis !== lastDrawAxis)
+                  )
+               }
+               beginMove("draw", { start: mouse.downJunction, axis: drawAxis })
+               break // Exit the switch statement.
+            } else if (
+               closestAttachableOrToggleable(mouse.downPosition)
+                  ?.object instanceof Crossing
+            ) {
+               break // Don't allow draw operations to start at crossings.
+            }
+            // Otherwise, start the draw operation at the closest attachable.
+            let attach = closestAttachable(mouse.downPosition)
             // Determine the axis the draw operation should begin along.
             let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
             if (drawMode === "strafing") {
-               drawAxis = nearestAxis(drawAxis, [
-                  Axis.horizontal,
-                  Axis.vertical,
-               ])
-            } else if (drawMode === "fixed-axis rotation") {
+               drawAxis = nearestAxis(drawAxis, primaryAxes)
+            } else if (drawMode === "snapped rotation") {
                drawAxis = nearestAxis(drawAxis, snapAxes)
             }
-            let attach = closestAttachable(mouse.downPosition)
             if (attach?.object instanceof Segment) {
                let segment = attach.object
                let closestPart = attach.closestPart
                if (segment.axis === drawAxis) {
-                  // Cut the segment, and allow the user to move one side.
+                  // Cut the segment, and allow the user to move one side of it.
                   let direction = segment.start.displacementFrom(closestPart)
                   let [newStart, other] =
                      direction.dot(dragVector) > 0
@@ -753,7 +787,7 @@
          //    let axis = Axis.horizontal
          //    for ([{ axis }] of info.grabbed.edges) {
          //       // Prefer horizontal and vertical axes.
-         //       if (axis === Axis.horizontal || axis === Axis.vertical) break
+         //       if (primaryAxes.includes(axis)) break
          //    }
          //    axisGrabbed = axis
          // }
@@ -805,7 +839,7 @@
       Port.s = Port.s
 
       let draw = move.draw
-      if (draw && drawMode === "fixed-axis rotation") {
+      if (draw && drawMode === "snapped rotation") {
          // Check which axis the mouse is closest to. If the axis has
          // changed, restart the move operation along the new axis.
          let drawVector = mouse.position.displacementFrom(draw.segment.start)
@@ -915,7 +949,7 @@
          fullMove = mouse.position.displacementFrom(move.partGrabbed)
       }
       // Firstly, perform a simple movement that tracks the mouse.
-      if (draw && drawMode === "fixed-axis rotation") {
+      if (draw && drawMode === "snapped rotation") {
          fullMove = fullMove.projectionOnto(draw.segment.axis)
          moveOne(draw.segment.end as Junction, fullMove)
       } else {
@@ -958,7 +992,7 @@
             move.distance === 0
                ? fullMove
                : fullMove.add(computeStandardGapEase())
-         if (draw && drawMode === "fixed-axis rotation") {
+         if (draw && drawMode === "snapped rotation") {
             snappedMove = snappedMove.projectionOnto(draw.segment.axis)
             moveOne(draw.segment.end as Junction, snappedMove)
          } else {
@@ -1250,7 +1284,7 @@
          return new Vector(minDisp.x, minDisp.y).undoRelativeTo(easeAxes.x)
       }
    }
-   function endMove() {
+   function endMove(allowedToDelete: boolean = true) {
       if (!move) return
       if (move.draw) {
          let segment = move.draw.segment
@@ -1283,7 +1317,7 @@
                if (extend)
                   (endObject as Junction).convertToCrossing(crossingMap)
             }
-         } else deleteSelected()
+         } else if (allowedToDelete) deleteSelected()
          // Reset the drawing state.
          if (move.draw.segmentIsNew || endObject) selected = new ToggleSet()
       }
