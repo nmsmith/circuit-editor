@@ -115,10 +115,6 @@
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
    }
-   function* attachableVertices(): Generator<Vertex> {
-      for (let v of Junction.s) yield v
-      for (let v of Port.s) if (!v.edge) yield v
-   }
    function* crossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
          for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
@@ -156,10 +152,7 @@
       }
    }
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
-      return (
-         closestNearTo(point, attachableVertices()) ||
-         closestNearTo(point, Segment.s)
-      )
+      return closestNearTo(point, vertices()) || closestNearTo(point, Segment.s)
    }
    function closestToggleable(point: Point): ClosenessResult<Toggleable> {
       return (
@@ -204,16 +197,17 @@
          ? "upper"
          : "lower"
    }
-   function shouldExtendTheLineAt(
-      vertex: Vertex,
+   function shouldExtendTheSegmentAt(
+      junction: Junction,
       drawAxis: Axis
-   ): vertex is Junction {
+   ): boolean {
       return (
-         vertex instanceof Junction &&
-         vertex.axes().length === 1 &&
-         vertex.axes()[0] === drawAxis &&
-         !alt
+         junction.edges.size === 1 && junction.axes()[0] === drawAxis && !alt
       )
+   }
+   function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
+      let scores = ofAxes.map((axis) => Math.abs(to.dot(axis)))
+      return ofAxes[scores.indexOf(Math.max(...scores))]
    }
 
    // ---------------------------- Primary state ------------------------------
@@ -241,22 +235,14 @@
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
-   let drawMode:
-      | undefined
-      | "strafing"
-      | "fixed-axis rotation"
-      | "free rotation"
+   let drawMode: "strafing" | "fixed-axis rotation" | "free rotation"
    $: {
-      if (move && move.draw) {
-         drawMode = alt
-            ? shift
-               ? "free rotation"
-               : "fixed-axis rotation"
-            : "strafing"
-      } else {
-         drawMode = undefined
-      }
-      updateMove() // Treat changes to drawMode as events.
+      drawMode = alt
+         ? shift
+            ? "free rotation"
+            : "fixed-axis rotation"
+         : "strafing"
+      if (move) updateMove() // Treat changes to drawMode as events.
    }
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
@@ -519,7 +505,10 @@
       Port.s = Port.s
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
-      mouse.position = mouseInCoordinateSystemOf(canvas, e)
+      // Update the mouse's state.
+      let p = mouseInCoordinateSystemOf(canvas, e)
+      mouse = { state: "dragging", downPosition: p, position: p }
+      // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.position.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       selected = new ToggleSet([symbol])
@@ -583,48 +572,7 @@
          }
          if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
             mouse = { ...mouse, state: "dragging" }
-            switch (tool) {
-               case "select & move":
-                  beginRectSelect(mouse.downPosition)
-                  break
-               case "draw": {
-                  let c = closestAttachableOrToggleable(mouse.downPosition)
-                  // Disallow the initiation of a draw operation at a crossing.
-                  if (c?.object instanceof Crossing) break
-                  let drawAxis =
-                     Math.abs(dragVector.x) >= Math.abs(dragVector.y)
-                        ? Axis.horizontal
-                        : Axis.vertical
-                  let attach = closestAttachable(mouse.downPosition)
-                  if (attach) {
-                     if (attach.object instanceof Segment) {
-                        let cutPoint = new Junction(attach.closestPart)
-                        attach.object.cutAt(cutPoint)
-                        beginMove("draw", { start: cutPoint, axis: drawAxis })
-                     } else if (
-                        shouldExtendTheLineAt(attach.object, drawAxis)
-                     ) {
-                        // Extend the current line, to match the user's
-                        // probable intent.
-                        selected = new ToggleSet([attach.object])
-                        beginMove("move", {
-                           grabbed: attach.object,
-                           atPart: attach.object,
-                        })
-                     } else {
-                        beginMove("draw", {
-                           start: attach.object,
-                           axis: drawAxis,
-                        })
-                     }
-                  } else
-                     beginMove("draw", {
-                        start: new Junction(mouse.downPosition),
-                        axis: drawAxis,
-                     })
-                  break
-               }
-            }
+            beginDragAction(dragVector)
          }
       }
    }
@@ -666,7 +614,7 @@
                }
             } else if (toggle.object instanceof Segment) {
                let cutPoint = new Junction(toggle.closestPart)
-               toggle.object.cutAt(cutPoint)
+               toggle.object.splitAt(cutPoint)
                cutPoint.glyph = "plug"
             } else if (toggle.object instanceof Crossing) {
                // Change the crossing glyph.
@@ -689,6 +637,88 @@
    }
 
    // ---------------------------- Derived events -----------------------------
+   function beginDragAction(dragVector: Vector) {
+      if (mouse.state !== "dragging") return
+      switch (tool) {
+         case "select & move":
+            beginRectSelect(mouse.downPosition)
+            break
+         case "draw": {
+            let c = closestAttachableOrToggleable(mouse.downPosition)
+            // Disallow the initiation of a draw operation at a crossing.
+            if (c?.object instanceof Crossing) break
+            // Determine the axis the draw operation should begin along.
+            let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+            if (drawMode === "strafing") {
+               drawAxis = nearestAxis(drawAxis, [
+                  Axis.horizontal,
+                  Axis.vertical,
+               ])
+            } else if (drawMode === "fixed-axis rotation") {
+               drawAxis = nearestAxis(drawAxis, snapAxes)
+            }
+            let attach = closestAttachable(mouse.downPosition)
+            if (attach?.object instanceof Segment) {
+               let segment = attach.object
+               let closestPart = attach.closestPart
+               if (segment.axis === drawAxis) {
+                  // Cut the segment, and allow the user to move one side.
+                  let direction = segment.start.displacementFrom(closestPart)
+                  let [newStart, other] =
+                     direction.dot(dragVector) > 0
+                        ? [segment.start, segment.end]
+                        : [segment.end, segment.start]
+                  let jMove = new Junction(closestPart)
+                  let jOther = new Junction(closestPart)
+                  let moveSegment = new Segment(newStart, jMove, drawAxis)
+                  let otherSegment = new Segment(other, jOther, drawAxis)
+                  segment.replaceWith(moveSegment, otherSegment)
+                  selected = new ToggleSet([jMove])
+                  beginMove("move", { grabbed: jMove, atPart: jMove })
+               } else {
+                  // Create a T-junction.
+                  let junction = new Junction(closestPart)
+                  segment.splitAt(junction)
+                  beginMove("draw", { start: junction, axis: drawAxis })
+               }
+            } else if (attach) {
+               let vertex = attach.object
+               if (
+                  vertex instanceof Junction &&
+                  shouldExtendTheSegmentAt(vertex, drawAxis)
+               ) {
+                  // Extend the segment, to match the user's probable intent.
+                  selected = new ToggleSet([vertex])
+                  beginMove("move", { grabbed: vertex, atPart: vertex })
+               } else {
+                  let unplugged = false
+                  for (let [segment, other] of vertex.edges) {
+                     if (segment.axis !== drawAxis) continue
+                     if (other.displacementFrom(vertex).dot(dragVector) <= 0)
+                        continue
+                     // Unplug this segment from the vertex.
+                     let junction = new Junction(vertex)
+                     segment.replaceWith(new Segment(other, junction, drawAxis))
+                     if (vertex instanceof Junction && vertex.edges.size === 2)
+                        vertex.convertToCrossing(crossingMap)
+                     // Allow the user to move the unplugged segment around.
+                     selected = new ToggleSet([junction])
+                     beginMove("move", { grabbed: junction, atPart: junction })
+                     unplugged = true
+                     break
+                  }
+                  if (!unplugged)
+                     beginMove("draw", { start: vertex, axis: drawAxis })
+               }
+            } else
+               beginMove("draw", {
+                  start: new Junction(mouse.downPosition),
+                  axis: drawAxis,
+               })
+            break
+         }
+      }
+   }
    type DrawInfo = { start: Vertex; axis: Axis }
    type MoveInfo = { grabbed: Grabbable; atPart: Point }
    function beginMove(type: "draw", info: DrawInfo): void
@@ -782,10 +812,7 @@
          let newAxis = findAxis(Axis.fromVector(drawVector))
          if (newAxis) {
             // Snap to the nearest standard axis.
-            let scores = snapAxes.map((axis) =>
-               Math.abs((newAxis as Axis).dot(axis))
-            )
-            newAxis = snapAxes[scores.indexOf(Math.max(...scores))]
+            newAxis = nearestAxis(newAxis, snapAxes)
             if (newAxis !== draw.segment.axis) {
                let newEnd = draw.segment.start.displacedBy(
                   drawVector.projectionOnto(newAxis)
@@ -805,7 +832,6 @@
          // the move operation is restarted from scratch every update.
          function isAcceptableTEMP(vertex: Vertex) {
             if (vertex === draw!.segment.end) return false
-            if (vertex instanceof Port) return true
             let start = draw!.segment.start
             let drawAxis = findAxis(
                Axis.fromVector(vertex.displacementFrom(start))
@@ -824,7 +850,7 @@
          }
          let closest = closestNearTo(
             mouse.position,
-            Array.from(attachableVertices()).filter(isAcceptableTEMP)
+            Array.from(vertices()).filter(isAcceptableTEMP)
          )
          let newAxis = findAxis(
             Axis.fromVector(
@@ -899,8 +925,8 @@
       if (draw && drawMode === "strafing") {
          // Try snapping the moved endpoint to another endpoint nearby.
          function isAcceptableTEMP(vertex: Vertex) {
-            if (vertex instanceof Port) return true
-            if (movements.read(vertex).type !== "no move") return false
+            if (movements.read(movableAt(vertex)).type !== "no move")
+               return false
             let start = draw!.segment.start
             for (let [{ axis }, other] of vertex.edges) {
                // Reject if the segment being drawn would overlap this seg.
@@ -915,7 +941,7 @@
          }
          let closest = closestNearTo(
             draw.segment.end,
-            Array.from(attachableVertices()).filter(isAcceptableTEMP)
+            Array.from(vertices()).filter(isAcceptableTEMP)
          )
          if (closest) {
             snappedToPoint = true
@@ -1034,7 +1060,7 @@
          let nextEdges =
             currentMovable instanceof Junction
                ? currentMovable.edges
-               : currentMovable.ports.flatMap((p) => (p.edge ? [p.edge] : []))
+               : currentMovable.ports.flatMap((p) => [...p.edges])
          for (let [nextSegment, nextVertex] of nextEdges) {
             let nextAxis = nextSegment.axis
             let nextMovable = movableAt(nextVertex)
@@ -1230,7 +1256,6 @@
          let segment = move.draw.segment
          let endObject = move.draw.endObject
          function isAcceptableTEMP() {
-            if (segment.start instanceof Port) return true
             for (let [s, other] of segment.start.edges) {
                if (
                   s !== segment &&
@@ -1246,14 +1271,17 @@
          if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
             if (endObject instanceof Segment) {
                // Turn the intersected Segment into a T-junction.
-               endObject.cutAt(segment.end as Junction)
+               endObject.splitAt(segment.end as Junction)
             } else if (endObject) {
+               let extend =
+                  endObject instanceof Junction &&
+                  shouldExtendTheSegmentAt(endObject, segment.axis)
                // Replace the drawn segment with one that ends at the Vertex.
                segment.replaceWith(
                   new Segment(segment.start, endObject, segment.axis)
                )
-               if (shouldExtendTheLineAt(endObject, segment.axis))
-                  endObject.convertToCrossing(crossingMap)
+               if (extend)
+                  (endObject as Junction).convertToCrossing(crossingMap)
             }
          } else deleteSelected()
          // Reset the drawing state.
@@ -1274,33 +1302,23 @@
       if (!rectSelect || mouse.state === "up") return
       rectSelect = new Set()
       let range = Range2D.fromCorners(mouse.downPosition, mouse.position)
-      // Highlight Junctions and Segments.
-      for (let start of Junction.s) {
-         if (range.contains(start)) {
-            let segmentAdded = false
-            for (let [segment, end] of start.edges) {
-               if (range.contains(end)) {
-                  rectSelect.add(segment)
-                  segmentAdded = true
-               }
-            }
-            if (!segmentAdded) {
-               rectSelect.add(start)
-            }
+      // Select enclosed Segments.
+      for (let segment of Segment.s) {
+         if (range.contains(segment.start) && range.contains(segment.end))
+            rectSelect.add(segment)
+      }
+      // Select enclosed Junctions iff no adjacent Segment is selected.
+      next: for (let junction of Junction.s) {
+         if (range.contains(junction)) {
+            for (let [segment] of junction.edges)
+               if (rectSelect.has(segment)) continue next
+            rectSelect.add(junction)
          }
       }
-      // Don't highlight Junctions if their Segment is already selected.
-      for (let thing of selected) {
-         if (thing instanceof Segment) {
-            rectSelect.delete(thing.start as Junction)
-            rectSelect.delete(thing.end as Junction)
-         }
-      }
+      // Select enclosed Symbols.
       for (let symbol of SymbolInstance.s) {
-         // Highlight enclosed symbols.
-         if (symbol.svgCorners().every((c) => range.contains(c))) {
+         if (symbol.svgCorners().every((c) => range.contains(c)))
             rectSelect.add(symbol)
-         }
       }
    }
    function endRectSelect() {

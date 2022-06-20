@@ -52,6 +52,7 @@ export type Edge = [Segment, Vertex]
 interface HasEdges {
    addEdge(edge: Edge): void
    removeEdge(edge: Edge): void
+   axes(): Axis[]
 }
 
 export class Junction extends Point implements Deletable, Moveable, HasEdges {
@@ -143,24 +144,23 @@ export class Port extends Point implements HasEdges {
    static s = new Set<Port>()
    readonly symbol: SymbolInstance
    glyph: VertexGlyph
-   edge: Edge | null
+   readonly edges = new Set<Edge>()
    constructor(symbol: SymbolInstance, point: Point) {
       super(point.x, point.y)
       this.symbol = symbol
       this.glyph = "default"
-      this.edge = null
       Port.s.add(this)
    }
    addEdge(edge: Edge) {
-      this.edge = edge
-      // It is the responsibility of the caller to make sure that the old edge
-      // is deleted.
+      this.edges.add(edge)
    }
    removeEdge(edge: Edge) {
-      if (this.edge === edge) this.edge = null
+      this.edges.delete(edge)
    }
    axes(): Axis[] {
-      return this.edge ? [this.edge[0].axis] : []
+      let a: Axis[] = []
+      for (let [{ axis }] of this.edges) if (!a.includes(axis)) a.push(axis)
+      return a
    }
 }
 
@@ -205,7 +205,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    }
    // Split the segment at the given point, which is assumed to lie on the
    // segment. Thereafter, all references to the segment should be discarded.
-   cutAt(point: Junction) {
+   splitAt(point: Junction) {
       let { start, end, axis } = this
       this.replaceWith(
          new Segment(point, start, axis),
@@ -218,8 +218,8 @@ export type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
 export class Crossing extends Geometry.LineSegmentCrossing<Segment> {}
 export function convertToJunction(crossing: Crossing) {
    let cutPoint = new Junction(crossing.point)
-   crossing.seg1.cutAt(cutPoint)
-   crossing.seg2.cutAt(cutPoint)
+   crossing.seg1.splitAt(cutPoint)
+   crossing.seg2.splitAt(cutPoint)
 }
 
 export type SymbolKind = {
@@ -273,21 +273,20 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
       this.svg.remove()
       for (let port of this.ports) {
          Port.s.delete(port)
-         if (port.edge) {
-            // Convert the Port to a Junction, and replace the Segment with
-            // one that points to the new Junction.
-            let [oldSegment, otherJunction] = port.edge
-            oldSegment.replaceWith(
-               new Segment(new Junction(port), otherJunction, oldSegment.axis)
-            )
-            port.edge = null
+         if (port.edges.size > 0) {
+            // Convert the Port to a Junction, and replace the Port's segments.
+            let junction = new Junction(port)
+            for (let [oldSegment, v] of port.edges) {
+               oldSegment.replaceWith(new Segment(junction, v, oldSegment.axis))
+            }
+            port.edges.clear()
          }
       }
       return new Set()
    }
    axes(): Axis[] {
       let a: Axis[] = []
-      let edges = this.ports.flatMap((p) => (p.edge ? [p.edge] : []))
+      let edges = this.ports.flatMap((p) => [...p.edges])
       for (let [{ axis }] of edges) if (!a.includes(axis)) a.push(axis)
       return a
    }
