@@ -221,6 +221,13 @@
    :global(.select.fill) {
       fill: white;
    }
+   :global(.debug.stroke) {
+      stroke: #cc7a00;
+      fill: none;
+   }
+   :global(.debug.fill) {
+      fill: #cc7a00;
+   }
    .paneTitle {
       font: bold 24px sans-serif;
       margin-bottom: 12px;

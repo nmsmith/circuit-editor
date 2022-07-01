@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderStyle: "default" | "hover" | "select" = "default"
+   export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
    export let position: Point
    const w = 6
    $: [x, y] = [position.x, position.y]
@@ -18,7 +18,8 @@
       stroke-width: 3px;
    }
    .hover,
-   .select {
+   .select,
+   .debug {
       stroke-width: 9px;
    }
 </style>

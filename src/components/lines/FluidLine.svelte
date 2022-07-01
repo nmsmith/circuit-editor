@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Point, LineSegment } from "~/shared/geometry"
-   export let renderStyle: "default" | "hover" | "select" = "default"
+   export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
    export let segment: LineSegment
    $: start = segment.start
    $: end = segment.end
@@ -19,7 +19,8 @@
       stroke-width: 3px;
    }
    .hover,
-   .select {
+   .select,
+   .debug {
       stroke-width: 8px;
    }
 </style>

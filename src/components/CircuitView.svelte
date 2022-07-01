@@ -19,6 +19,7 @@
       SymbolKind,
       SymbolInstance,
       convertToJunction,
+      Edge,
    } from "~/shared/definitions"
    import {
       Object2D,
@@ -112,6 +113,9 @@
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
+   function movableAt(vertex: Vertex): Movable {
+      return vertex instanceof Junction ? vertex : vertex.symbol
+   }
    function* vertices(): Generator<Vertex> {
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
@@ -188,10 +192,11 @@
       const c = -a * sqEaseRadius - b * easeRadius
       return a * distance * distance + b * distance + c
    }
-   type HighlightStyle = "hover" | "select" | undefined
+   type HighlightStyle = "hover" | "select" | "debug" | undefined
    function styleOf(thing: Highlightable | Selectable): HighlightStyle {
       if (selected.has(thing as Selectable)) return "select"
-      if (highlighted.has(thing)) return "hover"
+      else if (highlighted.has(thing)) return "hover"
+      else if (effectivelySelected.includes(thing as Movable)) return "debug"
    }
    function layerOf(point: Point): "lower" | "upper" {
       return point instanceof Port || point === move?.draw?.segment.end
@@ -203,7 +208,7 @@
       drawAxis: Axis
    ): boolean {
       return (
-         junction.edges.size === 1 && junction.axes()[0] === drawAxis && !alt
+         junction.edges().size === 1 && junction.axes()[0] === drawAxis && !alt
       )
    }
    function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
@@ -237,13 +242,307 @@
 
    // ---------------------------- Derived state ------------------------------
    let drawMode: "strafing" | "snapped rotation" | "free rotation"
-   $: {
+   $: /* Determine the current draw mode. */ {
       drawMode = alt
          ? shift
             ? "free rotation"
             : "snapped rotation"
          : "strafing"
       if (move) updateMove() // Treat changes to drawMode as events.
+   }
+   // This function would _ideally_ be encoded as derived state (using $:),
+   // but unfortunately it is needed _sooner_ than Svelte can compute it.
+   function selectedMovables(): Set<Movable> {
+      let s = new Set<Movable>()
+      for (let g of selected) {
+         if (isMovable(g)) {
+            s.add(g)
+         } else {
+            s.add(isMovable(g.start) ? g.start : g.start.symbol)
+            s.add(isMovable(g.end) ? g.end : g.end.symbol)
+         }
+      }
+      return s
+   }
+   type Pass = number
+   type Forces = { push: Pass; strafeClock: Pass; strafeAnti: Pass }
+   let forcesAtMovable: DefaultMap<Movable, DefaultMap<Segment, Forces>>
+   let effectivelySelected: Movable[]
+   let bases: Map<Movable, [Axis, Axis]>
+   $: /* Determine the forces that each Movable may be subjected to. */ {
+      selected // Let Svelte know we're depending on this variable.
+      Segment.s // Let Svelte know we're depending on this variable.
+
+      forcesAtMovable = new DefaultMap(() => {
+         return new DefaultMap(() => {
+            return { push: 0, strafeClock: 0, strafeAnti: 0 }
+         })
+      })
+      effectivelySelected = []
+      let trulySelected = selectedMovables()
+      let allSelected = new Set<Movable>([...trulySelected])
+      // First pass: propagate the movement of the selected movables.
+      trulySelected.forEach((m) => propagateFullForces(m, 1))
+      // Second pass: propagate the movement of effectivelySelected Movables,
+      // and then ATTEMPT to find a suitable vector basis for every non-selected
+      // Movable in the circuit. If we are unable to find a basis for a Movable,
+      // we add it to effectivelySelected and do another iteration of the loop.
+      let i = 0
+      do {
+         for (; i < effectivelySelected.length; ++i)
+            propagateFullForces(effectivelySelected[i], 2)
+         // Attempt to find a basis for every non-selected Movable.
+         bases = new Map()
+         for (let movable of movables()) {
+            if (allSelected.has(movable)) continue
+            let axes = new Set<Axis>() // axes of the incoming forces
+            for (let s of forcesAtMovable.read(movable).keys()) axes.add(s.axis)
+            if (axes.size === 0) continue
+            if (axes.size > 2) {
+               console.error("Impossible: 3 axes of force.")
+               continue
+            } else if (axes.size === 2) {
+               let basis = [...axes] as [Axis, Axis]
+               if (basisIsValid(movable, basis)) {
+                  bases.set(movable, basis)
+               } else {
+                  effectivelySelected.push(movable)
+                  allSelected.add(movable)
+               }
+            } else if (axes.size === 1) {
+               let firstAxis = [...axes][0]
+               // Explore using each other axis as a possible basis.
+               let orthogonalAxis = findAxis(firstAxis.orthogonal())
+               let otherAxes = movable
+                  .axes()
+                  .filter((axis) => axis !== firstAxis)
+               if (otherAxes.length === 0) {
+                  // The Movable has one axis total.
+                  bases.set(movable, [firstAxis, orthogonalAxis])
+               } else {
+                  if (otherAxes.includes(orthogonalAxis)) {
+                     // Prdioritize the orthogonal axis.
+                     otherAxes[otherAxes.indexOf(orthogonalAxis)] = otherAxes[0]
+                     otherAxes[0] = orthogonalAxis
+                  }
+                  let basisFound = false
+                  for (let secondAxis of otherAxes) {
+                     let basis = [firstAxis, secondAxis] as [Axis, Axis]
+                     if (basisIsValid(movable, basis)) {
+                        bases.set(movable, basis)
+                        basisFound = true
+                        break
+                     }
+                  }
+                  if (!basisFound) {
+                     effectivelySelected.push(movable)
+                     allSelected.add(movable)
+                  }
+               }
+            }
+         }
+         // If elements were added to effectivelySelected, keep looping.
+      } while (i < effectivelySelected.length)
+
+      function basisIsValid(movable: Movable, basis: [Axis, Axis]): boolean {
+         // Check if all of the segments _outside_ the proposed basis are
+         // able to be strafed to stay in sync with the basis movements.
+         for (let [firstSegment, first] of movable.edges()) {
+            if (basis.includes(firstSegment.axis)) continue
+            // Traverse all segments sharing the firstSegment's axis.
+            // Because firstSegment is not under the influence of a strafing
+            // force, the other segments cannot be either. Thus, we can strafe
+            // all the segments freely IFF their endpoints all have ≤ 2 axes,
+            // and we don't propagate the strafes to the other axes (as pushes).
+            // In the presence of Symbols, the segments sharing firstSegment's
+            // axis could form a cyclic subgraph. Therefore, we do a depth-first
+            // search, carefully ensuring we never visit the same Movable twice.
+            let toVisit = [movableAt(first)]
+            let found = new Set<Movable>([movable, movableAt(first)])
+            while (toVisit.length > 0) {
+               let m = toVisit.pop() as Movable
+               // If the Movable has more than 2 axes, the basis is invalid.
+               if (m.axes().length > 2) return false
+               // Keep traversing parallel segments.
+               for (let [seg, next] of m.edges()) {
+                  let nextM = movableAt(next)
+                  if (seg.axis === firstSegment.axis && !found.has(nextM)) {
+                     toVisit.push(nextM)
+                     found.add(nextM)
+                  }
+               }
+            }
+         }
+         return true
+      }
+      function propagateFullForces(movable: Movable, pass: Pass) {
+         for (let [segment, next] of movable.edges()) {
+            let nextMovable = movableAt(next)
+            if (allSelected.has(nextMovable)) continue
+            let push = shouldPush(movable, segment, nextMovable) ? pass : 0
+            propagateForces(
+               nextMovable,
+               { push, strafeClock: pass, strafeAnti: pass },
+               segment,
+               pass
+            )
+         }
+      }
+      function shouldPush(
+         movable: Movable,
+         segment: Segment,
+         nextMovable: Movable
+      ) {
+         // Don't transmit a push force if the segment can be inverted
+         // without overlapping other circuit geometry.
+         if (movable instanceof Junction && nextMovable instanceof Junction) {
+            for (let [s] of [...movable.edges(), ...nextMovable.edges()]) {
+               if (s !== segment && s.axis === segment.axis) return true
+            }
+            return false
+         } else return true
+      }
+      function propagateForces(
+         movable: Movable,
+         forces: Forces,
+         origin: Segment,
+         pass: Pass
+      ) {
+         // Register the forces that the Segment applies to the Movable.
+         let existing = forcesAtMovable.read(movable).read(origin)
+         let somethingNew =
+            (forces.push && !existing.push) ||
+            (forces.strafeClock && !existing.strafeClock) ||
+            (forces.strafeAnti && !existing.strafeAnti)
+         if (!somethingNew) return // check for progress (ensuring termination)
+         forcesAtMovable.getOrCreate(movable).set(origin, {
+            push: existing.push || forces.push,
+            strafeClock: existing.strafeClock || forces.strafeClock,
+            strafeAnti: existing.strafeAnti || forces.strafeAnti,
+         })
+         // If the movable now has forces applied to 3 of its axes, treat the
+         // movable as if it were part of the original selection.
+         let axes = new Set<Axis>()
+         for (let s of forcesAtMovable.read(movable).keys()) axes.add(s.axis)
+         if (axes.size >= 3) {
+            //forcesAtMovable.delete(movable) // we don't need this info
+            effectivelySelected.push(movable)
+            allSelected.add(movable)
+            return
+         }
+         let originVector =
+            movableAt(origin.start) === movable
+               ? origin.end.displacementFrom(origin.start)
+               : origin.start.displacementFrom(origin.end)
+         // Propagate the forces along each other edge of the Movable.
+         for (let [segment, nextVertex] of movable.edges()) {
+            let nextMovable = movableAt(nextVertex)
+            if (segment === origin || allSelected.has(nextMovable)) continue
+            let segmentVector =
+               movableAt(segment.start) === movable
+                  ? segment.end.displacementFrom(segment.start)
+                  : segment.start.displacementFrom(segment.end)
+            let side: "same" | "opposite" | "clock" | "anti"
+            if (segment.axis === origin.axis) {
+               let s = segmentVector.normalized()
+               let o = originVector.normalized()
+               side = s && o && s.approxEquals(o, 0.1) ? "same" : "opposite"
+            } else {
+               side =
+                  Math.sign(
+                     segmentVector
+                        .rejectionFrom(originVector)
+                        .relativeTo(originVector).y
+                  ) > 0
+                     ? "clock"
+                     : "anti"
+            }
+            let push =
+               ((side === "opposite" && forces.push) ||
+                  (side === "clock" && forces.strafeClock) ||
+                  (side === "anti" && forces.strafeAnti)) &&
+               shouldPush(movable, segment, nextMovable)
+            let strafeClock =
+               (side === "opposite" && forces.strafeClock) ||
+               (side === "same" && forces.strafeAnti) ||
+               (side === "anti" && forces.push)
+            let strafeAnti =
+               (side === "opposite" && forces.strafeAnti) ||
+               (side === "same" && forces.strafeClock) ||
+               (side === "clock" && forces.push)
+            let next = {
+               // Map Booleans to the pass number.
+               push: push ? pass : 0,
+               strafeClock: strafeClock ? pass : 0,
+               strafeAnti: strafeAnti ? pass : 0,
+            }
+            if (next.push || next.strafeClock || next.strafeAnti)
+               propagateForces(nextMovable, next, segment, pass)
+         }
+      }
+   }
+   let pushPaths: Set<[Pass, string]> // SVG paths showing pushing forces.
+   let strafePaths: Set<[Pass, string]> // SVG paths showing strafing forces.
+   let basisPaths: Set<string> // SVG paths showing basis axes.
+   $: /* Compute SVG paths for the movement debug visualization. */ {
+      pushPaths = new Set()
+      strafePaths = new Set()
+      basisPaths = new Set()
+      // Compute SVG paths for pushing and strafing.
+      for (let [movable, map] of forcesAtMovable) {
+         for (let [segment, forces] of map) {
+            let [near, far] =
+               movableAt(segment.start) === movable
+                  ? [segment.start, segment.end]
+                  : [segment.end, segment.start]
+            let away = far.directionFrom(near)
+            if (!away) continue
+            let w1 = away.rotatedBy(Rotation.fromAngle(0.25 * tau)).scaledBy(7)
+            let w2 = away.rotatedBy(Rotation.fromAngle(0.75 * tau)).scaledBy(7)
+            let path = ""
+            if (forces.push) {
+               let tri1 = near.displacedBy(away.scaledBy(4))
+               let tri2 = near.displacedBy(away.scaledBy(11)).displacedBy(w1)
+               let tri3 = near.displacedBy(away.scaledBy(11)).displacedBy(w2)
+               pushPaths.add([
+                  forces.push,
+                  `M${tri1.x},${tri1.y} L${tri2.x},${tri2.y} L${tri3.x},${tri3.y} Z`,
+               ])
+            }
+            if (forces.strafeClock) {
+               let line1 = near.displacedBy(away.scaledBy(15))
+               let line2 = line1.displacedBy(w1)
+               strafePaths.add([
+                  forces.strafeClock,
+                  `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
+               ])
+            }
+            if (forces.strafeAnti) {
+               let line1 = near.displacedBy(away.scaledBy(15))
+               let line2 = line1.displacedBy(w2)
+               strafePaths.add([
+                  forces.strafeAnti,
+                  `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
+               ])
+            }
+         }
+      }
+      // Compute SVG paths to show which axes were chosen as the basis axes.
+      for (let movable of movables()) {
+         let basis = bases.get(movable)
+         if (!basis) continue
+         for (let [segment] of movable.edges()) {
+            if (!basis.includes(segment.axis)) continue
+            let [near, far] =
+               movableAt(segment.start) === movable
+                  ? [segment.start, segment.end]
+                  : [segment.end, segment.start]
+            let dir = far.directionFrom(near)
+            if (!dir) continue
+            let end = near.displacedBy(dir.scaledBy(9))
+            basisPaths.add(`M${near.x},${near.y} L${end.x},${end.y}`)
+         }
+      }
    }
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
@@ -440,7 +739,7 @@
          if (v.glyph === "plug") {
             glyphsToDraw.add({ type: "plug", vertex: v, style: styleOf(v) })
          } else if (v instanceof Junction) {
-            if (v.edges.size > 2) {
+            if (v.edges().size > 2) {
                glyphsToDraw.add({
                   type: "junction node",
                   junction: v,
@@ -449,7 +748,8 @@
             } else if (
                v.isStraightLine() ||
                highlighted.has(v) ||
-               selected.has(v)
+               selected.has(v) ||
+               effectivelySelected.includes(v)
             ) {
                glyphsToDraw.add({
                   type: "point marker",
@@ -465,20 +765,6 @@
             })
          }
       }
-   }
-   // This function would _ideally_ be encoded as derived state (using $:),
-   // but unfortunately it is needed _sooner_ than Svelte can compute it.
-   function selectedMovables(): Set<Movable> {
-      let s = new Set<Movable>()
-      for (let g of selected) {
-         if (isMovable(g)) {
-            s.add(g)
-         } else {
-            s.add(isMovable(g.start) ? g.start : g.start.symbol)
-            s.add(isMovable(g.end) ? g.end : g.end.symbol)
-         }
-      }
-      return s
    }
 
    // ---------------------------- Primary events -----------------------------
@@ -509,7 +795,8 @@
          thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
       }
       for (let junction of junctionsToConvert) {
-         if (junction.edges.size === 2) junction.convertToCrossing(crossingMap)
+         if (junction.edges().size === 2)
+            junction.convertToCrossing(crossingMap)
       }
       selected = new ToggleSet()
       // Tell Svelte all of these things could have changed.
@@ -726,15 +1013,19 @@
                   beginMove("move", { grabbed: vertex, atPart: vertex })
                } else {
                   let unplugged = false
-                  for (let [segment, other] of vertex.edges) {
+                  for (let [segment, other] of vertex.edges()) {
                      if (segment.axis !== drawAxis) continue
                      if (other.displacementFrom(vertex).dot(dragVector) <= 0)
                         continue
                      // Unplug this segment from the vertex.
                      let junction = new Junction(vertex)
                      segment.replaceWith(new Segment(other, junction, drawAxis))
-                     if (vertex instanceof Junction && vertex.edges.size === 2)
+                     if (
+                        vertex instanceof Junction &&
+                        vertex.edges().size === 2
+                     ) {
                         vertex.convertToCrossing(crossingMap)
+                     }
                      // Allow the user to move the unplugged segment around.
                      selected = new ToggleSet([junction])
                      beginMove("move", { grabbed: junction, atPart: junction })
@@ -805,13 +1096,9 @@
       let selectedMovables_ = selectedMovables()
       // If moving a Junction with only one edge, treat the move as a draw.
       if (!draw && selectedMovables_.size === 1) {
-         let end
-         for (end of selectedMovables_) {
-         }
-         if (end instanceof Junction && end.edges.size === 1) {
-            let existingSegment, start
-            for ([existingSegment, start] of end.edges) {
-            }
+         let end = [...selectedMovables_][0]
+         if (end instanceof Junction && end.edges().size === 1) {
+            let [existingSegment, start] = [...end.edges()][0]
             existingSegment = existingSegment as Segment
             start = start as Vertex
             // The existing segment may be "backwards". We need to replace
@@ -871,7 +1158,7 @@
                Axis.fromVector(vertex.displacementFrom(start))
             )
             if (!drawAxis) return false
-            for (let [{ axis }, other] of vertex.edges) {
+            for (let [{ axis }, other] of vertex.edges()) {
                // Reject if the segment being drawn would overlap this seg.
                if (
                   axis === drawAxis &&
@@ -962,7 +1249,7 @@
             if (movements.read(movableAt(vertex)).type !== "no move")
                return false
             let start = draw!.segment.start
-            for (let [{ axis }, other] of vertex.edges) {
+            for (let [{ axis }, other] of vertex.edges()) {
                // Reject if the segment being drawn would overlap this seg.
                if (
                   axis === draw!.segment.axis &&
@@ -1010,9 +1297,6 @@
          }
       }
 
-      function movableAt(vertex: Vertex): Movable {
-         return vertex instanceof Junction ? vertex : vertex.symbol
-      }
       function moveOne(m: Movable, vector: Vector) {
          movements.set(m, { type: "full move", vector })
          m.moveTo(move!.originalPositions.read(m).displacedBy(vector))
@@ -1091,16 +1375,12 @@
             current.type = "full move"
             current.vector = moveVector
          }
-         let nextEdges =
-            currentMovable instanceof Junction
-               ? currentMovable.edges
-               : currentMovable.ports.flatMap((p) => [...p.edges])
-         for (let [nextSegment, nextVertex] of nextEdges) {
+         for (let [nextSegment, nextVertex] of currentMovable.edges()) {
             let nextAxis = nextSegment.axis
             let nextMovable = movableAt(nextVertex)
             let next = movements.getOrCreate(nextMovable)
             let loneEdge =
-               nextMovable instanceof Junction && nextMovable.edges.size === 1
+               nextMovable instanceof Junction && nextMovable.edges().size === 1
             if (loneEdge && next.type !== "full move") {
                movements.set(nextMovable, current)
             } else if (
@@ -1290,7 +1570,7 @@
          let segment = move.draw.segment
          let endObject = move.draw.endObject
          function isAcceptableTEMP() {
-            for (let [s, other] of segment.start.edges) {
+            for (let [s, other] of segment.start.edges()) {
                if (
                   s !== segment &&
                   s.axis === segment.axis &&
@@ -1344,7 +1624,7 @@
       // Select enclosed Junctions iff no adjacent Segment is selected.
       next: for (let junction of Junction.s) {
          if (range.contains(junction)) {
-            for (let [segment] of junction.edges)
+            for (let [segment] of junction.edges())
                if (rectSelect.has(segment)) continue next
             rectSelect.add(junction)
          }
@@ -1413,12 +1693,10 @@
    <g>
       {#each [...SymbolInstance.s] as symbol}
          {@const c = symbol.svgCorners()}
-         {#if highlighted.has(symbol) || selected.has(symbol)}
+         {#if styleOf(symbol)}
             <polygon
                style="stroke-width: 8px"
-               class="symbolHighlight fill stroke {selected.has(symbol)
-                  ? 'select'
-                  : 'hover'}"
+               class="symbolHighlight fill stroke {styleOf(symbol)}"
                points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
                   .y} {c[3].x},{c[3].y}"
             />
@@ -1513,6 +1791,20 @@
       {#if rectSelect && mouse.state !== "up"}
          <RectSelectBox start={mouse.downPosition} end={mouse.position} />
       {/if}
+      {#each [...pushPaths] as [pass, path]}
+         <path style="fill:{pass === 1 ? 'purple' : '#cc7a00'}" d={path} />
+      {/each}
+      {#each [...strafePaths] as [pass, path]}
+         <path
+            style="stroke-width: 3px; stroke:{pass === 1
+               ? 'purple'
+               : '#cc7a00'}"
+            d={path}
+         />
+      {/each}
+      {#each [...basisPaths] as path}
+         <path style="stroke-width: 1px; stroke: white" d={path} />
+      {/each}
    </g>
 </svg>
 

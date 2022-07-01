@@ -1,6 +1,6 @@
 <script lang="ts">
    import { Point, Direction } from "~/shared/geometry"
-   export let renderStyle: "default" | "hover" | "select" = "default"
+   export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
    export let start: Point
    export let end: Point
    export let flip: boolean = false
@@ -29,7 +29,8 @@
       stroke-width: 3px;
    }
    .hover,
-   .select {
+   .select,
+   .debug {
       stroke-width: 8px;
    }
 </style>

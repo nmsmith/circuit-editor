@@ -43,22 +43,12 @@ export interface Deletable {
    delete(): Set<Junction> // Returns all Junctions adjacent to the deleted obj.
 }
 
-export interface Moveable {
-   moveTo(point: Point): void
-   moveBy(displacement: Vector): void
-}
-
 export type Edge = [Segment, Vertex]
-interface HasEdges {
-   addEdge(edge: Edge): void
-   removeEdge(edge: Edge): void
-   axes(): Axis[]
-}
 
-export class Junction extends Point implements Deletable, Moveable, HasEdges {
+export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
    glyph: VertexGlyph
-   readonly edges = new Set<Edge>()
+   private readonly edges_ = new Set<Edge>()
    constructor(point: Point) {
       super(point.x, point.y)
       this.glyph = "default"
@@ -67,11 +57,11 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    delete(): Set<Junction> {
       Junction.s.delete(this)
       let neighbours = new Set<Junction>()
-      for (let [segment, other] of this.edges) {
+      for (let [segment, other] of this.edges_) {
          segment.delete()
          if (other instanceof Junction) neighbours.add(other)
       }
-      this.edges.clear()
+      this.edges_.clear()
       return neighbours
    }
    moveTo(point: Point) {
@@ -81,20 +71,23 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    moveBy(displacement: Vector) {
       this.moveTo(this.displacedBy(displacement))
    }
-   addEdge(edge: Edge) {
-      this.edges.add(edge)
-   }
-   removeEdge(edge: Edge) {
-      this.edges.delete(edge)
-      if (this.edges.size === 0) this.delete()
+   edges(): Set<Edge> {
+      return this.edges_
    }
    axes(): Axis[] {
       let a: Axis[] = []
-      for (let [{ axis }] of this.edges) if (!a.includes(axis)) a.push(axis)
+      for (let [{ axis }] of this.edges_) if (!a.includes(axis)) a.push(axis)
       return a
    }
+   addEdge(edge: Edge) {
+      this.edges_.add(edge)
+   }
+   removeEdge(edge: Edge) {
+      this.edges_.delete(edge)
+      if (this.edges_.size === 0) this.delete()
+   }
    isStraightLine() {
-      return this.edges.size === 2 && this.axes().length === 1
+      return this.edges_.size === 2 && this.axes().length === 1
    }
    // If the junction is an X-junction or a straight line, convert it to a
    // crossing. Thereafter, all references to the junction should be discarded.
@@ -102,10 +95,10 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
       currentCrossings: DefaultMap<Segment, Map<Segment, Point>>,
       crossingType?: CrossingType
    ) {
-      if (this.edges.size !== 2 && this.edges.size !== 4) return
+      if (this.edges_.size !== 2 && this.edges_.size !== 4) return
       // Gather all pairs of colinear edges.
       let ax = new DefaultMap<Axis, Segment[]>(() => [])
-      for (let edge of this.edges) ax.getOrCreate(edge[0].axis).push(edge[0])
+      for (let edge of this.edges_) ax.getOrCreate(edge[0].axis).push(edge[0])
       let pairs = new Set<[Segment, Segment]>()
       for (let pair of ax.values()) {
          if (pair.length !== 2) return
@@ -140,27 +133,30 @@ export class Junction extends Point implements Deletable, Moveable, HasEdges {
    }
 }
 
-export class Port extends Point implements HasEdges {
+export class Port extends Point {
    static s = new Set<Port>()
    readonly symbol: SymbolInstance
    glyph: VertexGlyph
-   readonly edges = new Set<Edge>()
+   private readonly edges_ = new Set<Edge>()
    constructor(symbol: SymbolInstance, point: Point) {
       super(point.x, point.y)
       this.symbol = symbol
       this.glyph = "default"
       Port.s.add(this)
    }
-   addEdge(edge: Edge) {
-      this.edges.add(edge)
-   }
-   removeEdge(edge: Edge) {
-      this.edges.delete(edge)
+   edges(): Set<Edge> {
+      return this.edges_
    }
    axes(): Axis[] {
       let a: Axis[] = []
-      for (let [{ axis }] of this.edges) if (!a.includes(axis)) a.push(axis)
+      for (let [{ axis }] of this.edges_) if (!a.includes(axis)) a.push(axis)
       return a
+   }
+   addEdge(edge: Edge) {
+      this.edges_.add(edge)
+   }
+   removeEdge(edge: Edge) {
+      this.edges_.delete(edge)
    }
 }
 
@@ -230,7 +226,7 @@ export type SymbolKind = {
    readonly portLocations: Point[]
 }
 
-export class SymbolInstance extends Rectangle implements Deletable, Moveable {
+export class SymbolInstance extends Rectangle implements Deletable {
    static s = new Set<SymbolInstance>()
    private static nextUUID = 0
    readonly kind: SymbolKind
@@ -273,21 +269,23 @@ export class SymbolInstance extends Rectangle implements Deletable, Moveable {
       this.svg.remove()
       for (let port of this.ports) {
          Port.s.delete(port)
-         if (port.edges.size > 0) {
+         if (port.edges().size > 0) {
             // Convert the Port to a Junction, and replace the Port's segments.
             let junction = new Junction(port)
-            for (let [oldSegment, v] of port.edges) {
+            for (let [oldSegment, v] of port.edges()) {
                oldSegment.replaceWith(new Segment(junction, v, oldSegment.axis))
             }
-            port.edges.clear()
+            port.edges().clear()
          }
       }
       return new Set()
    }
+   edges(): Set<Edge> {
+      return new Set(this.ports.flatMap((p) => [...p.edges()]))
+   }
    axes(): Axis[] {
       let a: Axis[] = []
-      let edges = this.ports.flatMap((p) => [...p.edges])
-      for (let [{ axis }] of edges) if (!a.includes(axis)) a.push(axis)
+      for (let [{ axis }] of this.edges()) if (!a.includes(axis)) a.push(axis)
       return a
    }
    moveTo(point: Point) {

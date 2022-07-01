@@ -68,13 +68,13 @@ export class Vector {
       )
    }
    // Express the Vector in terms of the coordinate system implied by the
-   // given Axis. (`axis` is the x-direction, and `axis.orthogonal()` is y.)
-   relativeTo(axis: Axis): Vector {
+   // given Vector, treated as an X-axis.
+   relativeTo(axis: Vector): Vector {
       let [cos, sin] = [axis.x, axis.y]
       let [x, y] = [this.x, this.y]
       return new Vector(cos * x + sin * y, -sin * x + cos * y)
    }
-   undoRelativeTo(axis: Axis): Vector {
+   undoRelativeTo(axis: Vector): Vector {
       let [cos, sin] = [axis.x, axis.y]
       let [x, y] = [this.x, this.y]
       return new Vector(cos * x - sin * y, sin * x + cos * y)
@@ -115,13 +115,13 @@ export class Point extends Object2D {
       return new Point(this.x, this.y)
    }
    // A copy of Vector.relativeTo().
-   relativeTo(axis: Axis): Point {
+   relativeTo(axis: Vector): Point {
       let [cos, sin] = [axis.x, axis.y]
       let [x, y] = [this.x, this.y]
       return new Point(cos * x + sin * y, -sin * x + cos * y)
    }
    // A copy of Vector.undoRelativeTo().
-   undoRelativeTo(axis: Axis): Point {
+   undoRelativeTo(axis: Vector): Point {
       let [cos, sin] = [axis.x, axis.y]
       let [x, y] = [this.x, this.y]
       return new Point(cos * x - sin * y, sin * x + cos * y)
@@ -323,13 +323,6 @@ export class LineSegment<P extends Point = Point> extends Object2D {
          .displacementFrom(this.start)
          .dot(this.end.displacementFrom(this.start))
       return dot >= 0 && dot <= this.sqLength()
-   }
-   // Returns the point that is the given fraction of the way along the
-   // segment, where 0 is segment.start and 1 is segment.end.
-   pointAt(frac: number): Point {
-      return this.start.displacedBy(
-         this.end.displacementFrom(this.start).scaledBy(frac)
-      )
    }
 }
 
