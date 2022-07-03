@@ -21,9 +21,6 @@ export class Vector {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
-   isZero(): boolean {
-      return this.x === 0 && this.y === 0
-   }
    scaledBy(factor: number): Vector {
       return new Vector(factor * this.x, factor * this.y)
    }

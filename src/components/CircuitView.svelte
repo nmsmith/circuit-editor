@@ -1301,7 +1301,8 @@
          // Try snapping the moved endpoint to another endpoint nearby.
          function isAcceptableTEMP(vertex: Vertex) {
             let vMove = movements.read(movableAt(vertex))
-            if (!(vMove[0].isZero() && vMove[1].isZero())) return false
+            if (!vMove[0].add(vMove[1]).approxEquals(zeroVector, 0.001))
+               return false
             let start = draw!.segment.start
             for (let [{ axis }, other] of vertex.edges()) {
                // Reject if the segment being drawn would overlap this seg.
@@ -1363,38 +1364,45 @@
          // computed relative to its position before the move operation began.
          for (let m of movables()) m.moveTo(move!.originalPositions.read(m))
          movements.clear()
-         // Try a normal move.
-         for (let movable of allSelectedMovables) {
-            setMovement(movable, movement)
-            for (let [segment, nextVertex] of movable.edges()) {
-               let next = movableAt(nextVertex)
-               if (allSelectedMovables.has(next)) continue
-               propagateMovement(next, { movable, segment, movement })
-            }
-         }
          if (draw) {
-            // If we weren't able to alter the length of the segment being
-            // drawn, break the movement into components parallel and orthogonal
-            // to the draw axis, and apply the parallel component exclusively
-            // to draw.segment.end.
-            let startMove = movements.read(movableAt(draw.segment.start))
-            if (startMove[0].add(startMove[1]).approxEquals(movement, 0.1)) {
-               movements.clear()
-               let drawStart = movableAt(draw.segment.start)
-               let drawEnd = draw!.segment.end as Junction
-               setMovement(drawEnd, movement)
-               let orthMovement = movement.rejectionFrom(draw!.segment.axis)
-               for (let movable of [drawStart, ...autoSelectedMovables]) {
-                  setMovement(movable, orthMovement)
-                  for (let [segment, nextVertex] of movable.edges()) {
-                     let next = movableAt(nextVertex)
-                     if (allSelectedMovables.has(next)) continue
-                     propagateMovement(next, {
-                        movable,
-                        segment,
-                        movement: orthMovement,
-                     })
-                  }
+            // Under the normal movement rules, occasionally the segment being
+            // drawn is not able to have its length changed. Thus when drawing,
+            // we "mask out" the lengthwise part of the movement.
+            setMovement(draw.segment.end as Junction, movement)
+            let drawStart = movableAt(draw.segment.start)
+            let remainingMovement: Vector
+            let movablesToMove: Movable[]
+            if (autoSelectedMovables.includes(drawStart)) {
+               // draw.segment.start doesn't have a basis. Therefore, we break
+               // the movement into parallel and orthogonal components.
+               remainingMovement = movement.rejectionFrom(draw.segment.axis)
+               movablesToMove = [...autoSelectedMovables]
+            } else {
+               let basis = basisAxes.read(drawStart)
+               let otherAxis = basis[0] === draw.segment.axis ? 1 : 0
+               remainingMovement = movement.inTermsOfBasis(basis)[otherAxis]
+               movablesToMove = [drawStart, ...autoSelectedMovables]
+            }
+            for (let movable of movablesToMove) {
+               setMovement(movable, remainingMovement)
+               for (let [segment, nextVertex] of movable.edges()) {
+                  let next = movableAt(nextVertex)
+                  if (allSelectedMovables.has(next)) continue
+                  propagateMovement(next, {
+                     movable,
+                     segment,
+                     movement: remainingMovement,
+                  })
+               }
+            }
+         } else {
+            // Do a normal move.
+            for (let movable of allSelectedMovables) {
+               setMovement(movable, movement)
+               for (let [segment, nextVertex] of movable.edges()) {
+                  let next = movableAt(nextVertex)
+                  if (allSelectedMovables.has(next)) continue
+                  propagateMovement(next, { movable, segment, movement })
                }
             }
          }
