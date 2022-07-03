@@ -21,12 +21,14 @@ export class Vector {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
+   isZero(): boolean {
+      return this.x === 0 && this.y === 0
+   }
    scaledBy(factor: number): Vector {
       return new Vector(factor * this.x, factor * this.y)
    }
-   normalized(): Vector | undefined {
-      let length = this.length()
-      if (length > 0) return this.scaledBy(1 / length)
+   direction(): Direction | undefined {
+      return Direction.fromVector(this)
    }
    add(v: Vector): Vector {
       return new Vector(this.x + v.x, this.y + v.y)
@@ -59,13 +61,27 @@ export class Vector {
          ? this.length()
          : (this.y * v.x - this.x * v.y) / vLength
    }
-   approxEquals(other: this, absoluteError: number): boolean {
+   approxEquals(other: any, absoluteError: number): boolean {
+      if (!(other instanceof Vector)) return false
       return (
          other.x - absoluteError <= this.x &&
          other.x + absoluteError >= this.x &&
          other.y - absoluteError <= this.y &&
          other.y + absoluteError >= this.y
       )
+   }
+   // Express the Vector as a linear combination of the given basis vectors.
+   inTermsOfBasis(basis: [Vector, Vector]): [Vector, Vector] {
+      return [
+         basis[0].scaledBy(
+            (basis[1].x * this.y - basis[1].y * this.x) /
+               (basis[1].x * basis[0].y - basis[1].y * basis[0].x)
+         ),
+         basis[1].scaledBy(
+            (basis[0].x * this.y - basis[0].y * this.x) /
+               (basis[0].x * basis[1].y - basis[0].y * basis[1].x)
+         ),
+      ]
    }
    // Express the Vector in terms of the coordinate system implied by the
    // given Vector, treated as an X-axis.
@@ -168,8 +184,8 @@ export class Direction extends Vector {
       super(x, y)
    }
    static fromVector(vec: Vector): Direction | undefined {
-      let v = vec.normalized()
-      if (v) return new Direction(v.x, v.y)
+      let length = vec.length()
+      if (length > 0) return new Direction(vec.x / length, vec.y / length)
    }
    protected rotationFromPositiveX(): Rotation {
       // subvert constructor privacy
@@ -181,6 +197,9 @@ export class Direction extends Vector {
    rotatedBy(rotation: Rotation): Direction {
       let r = this.rotationFromPositiveX().add(rotation)
       return new Direction(r.x, r.y)
+   }
+   reversed(): Direction {
+      return new Direction(-this.x, -this.y)
    }
 }
 
