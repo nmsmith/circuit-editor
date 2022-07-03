@@ -229,7 +229,7 @@
       axisGrabbed: Axis
       partGrabbed: Point
       distance: number
-      originalPositions: DefaultMap<Movable, Point>
+      originalPositions: DefaultMap<Movable | Vertex, Point>
       draw?: {
          segment: Segment
          segmentIsNew: boolean
@@ -346,20 +346,31 @@
       // is strafable in such a way that it becomes longer. (Lengthening edges
       // interfere with the pushing calculations, because after lengthening,
       // an edge may need to transmit _less_ of a push.)
-      for (let movable of movables()) {
-         let f = forcesAtMovable.read(movable)
-         for (let [segment, other] of movable.edges()) {
-            if (!f.read(segment).push) continue
+      for (let movableA of movables()) {
+         if (allSelectedMovables.has(movableA)) continue
+         for (let [segment, b] of movableA.edges()) {
+            let movableB = movableAt(b)
+            if (allSelectedMovables.has(movableB)) continue
+            let forcesA = forcesAtMovable.read(movableA).getOrCreate(segment)
+            let forcesB = forcesAtMovable.read(movableB).getOrCreate(segment)
+            if (!forcesA.push && !forcesB.push) continue
             // Currently I'm disabling pushing if the edge can strafe in _any_
             // direction. But technically, I only need to consider strafing
             // that makes the edge longer.
-            if (!f.read(segment).strafeClock && !f.read(segment).strafeAnti)
-               continue
-            let basis = basisAxes.read(movable)
-            let otherBasis = basisAxes.read(movableAt(other))
-            // If the bases differ, then the edge changes length when strafing.
-            if (!basis.every((axis) => otherBasis.includes(axis)))
-               f.getOrCreate(segment).push = 0
+            if (
+               forcesA.strafeClock ||
+               forcesA.strafeAnti ||
+               forcesB.strafeClock ||
+               forcesB.strafeAnti
+            ) {
+               let basisA = basisAxes.read(movableA)
+               let basisB = basisAxes.read(movableB)
+               // If the bases differ, the edge changes length when strafing.
+               if (!basisA.every((axis) => basisB.includes(axis))) {
+                  forcesA.push = 0
+                  forcesB.push = 0
+               }
+            }
          }
       }
 
@@ -449,24 +460,41 @@
             allSelectedMovables.add(movable)
             return
          }
-         let sourceVector =
-            movableAt(source.start) === movable
-               ? source.end.displacementFrom(source.start)
-               : source.start.displacementFrom(source.end)
+         function vectorOf(s: Segment): Vector {
+            if (move) {
+               // The direction that the segment is "emerging" from the Movable
+               // must be determined by its pre-movement position, not its
+               // dynamic position. Otherwise, if the segment happens to invert
+               // during movement, the force computations will radically change.
+               return movableAt(s.start) === movable
+                  ? move.originalPositions
+                       .read(s.end)
+                       .displacementFrom(move.originalPositions.read(s.start))
+                  : move.originalPositions
+                       .read(s.start)
+                       .displacementFrom(move.originalPositions.read(s.end))
+            } else {
+               return movableAt(s.start) === movable
+                  ? s.end.displacementFrom(s.start)
+                  : s.start.displacementFrom(s.end)
+            }
+         }
+         let sourceVector = vectorOf(source)
          // Propagate the forces along each other edge of the Movable.
          for (let [segment, nextVertex] of movable.edges()) {
             let nextMovable = movableAt(nextVertex)
             if (segment === source || allSelectedMovables.has(nextMovable))
                continue
-            let segmentVector =
-               movableAt(segment.start) === movable
-                  ? segment.end.displacementFrom(segment.start)
-                  : segment.start.displacementFrom(segment.end)
+            let segmentVector = vectorOf(segment)
             let side: "same" | "opposite" | "clock" | "anti"
             if (segment.axis === source.axis) {
-               let s = segmentVector.direction()
-               let o = sourceVector.direction()
-               side = s?.approxEquals(o, 0.1) ? "same" : "opposite"
+               if (movable instanceof Junction) {
+                  side = "opposite"
+               } else {
+                  let s = segmentVector.direction()
+                  let o = sourceVector.direction()
+                  side = s?.approxEquals(o, 0.1) ? "same" : "opposite"
+               }
             } else {
                side =
                   Math.sign(
@@ -850,11 +878,11 @@
       if (move?.draw) {
          // Reset the reference information for the movement.
          move.partGrabbed = move.draw.segment.end.clone()
-         for (let movable of move.originalPositions.keys()) {
-            if (movable instanceof Junction) {
-               move.originalPositions.set(movable, movable.clone())
+         for (let thing of move.originalPositions.keys()) {
+            if (thing instanceof Junction || thing instanceof Port) {
+               move.originalPositions.set(thing, thing.clone())
             } else {
-               move.originalPositions.set(movable, movable.position.clone())
+               move.originalPositions.set(thing, thing.position.clone())
             }
          }
       }
@@ -1115,12 +1143,16 @@
       // Before movement commences, record the position of every Movable.
       // We need to use the original positions as a reference, because we will
       // be mutating them over the course of the movement.
-      let originalPositions = new DefaultMap<Movable, Point>(() => Point.zero)
+      let originalPositions = new DefaultMap<Movable | Vertex, Point>(
+         () => Point.zero
+      )
       for (let junction of Junction.s) {
          originalPositions.set(junction, junction.clone())
       }
       for (let symbol of SymbolInstance.s) {
          originalPositions.set(symbol, symbol.position.clone())
+         for (let port of symbol.ports)
+            originalPositions.set(port, port.clone())
       }
       // If moving a Junction with only one edge, treat the move as a draw.
       if (!draw && selected.size === 1) {
@@ -1330,53 +1362,39 @@
          // Reset the position of each Movable. The movement of each Movable is
          // computed relative to its position before the move operation began.
          for (let m of movables()) m.moveTo(move!.originalPositions.read(m))
-         // Compute the movement of every Movable in the circuit.
          movements.clear()
-         if (draw) {
-            function specialMove() {
-               return
-               let j = draw!.segment.end as Junction
-               setMovement(j, movement)
-               let remainingMove = movement.rejectionFrom(draw!.segment.axis)
-               let movable = movableAt(draw!.segment.start)
-               for (let [segment, nextVertex] of movable.edges()) {
-                  let next = movableAt(nextVertex)
-                  if (allSelectedMovables.has(next)) continue
-                  propagateMovement(next, {
-                     movable,
-                     segment,
-                     movement: remainingMove,
-                  })
-               }
+         // Try a normal move.
+         for (let movable of allSelectedMovables) {
+            setMovement(movable, movement)
+            for (let [segment, nextVertex] of movable.edges()) {
+               let next = movableAt(nextVertex)
+               if (allSelectedMovables.has(next)) continue
+               propagateMovement(next, { movable, segment, movement })
             }
-            if (false /*drawingSpecialCase*/) {
-               specialMove()
-            } else {
-               // Try a normal move.
-               for (let movable of allSelectedMovables) {
-                  setMovement(movable, movement)
+         }
+         if (draw) {
+            // If we weren't able to alter the length of the segment being
+            // drawn, break the movement into components parallel and orthogonal
+            // to the draw axis, and apply the parallel component exclusively
+            // to draw.segment.end.
+            let startMove = movements.read(movableAt(draw.segment.start))
+            if (startMove[0].add(startMove[1]).approxEquals(movement, 0.1)) {
+               movements.clear()
+               let drawStart = movableAt(draw.segment.start)
+               let drawEnd = draw!.segment.end as Junction
+               setMovement(drawEnd, movement)
+               let orthMovement = movement.rejectionFrom(draw!.segment.axis)
+               for (let movable of [drawStart, ...autoSelectedMovables]) {
+                  setMovement(movable, orthMovement)
                   for (let [segment, nextVertex] of movable.edges()) {
                      let next = movableAt(nextVertex)
                      if (allSelectedMovables.has(next)) continue
-                     propagateMovement(next, { movable, segment, movement })
+                     propagateMovement(next, {
+                        movable,
+                        segment,
+                        movement: orthMovement,
+                     })
                   }
-               }
-               // If we weren't able to alter the length of the segment being
-               // drawn, resort to a special move. TODO: Remove all this?
-               // let startMove = movements.read(movableAt(draw.segment.start))
-               // if (startMove[0].add(startMove[1]).approxEquals(movement, 0.1)) {
-               //    movements.clear()
-               //    specialMove()
-               // }
-            }
-         } else {
-            // Do a normal move.
-            for (let movable of allSelectedMovables) {
-               setMovement(movable, movement)
-               for (let [segment, nextVertex] of movable.edges()) {
-                  let next = movableAt(nextVertex)
-                  if (allSelectedMovables.has(next)) continue
-                  propagateMovement(next, { movable, segment, movement })
                }
             }
          }
