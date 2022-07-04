@@ -6,6 +6,7 @@ This app is an editor for electrical circuits and hydraulic circuits.
 
 -  D: switch to the "draw" tool
 -  S: switch to the "select & move" tool
+-  Backquote: toggle debug visualization
 
 ### Controls when using the "draw" tool:
 

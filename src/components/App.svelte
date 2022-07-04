@@ -9,6 +9,7 @@
    // State passed to CircuitView
    let tool: Tool = "draw"
    let [shift, alt, cmd] = [false, false, false]
+   let debug: boolean = false
    function onSymbolLeave() {}
 
    // Callbacks obtained from circuitView
@@ -100,10 +101,12 @@
             onNextLineType()
             break
          case "Backspace":
-         case "Delete": {
+         case "Delete":
             onDelete()
             break
-         }
+         case "Backquote":
+            debug = !debug
+            break
       }
    }}
    on:keyup={updateModifierKeys}
@@ -129,6 +132,7 @@
       {shift}
       {alt}
       {cmd}
+      {debug}
       {onSymbolLeave}
       bind:onToolSelected
       bind:onNextLineType
@@ -222,11 +226,11 @@
       fill: white;
    }
    :global(.debug.stroke) {
-      stroke: #cc7a00;
+      stroke: #e58a00;
       fill: none;
    }
    :global(.debug.fill) {
-      fill: #cc7a00;
+      fill: #e58a00;
    }
    .paneTitle {
       font: bold 24px sans-serif;

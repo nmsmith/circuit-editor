@@ -51,6 +51,7 @@
    export let shift: boolean
    export let alt: boolean
    export let cmd: boolean
+   export let debug: boolean
    export let onSymbolLeave: (
       kind: SymbolKind,
       grabOffset: Vector,
@@ -361,7 +362,8 @@
                forcesA.strafeClock ||
                forcesA.strafeAnti ||
                forcesB.strafeClock ||
-               forcesB.strafeAnti
+               forcesB.strafeAnti ||
+               (forcesA.push && forcesB.push) // this case causes trouble too
             ) {
                let basisA = basisAxes.read(movableA)
                let basisB = basisAxes.read(movableB)
@@ -536,59 +538,65 @@
       pushPaths = new Set()
       strafePaths = new Set()
       basisPaths = new Set()
-      // Compute SVG paths for pushing and strafing.
-      for (let [movable, map] of forcesAtMovable) {
-         for (let [segment, forces] of map) {
-            let [near, far] =
-               movableAt(segment.start) === movable
-                  ? [segment.start, segment.end]
-                  : [segment.end, segment.start]
-            let away = far.directionFrom(near)
-            if (!away) continue
-            let w1 = away.rotatedBy(Rotation.fromAngle(0.25 * tau)).scaledBy(7)
-            let w2 = away.rotatedBy(Rotation.fromAngle(0.75 * tau)).scaledBy(7)
-            let path = ""
-            if (forces.push) {
-               let tri1 = near.displacedBy(away.scaledBy(4))
-               let tri2 = near.displacedBy(away.scaledBy(11)).displacedBy(w1)
-               let tri3 = near.displacedBy(away.scaledBy(11)).displacedBy(w2)
-               pushPaths.add([
-                  forces.push,
-                  `M${tri1.x},${tri1.y} L${tri2.x},${tri2.y} L${tri3.x},${tri3.y} Z`,
-               ])
-            }
-            if (forces.strafeClock) {
-               let line1 = near.displacedBy(away.scaledBy(15))
-               let line2 = line1.displacedBy(w1)
-               strafePaths.add([
-                  forces.strafeClock,
-                  `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
-               ])
-            }
-            if (forces.strafeAnti) {
-               let line1 = near.displacedBy(away.scaledBy(15))
-               let line2 = line1.displacedBy(w2)
-               strafePaths.add([
-                  forces.strafeAnti,
-                  `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
-               ])
+      if (debug) {
+         // Compute SVG paths for pushing and strafing.
+         for (let [movable, map] of forcesAtMovable) {
+            for (let [segment, forces] of map) {
+               let [near, far] =
+                  movableAt(segment.start) === movable
+                     ? [segment.start, segment.end]
+                     : [segment.end, segment.start]
+               let away = far.directionFrom(near)
+               if (!away) continue
+               let w1 = away
+                  .rotatedBy(Rotation.fromAngle(0.25 * tau))
+                  .scaledBy(7)
+               let w2 = away
+                  .rotatedBy(Rotation.fromAngle(0.75 * tau))
+                  .scaledBy(7)
+               let path = ""
+               if (forces.push) {
+                  let tri1 = near.displacedBy(away.scaledBy(4))
+                  let tri2 = near.displacedBy(away.scaledBy(11)).displacedBy(w1)
+                  let tri3 = near.displacedBy(away.scaledBy(11)).displacedBy(w2)
+                  pushPaths.add([
+                     forces.push,
+                     `M${tri1.x},${tri1.y} L${tri2.x},${tri2.y} L${tri3.x},${tri3.y} Z`,
+                  ])
+               }
+               if (forces.strafeClock) {
+                  let line1 = near.displacedBy(away.scaledBy(15))
+                  let line2 = line1.displacedBy(w1)
+                  strafePaths.add([
+                     forces.strafeClock,
+                     `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
+                  ])
+               }
+               if (forces.strafeAnti) {
+                  let line1 = near.displacedBy(away.scaledBy(15))
+                  let line2 = line1.displacedBy(w2)
+                  strafePaths.add([
+                     forces.strafeAnti,
+                     `M${line1.x},${line1.y} L${line2.x},${line2.y}`,
+                  ])
+               }
             }
          }
-      }
-      // Compute SVG paths to show which axes were chosen as the basis axes.
-      for (let movable of movables()) {
-         let basis = basisAxes.get(movable)
-         if (!basis) continue
-         for (let [segment] of movable.edges()) {
-            if (!basis.includes(segment.axis)) continue
-            let [near, far] =
-               movableAt(segment.start) === movable
-                  ? [segment.start, segment.end]
-                  : [segment.end, segment.start]
-            let dir = far.directionFrom(near)
-            if (!dir) continue
-            let end = near.displacedBy(dir.scaledBy(9))
-            basisPaths.add(`M${near.x},${near.y} L${end.x},${end.y}`)
+         // Compute SVG paths to show which axes were chosen as the basis axes.
+         for (let movable of movables()) {
+            let basis = basisAxes.get(movable)
+            if (!basis) continue
+            for (let [segment] of movable.edges()) {
+               if (!basis.includes(segment.axis)) continue
+               let [near, far] =
+                  movableAt(segment.start) === movable
+                     ? [segment.start, segment.end]
+                     : [segment.end, segment.start]
+               let dir = far.directionFrom(near)
+               if (!dir) continue
+               let end = near.displacedBy(dir.scaledBy(9))
+               basisPaths.add(`M${near.x},${near.y} L${end.x},${end.y}`)
+            }
          }
       }
    }
@@ -1368,22 +1376,27 @@
             // Under the normal movement rules, occasionally the segment being
             // drawn is not able to have its length changed. Thus when drawing,
             // we "mask out" the lengthwise part of the movement.
-            setMovement(draw.segment.end as Junction, movement)
             let drawStart = movableAt(draw.segment.start)
+            let drawEnd = draw.segment.end as Junction
+            setMovement(drawEnd, movement)
             let remainingMovement: Vector
-            let movablesToMove: Movable[]
             if (autoSelectedMovables.includes(drawStart)) {
                // draw.segment.start doesn't have a basis. Therefore, we break
                // the movement into parallel and orthogonal components.
                remainingMovement = movement.rejectionFrom(draw.segment.axis)
-               movablesToMove = [...autoSelectedMovables]
             } else {
                let basis = basisAxes.read(drawStart)
                let otherAxis = basis[0] === draw.segment.axis ? 1 : 0
                remainingMovement = movement.inTermsOfBasis(basis)[otherAxis]
-               movablesToMove = [drawStart, ...autoSelectedMovables]
+               // Propagate the remaining movement to drawStart.
+               propagateMovement(drawStart, {
+                  movable: drawEnd,
+                  segment: draw.segment,
+                  movement: remainingMovement,
+               })
             }
-            for (let movable of movablesToMove) {
+            // Move each auto-selected Movable by the remaining movement.
+            for (let movable of autoSelectedMovables) {
                setMovement(movable, remainingMovement)
                for (let [segment, nextVertex] of movable.edges()) {
                   let next = movableAt(nextVertex)
