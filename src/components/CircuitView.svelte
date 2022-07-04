@@ -908,8 +908,7 @@
          // Immediately treat the operation as a drag.
          mouse = { ...mouse, state: "dragging", downPosition: mouse.position }
          if (cmd) {
-            selected.clear()
-            for (let s of gapHighlighted) selected.add(s)
+            selected = new ToggleSet(gapHighlighted)
          } else if (!selected.has(grab.object)) {
             selected = new ToggleSet([grab.object])
          }
@@ -1218,7 +1217,7 @@
       } else if (draw && drawMode === "free rotation") {
          // To accommodate for the constantly-changing drawing axis,
          // the move operation is restarted from scratch every update.
-         function isAcceptableTEMP(vertex: Vertex) {
+         function isAcceptable(vertex: Vertex) {
             if (vertex === draw!.segment.end) return false
             let start = draw!.segment.start
             let drawAxis = findAxis(
@@ -1238,7 +1237,7 @@
          }
          let closest = closestNearTo(
             mouse.position,
-            Array.from(vertices()).filter(isAcceptableTEMP)
+            Array.from(vertices()).filter(isAcceptable)
          )
          let newAxis = findAxis(
             Axis.fromVector(
@@ -1307,7 +1306,7 @@
       let snappedToPoint = false
       if (draw && drawMode === "strafing") {
          // Try snapping the moved endpoint to another endpoint nearby.
-         function isAcceptableTEMP(vertex: Vertex) {
+         function isAcceptable(vertex: Vertex) {
             let vMove = movements.read(movableAt(vertex))
             if (!vMove[0].add(vMove[1]).approxEquals(zeroVector, 0.001))
                return false
@@ -1325,7 +1324,7 @@
          }
          let closest = closestNearTo(
             draw.segment.end,
-            Array.from(vertices()).filter(isAcceptableTEMP)
+            Array.from(vertices()).filter(isAcceptable)
          )
          if (closest) {
             snappedToPoint = true
@@ -1504,7 +1503,6 @@
          }
       }
       function computeStandardGapEase(): Vector {
-         return zeroVector
          // The two axes along which this algorithm operates:
          let easeAxes = {
             x: move!.axisGrabbed,
@@ -1514,7 +1512,7 @@
          let drawAxis: "x" | "y" | undefined
          let drawEndSide: "low" | "high" | undefined
          let shouldEase = { x: true, y: true }
-         if (draw && drawingSpecialCase) {
+         if (draw) {
             let start = draw.segment.start.relativeTo(easeAxes.x)
             let end = draw.segment.end.relativeTo(easeAxes.x)
             if (draw.segment.axis === easeAxes.x) {
@@ -1528,14 +1526,19 @@
          }
          // Output: Whether the Movable can freely move along the given axis.
          function moves(axis: "x" | "y", movable: Movable): boolean {
-            let movement = movements.read(movable)
-            return (
-               movement.type === "full move" ||
-               (movement.type === "axis move" &&
-                  (movement.moveAxis === easeAxes[axis] ||
-                     findAxis(movement.absorbAxis.orthogonal()) ===
-                        easeAxes[axis]))
-            )
+            if (allSelectedMovables.has(movable)) return true
+            let basis = basisAxes.read(movable)
+            let movePart = movements.read(movable)
+            for (let i = 0; i < 2; ++i) {
+               if (
+                  (easeAxes[axis] === basis[i] &&
+                     !movePart[i].approxEquals(zeroVector, 0.001)) ||
+                  (easeAxes[axis] === findAxis(basis[i].orthogonal()) &&
+                     !movePart[1 - i].approxEquals(zeroVector, 0.001))
+               )
+                  return true
+            }
+            return false
          }
          type SideType = "symbol" | "port" | "junction" | "flank"
          type SideInfo = { type: SideType; value: number; moves: boolean }
@@ -1677,7 +1680,7 @@
       if (move.draw) {
          let segment = move.draw.segment
          let endObject = move.draw.endObject
-         function isAcceptableTEMP() {
+         function isAcceptable() {
             for (let [s, other] of segment.start.edges()) {
                if (
                   s !== segment &&
@@ -1690,7 +1693,7 @@
             }
             return true
          }
-         if (segment.sqLength() >= sqMinSegmentLength && isAcceptableTEMP()) {
+         if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
             if (endObject instanceof Segment) {
                // Turn the intersected Segment into a T-junction.
                endObject.splitAt(segment.end as Junction)
