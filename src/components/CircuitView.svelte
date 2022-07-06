@@ -193,12 +193,6 @@
       const c = -a * sqEaseRadius - b * easeRadius
       return a * distance * distance + b * distance + c
    }
-   type HighlightStyle = "hover" | "select" | "debug" | undefined
-   function styleOf(thing: Highlightable | Selectable): HighlightStyle {
-      if (selected.has(thing as Selectable)) return "select"
-      else if (highlighted.has(thing)) return "hover"
-      else if (autoSelectedMovables.includes(thing as Movable)) return "debug"
-   }
    function layerOf(point: Point): "lower" | "upper" {
       return point instanceof Port || point === move?.draw?.segment.end
          ? "upper"
@@ -237,12 +231,26 @@
          endObject?: Attachable
       }
    } = null
-   let rectSelect: null | Set<Selectable> = null
+   let rectSelect: null | {
+      mode: "new" | "add" | "remove"
+      items: Set<Selectable>
+   } = null
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
+   let unconfirmedSelected: Set<Selectable>
+   $: /* Combine the confirmed selection with the selection-in-progress.  */ {
+      unconfirmedSelected = new Set(selected)
+      if (rectSelect) {
+         if (rectSelect.mode === "remove") {
+            for (let item of rectSelect.items) unconfirmedSelected.delete(item)
+         } else {
+            for (let item of rectSelect.items) unconfirmedSelected.add(item)
+         }
+      }
+   }
    let manuallySelectedMovables: Set<Movable>
-   $: {
+   $: /* Gather the Movables belonging to the current selection. */ {
       manuallySelectedMovables = new Set()
       for (let g of selected) {
          if (isMovable(g)) {
@@ -639,11 +647,9 @@
       highlighted = new Set()
       if (move?.draw?.endObject instanceof Segment) {
          highlighted.add(move.draw.endObject)
-      } else if (rectSelect) {
-         highlighted = new Set(rectSelect)
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
-      } else if (tool === "select & move" && !move) {
+      } else if (tool === "select & move" && !move && !rectSelect) {
          let grab = closestGrabbable(mouse.position)
          if (grab) highlighted.add(grab.object)
       } else if (tool === "draw" && !move) {
@@ -714,6 +720,14 @@
       } else {
          gapHighlighted = new Set()
       }
+   }
+   type HighlightStyle = "hover" | "select" | "debug" | undefined
+   $: styleOf = function (thing: Highlightable | Selectable): HighlightStyle {
+      // This function _must_ be defined within $, because its behaviour changes
+      // whenever the state below changes, and Svelte needs to know that.
+      if (unconfirmedSelected.has(thing as Selectable)) return "select"
+      else if (highlighted.has(thing)) return "hover"
+      else if (autoSelectedMovables.includes(thing as Movable)) return "debug"
    }
    type Section = Geometry.LineSegment<Point>
    type Glyph =
@@ -804,7 +818,7 @@
             } else if (
                v.isStraightLine() ||
                highlighted.has(v) ||
-               selected.has(v) ||
+               unconfirmedSelected.has(v) ||
                autoSelectedMovables.includes(v)
             ) {
                glyphsToDraw.add({
@@ -953,13 +967,16 @@
       switch (tool) {
          case "select & move": {
             let grab = closestGrabbable(mouse.position)
-            if (!grab) selected.clear()
-            else if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
-            else if (shift && !cmd) selected.toggle(grab.object)
-            else if (alt && cmd)
-               for (let s of gapHighlighted) selected.delete(s)
-            else if (alt && !cmd) selected.delete(grab.object)
-            else selected = new ToggleSet([grab.object])
+            if (grab) {
+               if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
+               else if (shift && !cmd) selected.toggle(grab.object)
+               else if (alt && cmd)
+                  for (let s of gapHighlighted) selected.delete(s)
+               else if (alt && !cmd) selected.delete(grab.object)
+               else selected = new ToggleSet([grab.object])
+            } else {
+               if (!shift && !alt && !cmd) selected.clear()
+            }
             selected = selected
             break
          }
@@ -1006,7 +1023,7 @@
       if (mouse.state !== "dragging") return
       switch (tool) {
          case "select & move":
-            beginRectSelect(mouse.downPosition)
+            beginRectSelect()
             break
          case "draw": {
             if (mouse.downJunction) {
@@ -1720,42 +1737,60 @@
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
    }
-   function beginRectSelect(start: Point) {
-      rectSelect = new Set()
+   function beginRectSelect() {
+      rectSelect = {
+         mode: alt ? "remove" : shift ? "add" : "new",
+         items: new Set(),
+      }
+      if (rectSelect.mode === "new") selected = new ToggleSet()
    }
    function updateRectSelect() {
       if (!rectSelect || mouse.state === "up") return
-      rectSelect = new Set()
+      rectSelect.items = new Set()
       let range = Range2D.fromCorners(mouse.downPosition, mouse.position)
-      // Select enclosed Segments.
-      for (let segment of Segment.s) {
-         if (range.contains(segment.start) && range.contains(segment.end))
-            rectSelect.add(segment)
-      }
-      // Select enclosed Junctions iff no adjacent Segment is selected.
-      next: for (let junction of Junction.s) {
-         if (range.contains(junction)) {
-            for (let [segment] of junction.edges())
-               if (rectSelect.has(segment)) continue next
-            rectSelect.add(junction)
-         }
-      }
-      // Select enclosed Symbols.
-      for (let symbol of SymbolInstance.s) {
-         if (symbol.svgCorners().every((c) => range.contains(c)))
-            rectSelect.add(symbol)
-      }
+      for (let segment of Segment.s)
+         if (range.intersects(segment)) rectSelect.items.add(segment)
+      for (let symbol of SymbolInstance.s)
+         if (range.intersects(symbol)) rectSelect.items.add(symbol)
+      // Because the rect select is INCLUSIVE, there is no point including
+      // vertices in the selection — their adjacent edges will supercede them.
+      // But if we are REMOVING from the selection, we should include junctions.
+      if (rectSelect.mode === "remove")
+         for (let junction of Junction.s)
+            if (range.intersects(junction)) rectSelect.items.add(junction)
+
+      // Below is an unused implementation of EXCLUSIVE range selection.
+      // // Select fully-enclosed Segments.
+      // for (let segment of Segment.s) {
+      //    if (range.contains(segment.start) && range.contains(segment.end))
+      //       rectSelect.items.add(segment)
+      // }
+      // // Select fully-enclosed Junctions.
+      // next: for (let junction of Junction.s) {
+      //    if (range.contains(junction)) {
+      //       if (rectSelect.mode !== "remove") {
+      //          // Don't select the Junction if an adjacent Segment is selected.
+      //          for (let [segment] of junction.edges())
+      //             if (selected.has(segment) || rectSelect.items.has(segment))
+      //                continue next
+      //       }
+      //       rectSelect.items.add(junction)
+      //    }
+      // }
+      // // Select fully-enclosed Symbols.
+      // for (let symbol of SymbolInstance.s) {
+      //    if (symbol.svgCorners().every((c) => range.contains(c)))
+      //       rectSelect.items.add(symbol)
+      // }
    }
    function endRectSelect() {
-      if (rectSelect) {
-         if (!shift && !alt) selected.clear()
-         if (alt) {
-            for (let thing of rectSelect) selected.delete(thing)
-         } else {
-            for (let thing of rectSelect) selected.add(thing)
-         }
-         selected = selected
+      if (!rectSelect) return
+      if (rectSelect.mode === "remove") {
+         for (let item of rectSelect.items) selected.delete(item)
+      } else {
+         for (let item of rectSelect.items) selected.add(item)
       }
+      selected = selected
       rectSelect = null
    }
 
@@ -1827,7 +1862,7 @@
    <!-- Segment selection layer -->
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
-         {#if selected.has(segment)}
+         {#if unconfirmedSelected.has(segment)}
             {#each sections as section}
                <FluidLine renderStyle="select" segment={section} />
             {/each}

@@ -443,6 +443,27 @@ export class Range2D {
          point.y <= this.y.high
       )
    }
+   intersects(object: Point | LineSegment | Rectangle) {
+      if (object instanceof Point) {
+         return this.contains(object)
+      } else if (object instanceof LineSegment) {
+         return (
+            this.contains(object.start) ||
+            this.contains(object.end) ||
+            new Rectangle(Point.zero, Rotation.zero, this)
+               .sides()
+               .some((side) => object.intersection(side))
+         )
+      } else {
+         let mySides = new Rectangle(Point.zero, Rotation.zero, this).sides()
+         return (
+            object.corners().some((corner) => this.contains(corner)) ||
+            object
+               .sides()
+               .some((side) => mySides.some((s) => s.intersection(side)))
+         )
+      }
+   }
 }
 
 export class Rectangle extends Object2D {
@@ -487,6 +508,15 @@ export class Rectangle extends Object2D {
          new Point(x.high, y.high),
          new Point(x.low, y.high),
       ].map((p) => this.fromRectCoordinates(p))
+   }
+   sides(): LineSegment[] {
+      let [p1, p2, p3, p4] = this.corners()
+      return [
+         new LineSegment(p1, p2, Axis.horizontal),
+         new LineSegment(p2, p3, Axis.vertical),
+         new LineSegment(p3, p4, Axis.horizontal),
+         new LineSegment(p4, p1, Axis.vertical),
+      ]
    }
 }
 
