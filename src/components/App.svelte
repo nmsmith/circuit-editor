@@ -15,6 +15,7 @@
    // Callbacks obtained from circuitView
    let onToolSelected: (newTool: Tool) => void
    let onNextLineType: () => void
+   let onSelectAll: () => void
    let onDelete: () => void
    let onSymbolEnter: (
       kind: SymbolKind,
@@ -89,6 +90,9 @@
       updateModifierKeys(event)
       if (event.repeat) return // Ignore repeated events from held-down keys.
       switch (event.code) {
+         case "KeyA":
+            if (cmd) onSelectAll()
+            break
          case "KeyS":
             tool = "select & move"
             onToolSelected(tool) // called even if the tool is the same
@@ -136,6 +140,7 @@
       {onSymbolLeave}
       bind:onToolSelected
       bind:onNextLineType
+      bind:onSelectAll
       bind:onDelete
       bind:onSymbolEnter
    />

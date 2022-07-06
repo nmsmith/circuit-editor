@@ -60,7 +60,8 @@
    // Values shared with the parent component.
    export const onToolSelected = toolSelected
    export const onNextLineType = nextLineType
-   export const onDelete = deleteSelected
+   export const onSelectAll = selectAll
+   export const onDelete = deletePressed
    export const onSymbolEnter = spawnSymbol
    // Events triggered by updates to props.
    $: shift ? shiftDown() : shiftUp()
@@ -867,22 +868,15 @@
    function nextLineType() {
       // TODO — toggle through line types.
    }
-   function deleteSelected() {
-      let junctionsToConvert = new Set<Junction>()
-      for (let thing of selected) {
-         if (thing instanceof Port) continue // Ports are not deletable.
-         thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
+   function selectAll() {
+      if (tool === "select & move") {
+         selected = new ToggleSet()
+         for (let segment of Segment.s) selected.add(segment)
+         for (let symbol of SymbolInstance.s) selected.add(symbol)
       }
-      for (let junction of junctionsToConvert) {
-         if (junction.edges().size === 2)
-            junction.convertToCrossing(crossingMap)
-      }
-      selected = new ToggleSet()
-      // Tell Svelte all of these things could have changed.
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-      SymbolInstance.s = SymbolInstance.s
-      Port.s = Port.s
+   }
+   function deletePressed() {
+      if (!rectSelect && !move) deleteSelected() // Disable deletion mid-action.
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
       // Update the mouse's state.
@@ -1792,6 +1786,23 @@
       }
       selected = selected
       rectSelect = null
+   }
+   function deleteSelected() {
+      let junctionsToConvert = new Set<Junction>()
+      for (let thing of selected) {
+         if (thing instanceof Port) continue // Ports are not deletable.
+         thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
+      }
+      for (let junction of junctionsToConvert) {
+         if (junction.edges().size === 2)
+            junction.convertToCrossing(crossingMap)
+      }
+      selected = new ToggleSet()
+      // Tell Svelte all of these things could have changed.
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
    }
 
    // --------------------- Development-time behaviours -----------------------
