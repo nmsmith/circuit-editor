@@ -5,7 +5,7 @@ This app is an editor for electrical circuits and hydraulic circuits.
 ## Controls (possibly out-of-date):
 
 -  D: switch to the "draw" tool
--  S: switch to the "select & move" tool
+-  S: switch to the "select" tool
 -  Backquote: toggle debug visualization
 
 ### Controls when using the "draw" tool:
@@ -15,7 +15,7 @@ This app is an editor for electrical circuits and hydraulic circuits.
 -  Alt/Option: snap drawing to 45° angles
 -  Alt/Option + Shift: draw at any angle
 
-### Controls when using the "select & move" tool:
+### Controls when using the "select" tool:
 
 -  Left Click: select the circuit element under the mouse
 -  Drag: select all circuit elements within a rectangular region

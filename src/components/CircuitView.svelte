@@ -1,6 +1,6 @@
 <script lang="ts" context="module">
    // ------------------------- Exported definitions --------------------------
-   export type Tool = "select & move" | "draw"
+   export type Tool = "select" | "draw"
    export type LineType = "hydraulic" | "pilot" | "drain"
 </script>
 
@@ -631,18 +631,28 @@
          }
       }
    }
+   $: configuredToMove =
+      (tool === "select" && !shift && !alt && !cmd) ||
+      (tool === "draw" && shift && !alt && !cmd)
    let cursor: "default" | "cell" | "grab" | "grabbing"
-   $: /* Where helpful, change the appearance of the mouse cursor. */ {
-      if (tool === "draw") {
-         cursor = "cell"
-      } else if (move) {
+   $: /* Set the appearance of the mouse cursor. */ {
+      if (move) {
          cursor = "grabbing"
+      } else if (rectSelect) {
+         cursor = "default"
+      } else if (configuredToMove) {
+         if (closestGrabbable(mouse.position)) {
+            cursor = mouse.state === "pressing" ? "grabbing" : "grab"
+         } else {
+            cursor = "default"
+         }
+      } else if (tool === "select") {
+         cursor = "default"
+      } else if (tool === "draw") {
+         cursor = "cell"
       } else {
          cursor = "default"
-         let grab = closestGrabbable(mouse.position)
-         if (tool === "select & move" && grab && !shift && !alt && !cmd) {
-            cursor = mouse.state === "pressing" ? "grabbing" : "grab"
-         }
+         console.warn("No cursor specified for the current configuration.")
       }
    }
    let highlighted: Set<Highlightable>
@@ -652,7 +662,7 @@
          highlighted.add(move.draw.endObject)
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
-      } else if (tool === "select & move" && !move && !rectSelect) {
+      } else if (configuredToMove && !move && !rectSelect) {
          let grab = closestGrabbable(mouse.position)
          if (grab) highlighted.add(grab.object)
       } else if (tool === "draw" && !move) {
@@ -668,7 +678,7 @@
    }
    let gapHighlighted: Set<Segment>
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
-      if (tool === "select & move" && !move && cmd) {
+      if (tool === "select" && !move && cmd) {
          gapHighlighted = new Set()
          let s = closestNearTo(mouse.position, Segment.s)
          if (s) {
@@ -871,7 +881,7 @@
       // TODO — toggle through line types.
    }
    function selectAll() {
-      if (tool === "select & move") {
+      if (tool === "select") {
          selected = new ToggleSet()
          for (let segment of Segment.s) selected.add(segment)
          for (let symbol of SymbolInstance.s) selected.add(symbol)
@@ -919,7 +929,7 @@
    }
    function leftMouseDown() {
       let grab = closestGrabbable(mouse.position)
-      if (tool === "select & move" && grab && !shift && !alt) {
+      if (configuredToMove && grab) {
          // Immediately treat the operation as a drag.
          mouse = { ...mouse, state: "dragging", downPosition: mouse.position }
          if (cmd) {
@@ -947,7 +957,7 @@
          // Check if the mouse has moved enough to constitute a drag.
          let dragVector = mouse.position.displacementFrom(mouse.downPosition)
          let sqLengthRequiredForDragStart = {
-            "select & move": 4 * 4,
+            select: 4 * 4,
             draw: halfGap * halfGap, // larger values help axis detection
          }
          if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
@@ -966,7 +976,7 @@
    }
    function leftMouseClicked() {
       switch (tool) {
-         case "select & move": {
+         case "select": {
             let grab = closestGrabbable(mouse.position)
             if (grab) {
                if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
@@ -982,6 +992,7 @@
             break
          }
          case "draw": {
+            if (configuredToMove) break // Clicks should have no effect.
             let toggle = closestToggleable(mouse.position)
             if (!toggle) break
             if (isVertex(toggle.object)) {
@@ -1023,7 +1034,7 @@
    function beginDragAction(dragVector: Vector) {
       if (mouse.state !== "dragging") return
       switch (tool) {
-         case "select & move":
+         case "select":
             beginRectSelect()
             break
          case "draw": {
@@ -1773,9 +1784,9 @@
 
       // Move all the circuit elements back to their original positions.
       for (let m of movables()) m.moveTo(move.originalPositions.read(m))
-      move = null
       // If a new line was being drawn, delete it.
-      if (tool === "draw") deleteSelected()
+      if (move.draw?.segmentIsNew) deleteSelected()
+      move = null
    }
    function beginRectSelect() {
       rectSelect = {

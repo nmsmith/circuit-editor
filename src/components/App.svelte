@@ -95,7 +95,7 @@
             if (cmd) onSelectAll()
             break
          case "KeyS":
-            tool = "select & move"
+            tool = "select"
             onToolSelected(tool) // called even if the tool is the same
             break
          case "KeyD":
