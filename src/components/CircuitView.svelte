@@ -229,6 +229,7 @@
       draw?: {
          segment: Segment
          segmentIsNew: boolean
+         shouldEaseIn: boolean
          endObject?: Attachable
       }
    } = null
@@ -1137,7 +1138,7 @@
          let end = new Junction(info.start)
          selected = new ToggleSet([end]) // enables the endpoint to be dragged
          let segment = new Segment(info.start, end, info.axis)
-         draw = { segment, segmentIsNew: true }
+         draw = { segment, segmentIsNew: true, shouldEaseIn: false }
          partGrabbed = end.clone()
          //axisGrabbed = info.axis
       } else {
@@ -1183,13 +1184,13 @@
             // it with a segment whose .end is the vertex being grabbed.
             let segment = new Segment(start, end, existingSegment.axis)
             existingSegment.replaceWith(segment)
-            draw = { segment, segmentIsNew: false }
+            draw = { segment, segmentIsNew: false, shouldEaseIn: true }
          }
       }
       move = {
          axisGrabbed,
          partGrabbed,
-         distance: 0,
+         distance: move ? move.distance : 0, // If already moving, keep distance
          originalPositions,
          draw,
       }
@@ -1283,6 +1284,7 @@
             } else console.warn("move.draw was unexpectedly null.")
          }
       }
+      if (draw && drawMode !== "strafing") draw.shouldEaseIn = false
       if (draw && drawMode === "free rotation") return
 
       type Movement = [Vector, Vector]
@@ -1292,10 +1294,7 @@
          zeroVector,
       ])
       let fullMove
-      if (
-         move.distance < 15 &&
-         (!draw || (drawMode === "strafing" && !draw.segmentIsNew))
-      ) {
+      if (move.distance < 15 && (!draw || draw.shouldEaseIn)) {
          // The user may have grabbed slightly-away from their target object.
          // If so, gradually pull the object towards the mouse cursor.
          fullMove = mouse.position.displacementFrom(
