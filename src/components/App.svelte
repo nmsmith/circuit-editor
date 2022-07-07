@@ -17,6 +17,7 @@
    let onNextLineType: () => void
    let onSelectAll: () => void
    let onDelete: () => void
+   let onEscape: () => void
    let onSymbolEnter: (
       kind: SymbolKind,
       grabOffset: Vector,
@@ -108,6 +109,9 @@
          case "Delete":
             onDelete()
             break
+         case "Escape":
+            onEscape()
+            break
          case "Backquote":
             debug = !debug
             break
@@ -142,6 +146,7 @@
       bind:onNextLineType
       bind:onSelectAll
       bind:onDelete
+      bind:onEscape
       bind:onSymbolEnter
    />
    <div class="toolText">{tool}</div>

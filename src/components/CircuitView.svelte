@@ -62,6 +62,7 @@
    export const onNextLineType = nextLineType
    export const onSelectAll = selectAll
    export const onDelete = deletePressed
+   export const onEscape = escapePressed
    export const onSymbolEnter = spawnSymbol
    // Events triggered by updates to props.
    $: shift ? shiftDown() : shiftUp()
@@ -878,6 +879,11 @@
    }
    function deletePressed() {
       if (!rectSelect && !move) deleteSelected() // Disable deletion mid-action.
+   }
+   function escapePressed() {
+      // Abort the current operation.
+      cancelMove()
+      cancelRectSelect()
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
       // Update the mouse's state.
@@ -1704,23 +1710,24 @@
             return true
          }
          if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
-            if (endObject instanceof Segment) {
-               // Turn the intersected Segment into a T-junction.
-               endObject.splitAt(segment.end as Junction)
-            } else if (endObject) {
-               let extend =
-                  endObject instanceof Junction &&
-                  shouldExtendTheSegmentAt(endObject, segment.axis)
-               // Replace the drawn segment with one that ends at the Vertex.
-               segment.replaceWith(
-                  new Segment(segment.start, endObject, segment.axis)
-               )
-               if (extend)
-                  (endObject as Junction).convertToCrossing(crossingMap)
+            if (endObject) {
+               selected = new ToggleSet()
+               if (endObject instanceof Segment) {
+                  // Turn the intersected Segment into a T-junction.
+                  endObject.splitAt(segment.end as Junction)
+               } else {
+                  let extend =
+                     endObject instanceof Junction &&
+                     shouldExtendTheSegmentAt(endObject, segment.axis)
+                  // Replace the drawn segment with one that ends at the Vertex.
+                  segment.replaceWith(
+                     new Segment(segment.start, endObject, segment.axis)
+                  )
+                  if (extend)
+                     (endObject as Junction).convertToCrossing(crossingMap)
+               }
             }
          } else if (allowedToDelete) deleteSelected()
-         // Reset the drawing state.
-         if (move.draw.segmentIsNew || endObject) selected = new ToggleSet()
       }
       move = null
       if (tool === "draw") selected = new ToggleSet()
@@ -1729,6 +1736,19 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+   }
+   function cancelMove() {
+      if (!move) return
+      // TODO: This approach doesn't work if Alt or Shift are used during the
+      // movement, since this resets move.originalPositions. The "right" way to
+      // cancel the move will be to invoke the UNDO operation, once it is
+      // implemented.
+
+      // Move all the circuit elements back to their original positions.
+      for (let m of movables()) m.moveTo(move.originalPositions.read(m))
+      move = null
+      // If a new line was being drawn, delete it.
+      if (tool === "draw") deleteSelected()
    }
    function beginRectSelect() {
       rectSelect = {
@@ -1784,6 +1804,9 @@
          for (let item of rectSelect.items) selected.add(item)
       }
       selected = selected
+      rectSelect = null
+   }
+   function cancelRectSelect() {
       rectSelect = null
    }
    function deleteSelected() {
