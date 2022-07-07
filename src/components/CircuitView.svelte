@@ -215,12 +215,14 @@
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
-   let mouse: { position: Point } & (
+   let mouse: Point
+   type MouseButtonState =
       | { state: "up" }
       // Pressing, but not yet moved enough to constitute a drag.
       | { state: "pressing"; downPosition: Point; downJunction?: Junction }
       | { state: "dragging"; downPosition: Point; downJunction?: Junction }
-   ) = { position: Point.zero, state: "up" }
+   let LMB: MouseButtonState = { state: "up" }
+   let RMB: MouseButtonState = { state: "up" }
    let tool: Tool = "draw"
    let move: null | {
       axisGrabbed: Axis
@@ -641,8 +643,8 @@
       } else if (rectSelect) {
          cursor = "default"
       } else if (configuredToMove) {
-         if (closestGrabbable(mouse.position)) {
-            cursor = mouse.state === "pressing" ? "grabbing" : "grab"
+         if (closestGrabbable(mouse)) {
+            cursor = LMB.state === "pressing" ? "grabbing" : "grab"
          } else {
             cursor = "default"
          }
@@ -663,10 +665,10 @@
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
       } else if (configuredToMove && !move && !rectSelect) {
-         let grab = closestGrabbable(mouse.position)
+         let grab = closestGrabbable(mouse)
          if (grab) highlighted.add(grab.object)
       } else if (tool === "draw" && !move) {
-         let thing = closestAttachableOrToggleable(mouse.position)
+         let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
             if (thing.object instanceof Crossing) {
                highlighted.add(thing.closestPart)
@@ -680,7 +682,7 @@
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
       if (tool === "select" && !move && cmd) {
          gapHighlighted = new Set()
-         let s = closestNearTo(mouse.position, Segment.s)
+         let s = closestNearTo(mouse, Segment.s)
          if (s) {
             // Do gap highlighting (and later, selection) along the axis
             // orthogonal to the segment's axis. To achieve this, we
@@ -704,9 +706,8 @@
                info.set(seg, { segment: seg, x, y, visited: false })
             }
             let [front, back] =
-               s.closestPart
-                  .displacementFrom(mouse.position)
-                  .relativeTo(selectAxis).y > 0
+               s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
+               0
                   ? [0, 1]
                   : [1, 0]
             gapHighlighted.add(s.object)
@@ -866,10 +867,9 @@
          let endpoint = move.draw.segment.end as Junction
          move.draw.endObject = undefined // Don't connect to anything else.
          endMove(false)
-         mouse = {
+         LMB = {
             state: "pressing",
-            position: mouse.position,
-            downPosition: mouse.position,
+            downPosition: mouse,
             downJunction: endpoint,
          }
       } else {
@@ -898,12 +898,12 @@
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
       // Update the mouse's state.
       let p = mouseInCoordinateSystemOf(canvas, e)
-      mouse = { state: "dragging", downPosition: p, position: p }
+      LMB = { state: "dragging", downPosition: p }
       // Spawn a symbol on the canvas, and initiate a move action.
-      let spawnPosition = mouse.position.displacedBy(grabOffset)
+      let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       selected = new ToggleSet([symbol])
-      beginMove("move", { grabbed: symbol, atPart: mouse.position })
+      beginMove("move", { grabbed: symbol, atPart: mouse })
    }
    function shiftDown() {}
    function shiftUp() {}
@@ -928,10 +928,10 @@
       return (event.buttons & 0b1) === 1
    }
    function leftMouseDown() {
-      let grab = closestGrabbable(mouse.position)
+      let grab = closestGrabbable(mouse)
       if (configuredToMove && grab) {
          // Immediately treat the operation as a drag.
-         mouse = { ...mouse, state: "dragging", downPosition: mouse.position }
+         LMB = { ...LMB, state: "dragging", downPosition: mouse }
          if (cmd) {
             selected = new ToggleSet(gapHighlighted)
          } else if (!selected.has(grab.object)) {
@@ -942,42 +942,41 @@
             atPart: grab.closestPart,
          })
       } else {
-         mouse = { ...mouse, state: "pressing", downPosition: mouse.position }
+         LMB = { ...LMB, state: "pressing", downPosition: mouse }
       }
    }
    function mouseMoved(previousMousePosition: Point) {
-      if (move)
-         move.distance += mouse.position.distanceFrom(previousMousePosition)
+      if (move) move.distance += mouse.distanceFrom(previousMousePosition)
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
       if (move) updateMove()
       if (rectSelect) updateRectSelect()
-      if (mouse.state === "pressing") {
+      if (LMB.state === "pressing") {
          // Check if the mouse has moved enough to constitute a drag.
-         let dragVector = mouse.position.displacementFrom(mouse.downPosition)
+         let dragVector = mouse.displacementFrom(LMB.downPosition)
          let sqLengthRequiredForDragStart = {
             select: 4 * 4,
             draw: halfGap * halfGap, // larger values help axis detection
          }
          if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
-            mouse = { ...mouse, state: "dragging" }
-            beginDragAction(dragVector)
+            LMB = { ...LMB, state: "dragging" }
+            beginLeftDragAction(dragVector)
          }
       }
    }
    function leftMousePressEnded(unexpectedly: true) {
-      mouse = { state: "up", position: mouse.position }
+      LMB = { state: "up" }
    }
    function leftMouseDragEnded(unexpectedly: boolean = false) {
       if (move) endMove()
       if (rectSelect) endRectSelect()
-      mouse = { state: "up", position: mouse.position }
+      LMB = { state: "up" }
    }
    function leftMouseClicked() {
       switch (tool) {
          case "select": {
-            let grab = closestGrabbable(mouse.position)
+            let grab = closestGrabbable(mouse)
             if (grab) {
                if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
                else if (shift && !cmd) selected.toggle(grab.object)
@@ -993,7 +992,7 @@
          }
          case "draw": {
             if (configuredToMove) break // Clicks should have no effect.
-            let toggle = closestToggleable(mouse.position)
+            let toggle = closestToggleable(mouse)
             if (!toggle) break
             if (isVertex(toggle.object)) {
                if (toggle.object.glyph === "default") {
@@ -1031,17 +1030,17 @@
    }
 
    // ---------------------------- Derived events -----------------------------
-   function beginDragAction(dragVector: Vector) {
-      if (mouse.state !== "dragging") return
+   function beginLeftDragAction(dragVector: Vector) {
+      if (LMB.state !== "dragging") return
       switch (tool) {
          case "select":
             beginRectSelect()
             break
          case "draw": {
-            if (mouse.downJunction) {
+            if (LMB.downJunction) {
                // Start the draw operation at the endpoint of the previous
                // draw operation.
-               let lastDrawAxis = mouse.downJunction.axes()[0]
+               let lastDrawAxis = LMB.downJunction.axes()[0]
                // Determine the axis the draw operation should begin along.
                let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
                if (drawMode === "strafing") {
@@ -1055,16 +1054,16 @@
                      snapAxes.filter((axis) => axis !== lastDrawAxis)
                   )
                }
-               beginMove("draw", { start: mouse.downJunction, axis: drawAxis })
+               beginMove("draw", { start: LMB.downJunction, axis: drawAxis })
                break // Exit the switch statement.
             } else if (
-               closestAttachableOrToggleable(mouse.downPosition)
+               closestAttachableOrToggleable(LMB.downPosition)
                   ?.object instanceof Crossing
             ) {
                break // Don't allow draw operations to start at crossings.
             }
             // Otherwise, start the draw operation at the closest attachable.
-            let attach = closestAttachable(mouse.downPosition)
+            let attach = closestAttachable(LMB.downPosition)
             // Determine the axis the draw operation should begin along.
             let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
             let standardAxes =
@@ -1157,7 +1156,7 @@
                   })
             } else
                beginMove("draw", {
-                  start: new Junction(mouse.downPosition),
+                  start: new Junction(LMB.downPosition),
                   axis: nearestAxis(dragAxis, standardAxes),
                })
             break
@@ -1240,7 +1239,7 @@
       }
    }
    function updateMove() {
-      if (!move || mouse.state === "up") return
+      if (!move || LMB.state === "up") return
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -1251,7 +1250,7 @@
       if (draw && drawMode === "snapped rotation") {
          // Check which axis the mouse is closest to. If the axis has
          // changed, restart the move operation along the new axis.
-         let drawVector = mouse.position.displacementFrom(draw.segment.start)
+         let drawVector = mouse.displacementFrom(draw.segment.start)
          let newAxis = findAxis(Axis.fromVector(drawVector))
          if (newAxis) {
             // Snap to the nearest standard axis.
@@ -1292,18 +1291,18 @@
             return true
          }
          let closest = closestNearTo(
-            mouse.position,
+            mouse,
             Array.from(vertices()).filter(isAcceptable)
          )
          let newAxis = findAxis(
             Axis.fromVector(
                closest
                   ? closest.object.displacementFrom(draw.segment.start)
-                  : mouse.position.displacementFrom(draw.segment.start)
+                  : mouse.displacementFrom(draw.segment.start)
             )
          )
          if (newAxis) {
-            let newEnd = closest ? closest.object : mouse.position
+            let newEnd = closest ? closest.object : mouse
             ;(draw.segment.end as Junction).moveTo(newEnd)
             ;(draw.segment.axis as Axis) = newAxis
             // Reset the move operation.
@@ -1317,7 +1316,7 @@
                if (closest) {
                   draw.endObject = closest.object
                } else {
-                  let s = closestSegmentNearTo(mouse.position, newAxis)
+                  let s = closestSegmentNearTo(mouse, newAxis)
                   if (s) {
                      ;(draw.segment.end as Junction).moveTo(s.closestPart)
                      draw.endObject = s.object
@@ -1341,14 +1340,14 @@
       if (move.distance < 15 && (!draw || draw.shouldEaseIn)) {
          // The user may have grabbed slightly-away from their target object.
          // If so, gradually pull the object towards the mouse cursor.
-         fullMove = mouse.position.displacementFrom(
-            mouse.downPosition.interpolatedToward(
+         fullMove = mouse.displacementFrom(
+            LMB.downPosition.interpolatedToward(
                move.partGrabbed,
                move.distance / 15
             )
          )
       } else {
-         fullMove = mouse.position.displacementFrom(move.partGrabbed)
+         fullMove = mouse.displacementFrom(move.partGrabbed)
       }
       // Firstly, perform a simple movement that tracks the mouse.
       if (draw && drawMode === "snapped rotation") {
@@ -1796,9 +1795,9 @@
       if (rectSelect.mode === "new") selected = new ToggleSet()
    }
    function updateRectSelect() {
-      if (!rectSelect || mouse.state === "up") return
+      if (!rectSelect || LMB.state === "up") return
       rectSelect.items = new Set()
-      let range = Range2D.fromCorners(mouse.downPosition, mouse.position)
+      let range = Range2D.fromCorners(LMB.downPosition, mouse)
       for (let segment of Segment.s)
          if (range.intersects(segment)) rectSelect.items.add(segment)
       for (let symbol of SymbolInstance.s)
@@ -1876,33 +1875,33 @@
    bind:this={canvas}
    style="cursor: {cursor}"
    on:mousedown={(event) => {
-      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (leftMouseIsDown(event)) leftMouseDown()
    }}
    on:mousemove={(event) => {
-      let previousMousePosition = mouse.position
-      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && mouse.state !== "up") {
+      let previousMousePosition = mouse
+      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
+      if (!leftMouseIsDown(event) && LMB.state !== "up") {
          if (waitedOneFrame) {
-            if (mouse.state === "pressing") leftMousePressEnded(true)
-            if (mouse.state === "dragging") leftMouseDragEnded(true)
+            if (LMB.state === "pressing") leftMousePressEnded(true)
+            if (LMB.state === "dragging") leftMouseDragEnded(true)
             waitedOneFrame = false
          } else waitedOneFrame = true
       }
       mouseMoved(previousMousePosition)
    }}
    on:mouseup={(event) => {
-      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event)) {
-         if (mouse.state === "pressing") leftMouseClicked()
-         if (mouse.state === "dragging") leftMouseDragEnded()
+         if (LMB.state === "pressing") leftMouseClicked()
+         if (LMB.state === "dragging") leftMouseDragEnded()
       }
    }}
    on:mouseenter={(event) => {
-      mouse.position = mouseInCoordinateSystemOf(event.currentTarget, event)
+      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event)) {
-         if (mouse.state === "pressing") leftMousePressEnded(true)
-         if (mouse.state === "dragging") leftMouseDragEnded(true)
+         if (LMB.state === "pressing") leftMousePressEnded(true)
+         if (LMB.state === "dragging") leftMouseDragEnded(true)
       }
    }}
 >
@@ -2005,8 +2004,8 @@
    </g>
    <!-- HUD layer -->
    <g>
-      {#if rectSelect && mouse.state !== "up"}
-         <RectSelectBox start={mouse.downPosition} end={mouse.position} />
+      {#if rectSelect && LMB.state !== "up"}
+         <RectSelectBox start={LMB.downPosition} end={mouse} />
       {/if}
       {#each [...pushPaths] as [pass, path]}
          <path style="fill:{pass === 1 ? 'purple' : '#cc7a00'}" d={path} />
