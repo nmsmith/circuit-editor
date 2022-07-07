@@ -948,7 +948,7 @@
          let dragVector = mouse.position.displacementFrom(mouse.downPosition)
          let sqLengthRequiredForDragStart = {
             "select & move": 4 * 4,
-            draw: sqSnapRadius, // a larger value helps us deduce draw direction
+            draw: halfGap * halfGap, // larger values help axis detection
          }
          if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
             mouse = { ...mouse, state: "dragging" }
@@ -1055,16 +1055,23 @@
             // Otherwise, start the draw operation at the closest attachable.
             let attach = closestAttachable(mouse.downPosition)
             // Determine the axis the draw operation should begin along.
-            let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
-            if (drawMode === "strafing") {
-               drawAxis = nearestAxis(drawAxis, primaryAxes)
-            } else if (drawMode === "snapped rotation") {
-               drawAxis = nearestAxis(drawAxis, snapAxes)
-            }
+            let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+            let standardAxes =
+               drawMode === "strafing"
+                  ? primaryAxes
+                  : drawMode === "snapped rotation"
+                  ? snapAxes
+                  : [dragAxis]
             if (attach?.object instanceof Segment) {
                let segment = attach.object
                let closestPart = attach.closestPart
-               if (segment.axis === drawAxis) {
+               let drawAxis =
+                  drawMode === "strafing"
+                     ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
+                     : drawMode === "snapped rotation"
+                     ? nearestAxis(dragAxis, standardAxes)
+                     : dragAxis
+               if (drawMode !== "free rotation" && drawAxis === segment.axis) {
                   // Cut the segment, and allow the user to move one side of it.
                   let direction = segment.start.displacementFrom(closestPart)
                   let [newStart, other] =
@@ -1086,41 +1093,61 @@
                }
             } else if (attach) {
                let vertex = attach.object
-               if (
-                  vertex instanceof Junction &&
-                  shouldExtendTheSegmentAt(vertex, drawAxis)
-               ) {
-                  // Extend the segment, to match the user's probable intent.
-                  selected = new ToggleSet([vertex])
-                  beginMove("move", { grabbed: vertex, atPart: vertex })
-               } else {
-                  let unplugged = false
-                  for (let [segment, other] of vertex.edges()) {
-                     if (segment.axis !== drawAxis) continue
-                     if (other.displacementFrom(vertex).dot(dragVector) <= 0)
-                        continue
-                     // Unplug this segment from the vertex.
-                     let junction = new Junction(vertex)
-                     segment.replaceWith(new Segment(other, junction, drawAxis))
-                     if (
-                        vertex instanceof Junction &&
-                        vertex.edges().size === 2
-                     ) {
-                        vertex.convertToCrossing(crossingMap)
+               let beganMove = false
+               if (drawMode !== "free rotation") {
+                  let considerAxis =
+                     drawMode === "strafing"
+                        ? // Consider vertex axes, in case the user wants to
+                          // extend/unplug a segment.
+                          nearestAxis(dragAxis, [
+                             ...standardAxes,
+                             ...vertex.axes(),
+                          ])
+                        : nearestAxis(dragAxis, standardAxes)
+                  if (
+                     vertex instanceof Junction &&
+                     shouldExtendTheSegmentAt(vertex, considerAxis)
+                  ) {
+                     // Extend the segment.
+                     selected = new ToggleSet([vertex])
+                     beginMove("move", { grabbed: vertex, atPart: vertex })
+                     beganMove = true
+                  } else {
+                     for (let [segment, other] of vertex.edges()) {
+                        if (segment.axis !== considerAxis) continue
+                        if (other.displacementFrom(vertex).dot(dragVector) <= 0)
+                           continue
+                        // Unplug this segment from the vertex.
+                        let junction = new Junction(vertex)
+                        segment.replaceWith(
+                           new Segment(other, junction, considerAxis)
+                        )
+                        if (
+                           vertex instanceof Junction &&
+                           vertex.edges().size === 2
+                        ) {
+                           vertex.convertToCrossing(crossingMap)
+                        }
+                        // Allow the user to move the unplugged segment around.
+                        selected = new ToggleSet([junction])
+                        beginMove("move", {
+                           grabbed: junction,
+                           atPart: junction,
+                        })
+                        beganMove = true
+                        break
                      }
-                     // Allow the user to move the unplugged segment around.
-                     selected = new ToggleSet([junction])
-                     beginMove("move", { grabbed: junction, atPart: junction })
-                     unplugged = true
-                     break
                   }
-                  if (!unplugged)
-                     beginMove("draw", { start: vertex, axis: drawAxis })
                }
+               if (!beganMove)
+                  beginMove("draw", {
+                     start: vertex,
+                     axis: nearestAxis(dragAxis, standardAxes),
+                  })
             } else
                beginMove("draw", {
                   start: new Junction(mouse.downPosition),
-                  axis: drawAxis,
+                  axis: nearestAxis(dragAxis, standardAxes),
                })
             break
          }
