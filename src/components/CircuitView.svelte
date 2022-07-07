@@ -76,6 +76,7 @@
    const zeroVector = new Vector(0, 0)
    // Configurable constants
    const sqMinSegmentLength = 15 * 15
+   const sqSelectStartDistance = 4 * 4
    // Circuit-sizing constants
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
@@ -923,9 +924,13 @@
    function altUp() {}
    function cmdDown() {}
    function cmdUp() {}
-   let waitedOneFrame = false
+   let waitedOneFrameLMB = false
+   let waitedOneFrameRMB = false
    function leftMouseIsDown(event: MouseEvent) {
-      return (event.buttons & 0b1) === 1
+      return (event.buttons & 0b001) !== 0
+   }
+   function rightMouseIsDown(event: MouseEvent) {
+      return (event.buttons & 0b010) !== 0
    }
    function leftMouseDown() {
       let grab = closestGrabbable(mouse)
@@ -945,6 +950,9 @@
          LMB = { ...LMB, state: "pressing", downPosition: mouse }
       }
    }
+   function rightMouseDown() {
+      RMB = { ...RMB, state: "pressing", downPosition: mouse }
+   }
    function mouseMoved(previousMousePosition: Point) {
       if (move) move.distance += mouse.distanceFrom(previousMousePosition)
       // Update the actions that depend on mouse movement. (It's important that
@@ -956,7 +964,7 @@
          // Check if the mouse has moved enough to constitute a drag.
          let dragVector = mouse.displacementFrom(LMB.downPosition)
          let sqLengthRequiredForDragStart = {
-            select: 4 * 4,
+            select: sqSelectStartDistance,
             draw: halfGap * halfGap, // larger values help axis detection
          }
          if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
@@ -968,10 +976,17 @@
    function leftMousePressEnded(unexpectedly: true) {
       LMB = { state: "up" }
    }
+   function rightMousePressEnded(unexpectedly: true) {
+      RMB = { state: "up" }
+   }
    function leftMouseDragEnded(unexpectedly: boolean = false) {
       if (move) endMove()
       if (rectSelect) endRectSelect()
       LMB = { state: "up" }
+   }
+   function rightMouseDragEnded(unexpectedly: boolean = false) {
+      // TODO:
+      RMB = { state: "up" }
    }
    function leftMouseClicked() {
       switch (tool) {
@@ -1027,6 +1042,9 @@
             break
          }
       }
+   }
+   function rightMouseClicked() {
+      // TODO:
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -1162,6 +1180,9 @@
             break
          }
       }
+   }
+   function beginRightDragAction(dragVector: Vector) {
+      // TODO:
    }
    type DrawInfo = { start: Vertex; axis: Axis }
    type MoveInfo = { grabbed: Grabbable; atPart: Point }
@@ -1877,16 +1898,32 @@
    on:mousedown={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (leftMouseIsDown(event)) leftMouseDown()
+      if (rightMouseIsDown(event)) rightMouseDown()
    }}
    on:mousemove={(event) => {
       let previousMousePosition = mouse
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event) && LMB.state !== "up") {
-         if (waitedOneFrame) {
+         if (waitedOneFrameLMB) {
             if (LMB.state === "pressing") leftMousePressEnded(true)
             if (LMB.state === "dragging") leftMouseDragEnded(true)
-            waitedOneFrame = false
-         } else waitedOneFrame = true
+            waitedOneFrameLMB = false
+         } else {
+            waitedOneFrameLMB = true
+         }
+      } else {
+         waitedOneFrameLMB = false
+      }
+      if (!rightMouseIsDown(event) && RMB.state !== "up") {
+         if (waitedOneFrameRMB) {
+            if (RMB.state === "pressing") rightMousePressEnded(true)
+            if (RMB.state === "dragging") rightMouseDragEnded(true)
+            waitedOneFrameRMB = false
+         } else {
+            waitedOneFrameRMB = true
+         }
+      } else {
+         waitedOneFrameRMB = false
       }
       mouseMoved(previousMousePosition)
    }}
@@ -1896,12 +1933,20 @@
          if (LMB.state === "pressing") leftMouseClicked()
          if (LMB.state === "dragging") leftMouseDragEnded()
       }
+      if (!rightMouseIsDown(event)) {
+         if (RMB.state === "pressing") rightMouseClicked()
+         if (RMB.state === "dragging") rightMouseDragEnded()
+      }
    }}
    on:mouseenter={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event)) {
          if (LMB.state === "pressing") leftMousePressEnded(true)
          if (LMB.state === "dragging") leftMouseDragEnded(true)
+      }
+      if (!rightMouseIsDown(event)) {
+         if (RMB.state === "pressing") rightMousePressEnded(true)
+         if (RMB.state === "dragging") rightMouseDragEnded(true)
       }
    }}
 >
