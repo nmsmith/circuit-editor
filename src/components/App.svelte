@@ -8,7 +8,7 @@
 
    // State passed to CircuitView
    let tool: Tool = "draw"
-   let [shift, alt, cmd] = [false, false, false]
+   let [shift, alt, cmd, keyF, keyR] = [false, false, false, false, false]
    let debug: boolean = false
    function onSymbolLeave() {}
 
@@ -105,6 +105,12 @@
          case "KeyE":
             onNextLineType()
             break
+         case "KeyF":
+            keyF = true
+            break
+         case "KeyR":
+            keyR = true
+            break
          case "Backspace":
          case "Delete":
             onDelete()
@@ -117,11 +123,23 @@
             break
       }
    }}
-   on:keyup={updateModifierKeys}
+   on:keyup={(event) => {
+      updateModifierKeys(event)
+      switch (event.code) {
+         case "KeyF":
+            keyF = false
+            break
+         case "KeyR":
+            keyR = false
+            break
+      }
+   }}
    on:blur={() => {
       shift = false
       alt = false
       cmd = false
+      keyF = false
+      keyR = false
    }}
 />
 
@@ -140,6 +158,8 @@
       {shift}
       {alt}
       {cmd}
+      {keyF}
+      {keyR}
       {debug}
       {onSymbolLeave}
       bind:onToolSelected
@@ -220,6 +240,13 @@
    }
    :global(.fluid.fill) {
       fill: blue;
+   }
+   :global(.flexible.stroke) {
+      stroke: rgb(0, 140, 75);
+      fill: none;
+   }
+   :global(.flexible.fill) {
+      fill: rgb(0, 140, 75);
    }
    :global(.hover.stroke) {
       stroke: rgb(0, 234, 255);

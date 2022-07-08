@@ -51,6 +51,8 @@
    export let shift: boolean
    export let alt: boolean
    export let cmd: boolean
+   export let keyF: boolean
+   export let keyR: boolean
    export let debug: boolean
    export let onSymbolLeave: (
       kind: SymbolKind,
@@ -68,6 +70,8 @@
    $: shift ? shiftDown() : shiftUp()
    $: alt ? altDown() : altUp()
    $: cmd ? cmdDown() : cmdUp()
+   $: keyF ? fDown() : fUp()
+   $: keyR ? rDown() : rUp()
 
    // ------------------------------ Constants --------------------------------
    let canvas: SVGElement // the root element of this component
@@ -76,7 +80,7 @@
    const zeroVector = new Vector(0, 0)
    // Configurable constants
    const sqMinSegmentLength = 15 * 15
-   const sqSelectStartDistance = 4 * 4
+   const sqSelectStartDistance = 8 * 8
    // Circuit-sizing constants
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
@@ -217,13 +221,15 @@
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let mouse: Point
-   type MouseButtonState =
+   type ButtonState =
       | { state: "up" }
       // Pressing, but not yet moved enough to constitute a drag.
       | { state: "pressing"; downPosition: Point; downJunction?: Junction }
       | { state: "dragging"; downPosition: Point; downJunction?: Junction }
-   let LMB: MouseButtonState = { state: "up" }
-   let RMB: MouseButtonState = { state: "up" }
+   let LMB: ButtonState = { state: "up" }
+   let RMB: ButtonState = { state: "up" }
+   let fKey: ButtonState = { state: "up" }
+   let rKey: ButtonState = { state: "up" }
    let tool: Tool = "draw"
    let move: null | {
       axisGrabbed: Axis
@@ -237,21 +243,30 @@
          endObject?: Attachable
       }
    } = null
-   let rectSelect: null | {
+   let multiSelect: null | {
       mode: "new" | "add" | "remove"
+      start: Point
       items: Set<Selectable>
    } = null
+   let flexSelect: null | {
+      start: Point
+      items: Set<Segment>
+   }
+   let rigidSelect: null | {
+      start: Point
+      items: Set<Segment>
+   }
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
    let unconfirmedSelected: Set<Selectable>
    $: /* Combine the confirmed selection with the selection-in-progress.  */ {
       unconfirmedSelected = new Set(selected)
-      if (rectSelect) {
-         if (rectSelect.mode === "remove") {
-            for (let item of rectSelect.items) unconfirmedSelected.delete(item)
+      if (multiSelect) {
+         if (multiSelect.mode === "remove") {
+            for (let item of multiSelect.items) unconfirmedSelected.delete(item)
          } else {
-            for (let item of rectSelect.items) unconfirmedSelected.add(item)
+            for (let item of multiSelect.items) unconfirmedSelected.add(item)
          }
       }
    }
@@ -641,7 +656,7 @@
    $: /* Set the appearance of the mouse cursor. */ {
       if (move) {
          cursor = "grabbing"
-      } else if (rectSelect) {
+      } else if (multiSelect || flexSelect || rigidSelect) {
          cursor = "default"
       } else if (configuredToMove) {
          if (closestGrabbable(mouse)) {
@@ -665,10 +680,10 @@
          highlighted.add(move.draw.endObject)
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
-      } else if (configuredToMove && !move && !rectSelect) {
+      } else if (configuredToMove && !move && !multiSelect) {
          let grab = closestGrabbable(mouse)
          if (grab) highlighted.add(grab.object)
-      } else if (tool === "draw" && !move) {
+      } else if (tool === "draw" && !move && !flexSelect && !rigidSelect) {
          let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
             if (thing.object instanceof Crossing) {
@@ -889,12 +904,14 @@
       }
    }
    function deletePressed() {
-      if (!rectSelect && !move) deleteSelected() // Disable deletion mid-action.
+      if (!multiSelect && !flexSelect && !rigidSelect && !move) deleteSelected() // Disable deletion mid-action.
    }
    function escapePressed() {
       // Abort the current operation.
       cancelMove()
-      cancelRectSelect()
+      cancelMultiSelect()
+      cancelFlexSelect()
+      cancelRigidSelect()
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
       // Update the mouse's state.
@@ -924,6 +941,30 @@
    function altUp() {}
    function cmdDown() {}
    function cmdUp() {}
+   function fDown() {
+      fKey = { state: "pressing", downPosition: mouse }
+      let segment = closestNearTo(mouse, Segment.s)?.object
+      if (segment?.isRigid) {
+         segment.isRigid = false
+         Segment.s = Segment.s
+      }
+   }
+   function fUp() {
+      endFlexSelect()
+      fKey = { state: "up" }
+   }
+   function rDown() {
+      rKey = { state: "pressing", downPosition: mouse }
+      let segment = closestNearTo(mouse, Segment.s)?.object
+      if (segment?.isRigid === false) {
+         segment.isRigid = true
+         Segment.s = Segment.s
+      }
+   }
+   function rUp() {
+      endRigidSelect()
+      rKey = { state: "up" }
+   }
    let waitedOneFrameLMB = false
    let waitedOneFrameRMB = false
    function leftMouseIsDown(event: MouseEvent) {
@@ -947,45 +988,23 @@
             atPart: grab.closestPart,
          })
       } else {
-         LMB = { ...LMB, state: "pressing", downPosition: mouse }
+         LMB = { state: "pressing", downPosition: mouse }
       }
    }
    function rightMouseDown() {
-      RMB = { ...RMB, state: "pressing", downPosition: mouse }
+      RMB = { state: "pressing", downPosition: mouse }
    }
-   function mouseMoved(previousMousePosition: Point) {
-      if (move) move.distance += mouse.distanceFrom(previousMousePosition)
-      // Update the actions that depend on mouse movement. (It's important that
-      // these updates are invoked BEFORE any begin___() functions. The begin___
-      // funcs may induce changes to derived data that the updates need to see.)
-      if (move) updateMove()
-      if (rectSelect) updateRectSelect()
-      if (LMB.state === "pressing") {
-         // Check if the mouse has moved enough to constitute a drag.
-         let dragVector = mouse.displacementFrom(LMB.downPosition)
-         let sqLengthRequiredForDragStart = {
-            select: sqSelectStartDistance,
-            draw: halfGap * halfGap, // larger values help axis detection
-         }
-         if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
-            LMB = { ...LMB, state: "dragging" }
-            beginLeftDragAction(dragVector)
-         }
+   function leftMouseUp(unexpectedly: boolean = false) {
+      if (LMB.state === "pressing" && !unexpectedly) {
+         leftMouseClicked()
+      } else if (LMB.state === "dragging") {
+         endMove()
+         endMultiSelect()
       }
-   }
-   function leftMousePressEnded(unexpectedly: true) {
       LMB = { state: "up" }
    }
-   function rightMousePressEnded(unexpectedly: true) {
-      RMB = { state: "up" }
-   }
-   function leftMouseDragEnded(unexpectedly: boolean = false) {
-      if (move) endMove()
-      if (rectSelect) endRectSelect()
-      LMB = { state: "up" }
-   }
-   function rightMouseDragEnded(unexpectedly: boolean = false) {
-      // TODO:
+   function rightMouseUp(unexpectedly: boolean = false) {
+      if (RMB.state === "pressing" && !unexpectedly) rightMouseClicked()
       RMB = { state: "up" }
    }
    function leftMouseClicked() {
@@ -1043,8 +1062,42 @@
          }
       }
    }
-   function rightMouseClicked() {
-      // TODO:
+   function rightMouseClicked() {}
+   function mouseMoved(previousMousePosition: Point) {
+      if (move) move.distance += mouse.distanceFrom(previousMousePosition)
+      // Update the actions that depend on mouse movement. (It's important that
+      // these updates are invoked BEFORE any begin___() functions. The begin___
+      // funcs may induce changes to derived data that the updates need to see.)
+      updateMove()
+      updateMultiSelect()
+      updateFlexSelect()
+      updateRigidSelect()
+      if (LMB.state === "pressing") {
+         // Check if the mouse has moved enough to constitute a drag.
+         let dragVector = mouse.displacementFrom(LMB.downPosition)
+         let sqLengthRequiredForDragStart = {
+            select: sqSelectStartDistance,
+            draw: halfGap * halfGap, // larger values help axis detection
+         }
+         if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
+            LMB = { ...LMB, state: "dragging" }
+            beginLeftDragAction(dragVector)
+         }
+      }
+      if (fKey.state === "pressing") {
+         let dragVector = mouse.displacementFrom(fKey.downPosition)
+         if (dragVector.sqLength() >= sqSelectStartDistance) {
+            fKey = { ...fKey, state: "dragging" }
+            beginFlexSelect(fKey.downPosition)
+         }
+      }
+      if (rKey.state === "pressing") {
+         let dragVector = mouse.displacementFrom(rKey.downPosition)
+         if (dragVector.sqLength() >= sqSelectStartDistance) {
+            rKey = { ...rKey, state: "dragging" }
+            beginRigidSelect(rKey.downPosition)
+         }
+      }
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -1052,7 +1105,7 @@
       if (LMB.state !== "dragging") return
       switch (tool) {
          case "select":
-            beginRectSelect()
+            beginMultiSelect(LMB.downPosition)
             break
          case "draw": {
             if (LMB.downJunction) {
@@ -1182,7 +1235,7 @@
       }
    }
    function beginRightDragAction(dragVector: Vector) {
-      // TODO:
+      if (RMB.state !== "dragging") return
    }
    type DrawInfo = { start: Vertex; axis: Axis }
    type MoveInfo = { grabbed: Grabbable; atPart: Point }
@@ -1808,64 +1861,76 @@
       if (move.draw?.segmentIsNew) deleteSelected()
       move = null
    }
-   function beginRectSelect() {
-      rectSelect = {
+   function beginMultiSelect(start: Point) {
+      multiSelect = {
          mode: alt ? "remove" : shift ? "add" : "new",
+         start,
          items: new Set(),
       }
-      if (rectSelect.mode === "new") selected = new ToggleSet()
+      if (multiSelect.mode === "new") selected = new ToggleSet()
    }
-   function updateRectSelect() {
-      if (!rectSelect || LMB.state === "up") return
-      rectSelect.items = new Set()
-      let range = Range2D.fromCorners(LMB.downPosition, mouse)
+   function beginFlexSelect(start: Point) {
+      flexSelect = { start, items: new Set() }
+   }
+   function beginRigidSelect(start: Point) {
+      rigidSelect = { start, items: new Set() }
+   }
+   function updateMultiSelect() {
+      if (!multiSelect) return
+      multiSelect.items = new Set()
+      let range = Range2D.fromCorners(multiSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) rectSelect.items.add(segment)
+         if (range.intersects(segment)) multiSelect.items.add(segment)
       for (let symbol of SymbolInstance.s)
-         if (range.intersects(symbol)) rectSelect.items.add(symbol)
-      // Because the rect select is INCLUSIVE, there is no point including
-      // vertices in the selection — their adjacent edges will supercede them.
-      // But if we are REMOVING from the selection, we should include junctions.
-      if (rectSelect.mode === "remove")
+         if (range.intersects(symbol)) multiSelect.items.add(symbol)
+      if (multiSelect.mode === "remove")
          for (let junction of Junction.s)
-            if (range.intersects(junction)) rectSelect.items.add(junction)
-
-      // Below is an unused implementation of EXCLUSIVE range selection.
-      // // Select fully-enclosed Segments.
-      // for (let segment of Segment.s) {
-      //    if (range.contains(segment.start) && range.contains(segment.end))
-      //       rectSelect.items.add(segment)
-      // }
-      // // Select fully-enclosed Junctions.
-      // next: for (let junction of Junction.s) {
-      //    if (range.contains(junction)) {
-      //       if (rectSelect.mode !== "remove") {
-      //          // Don't select the Junction if an adjacent Segment is selected.
-      //          for (let [segment] of junction.edges())
-      //             if (selected.has(segment) || rectSelect.items.has(segment))
-      //                continue next
-      //       }
-      //       rectSelect.items.add(junction)
-      //    }
-      // }
-      // // Select fully-enclosed Symbols.
-      // for (let symbol of SymbolInstance.s) {
-      //    if (symbol.svgCorners().every((c) => range.contains(c)))
-      //       rectSelect.items.add(symbol)
-      // }
+            if (range.intersects(junction)) multiSelect.items.add(junction)
    }
-   function endRectSelect() {
-      if (!rectSelect) return
-      if (rectSelect.mode === "remove") {
-         for (let item of rectSelect.items) selected.delete(item)
+   function updateFlexSelect() {
+      if (!flexSelect) return
+      flexSelect.items = new Set()
+      let range = Range2D.fromCorners(flexSelect.start, mouse)
+      for (let segment of Segment.s)
+         if (range.intersects(segment)) flexSelect.items.add(segment)
+   }
+   function updateRigidSelect() {
+      if (!rigidSelect) return
+      rigidSelect.items = new Set()
+      let range = Range2D.fromCorners(rigidSelect.start, mouse)
+      for (let segment of Segment.s)
+         if (range.intersects(segment)) rigidSelect.items.add(segment)
+   }
+   function endMultiSelect() {
+      if (!multiSelect) return
+      if (multiSelect.mode === "remove") {
+         for (let item of multiSelect.items) selected.delete(item)
       } else {
-         for (let item of rectSelect.items) selected.add(item)
+         for (let item of multiSelect.items) selected.add(item)
       }
       selected = selected
-      rectSelect = null
+      multiSelect = null
    }
-   function cancelRectSelect() {
-      rectSelect = null
+   function endFlexSelect() {
+      if (!flexSelect) return
+      for (let item of flexSelect.items) item.isRigid = false
+      Segment.s = Segment.s
+      flexSelect = null
+   }
+   function endRigidSelect() {
+      if (!rigidSelect) return
+      for (let item of rigidSelect.items) item.isRigid = true
+      Segment.s = Segment.s
+      rigidSelect = null
+   }
+   function cancelMultiSelect() {
+      multiSelect = null
+   }
+   function cancelFlexSelect() {
+      flexSelect = null
+   }
+   function cancelRigidSelect() {
+      rigidSelect = null
    }
    function deleteSelected() {
       let junctionsToConvert = new Set<Junction>()
@@ -1897,31 +1962,21 @@
    style="cursor: {cursor}"
    on:mousedown={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (leftMouseIsDown(event)) leftMouseDown()
-      if (rightMouseIsDown(event)) rightMouseDown()
+      if (leftMouseIsDown(event) && LMB.state === "up") leftMouseDown()
+      if (rightMouseIsDown(event) && RMB.state === "up") rightMouseDown()
    }}
    on:mousemove={(event) => {
       let previousMousePosition = mouse
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event) && LMB.state !== "up") {
-         if (waitedOneFrameLMB) {
-            if (LMB.state === "pressing") leftMousePressEnded(true)
-            if (LMB.state === "dragging") leftMouseDragEnded(true)
-            waitedOneFrameLMB = false
-         } else {
-            waitedOneFrameLMB = true
-         }
+         if (waitedOneFrameLMB) leftMouseUp(true)
+         else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
       if (!rightMouseIsDown(event) && RMB.state !== "up") {
-         if (waitedOneFrameRMB) {
-            if (RMB.state === "pressing") rightMousePressEnded(true)
-            if (RMB.state === "dragging") rightMouseDragEnded(true)
-            waitedOneFrameRMB = false
-         } else {
-            waitedOneFrameRMB = true
-         }
+         if (waitedOneFrameRMB) rightMouseUp(true)
+         else waitedOneFrameRMB = true
       } else {
          waitedOneFrameRMB = false
       }
@@ -1929,25 +1984,13 @@
    }}
    on:mouseup={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event)) {
-         if (LMB.state === "pressing") leftMouseClicked()
-         if (LMB.state === "dragging") leftMouseDragEnded()
-      }
-      if (!rightMouseIsDown(event)) {
-         if (RMB.state === "pressing") rightMouseClicked()
-         if (RMB.state === "dragging") rightMouseDragEnded()
-      }
+      if (!leftMouseIsDown(event) && LMB.state !== "up") leftMouseUp()
+      if (!rightMouseIsDown(event) && RMB.state !== "up") rightMouseUp()
    }}
    on:mouseenter={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event)) {
-         if (LMB.state === "pressing") leftMousePressEnded(true)
-         if (LMB.state === "dragging") leftMouseDragEnded(true)
-      }
-      if (!rightMouseIsDown(event)) {
-         if (RMB.state === "pressing") rightMousePressEnded(true)
-         if (RMB.state === "dragging") rightMouseDragEnded(true)
-      }
+      if (!leftMouseIsDown(event) && LMB.state !== "up") leftMouseUp(true)
+      if (!rightMouseIsDown(event) && RMB.state !== "up") rightMouseUp(true)
    }}
 >
    <!-- Symbol highlight/selection layer -->
@@ -1986,9 +2029,13 @@
    </g>
    <!-- Segment layer -->
    <g>
-      {#each [...segmentsToDraw] as [_, sections]}
+      {#each [...segmentsToDraw] as [segment, sections]}
          {#each sections as section}
-            <FluidLine segment={section} />
+            <FluidLine
+               segment={section}
+               isRigid={(segment.isRigid && !flexSelect?.items.has(segment)) ||
+                  rigidSelect?.items.has(segment)}
+            />
          {/each}
       {/each}
    </g>
@@ -2021,7 +2068,14 @@
          {:else if glyph.type === "junction node"}
             <JunctionNode position={glyph.junction} />
          {:else if glyph.type === "hopover"}
-            <Hopover start={glyph.start} end={glyph.end} flip={glyph.flip} />
+            <Hopover
+               start={glyph.start}
+               end={glyph.end}
+               flip={glyph.flip}
+               isRigid={(glyph.segment.isRigid &&
+                  !flexSelect?.items.has(glyph.segment)) ||
+                  rigidSelect?.items.has(glyph.segment)}
+            />
          {/if}
       {/each}
    </g>
@@ -2049,8 +2103,14 @@
    </g>
    <!-- HUD layer -->
    <g>
-      {#if rectSelect && LMB.state !== "up"}
-         <RectSelectBox start={LMB.downPosition} end={mouse} />
+      {#if multiSelect}
+         <RectSelectBox start={multiSelect.start} end={mouse} />
+      {/if}
+      {#if flexSelect}
+         <RectSelectBox start={flexSelect.start} end={mouse} />
+      {/if}
+      {#if rigidSelect}
+         <RectSelectBox start={rigidSelect.start} end={mouse} />
       {/if}
       {#each [...pushPaths] as [pass, path]}
          <path style="fill:{pass === 1 ? 'purple' : '#cc7a00'}" d={path} />
