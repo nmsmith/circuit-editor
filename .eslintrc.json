@@ -24,6 +24,7 @@
       "no-redeclare": "off",
       "no-debugger": "warn",
       "no-unreachable": "warn",
+      "no-constant-condition": "warn",
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-unused-vars": "off",
       "@typescript-eslint/no-empty-function": "off",

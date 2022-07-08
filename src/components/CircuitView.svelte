@@ -1,9 +1,3 @@
-<script lang="ts" context="module">
-   // ------------------------- Exported definitions --------------------------
-   export type Tool = "select" | "draw"
-   export type LineType = "hydraulic" | "pilot" | "drain"
-</script>
-
 <script lang="ts">
    import { onMount } from "svelte"
    import {
@@ -47,34 +41,20 @@
    import Plug from "~/components/lines/Plug.svelte"
 
    // ---------------------- Props (for input & output) -----------------------
-   // Props that must be bound by the parent component.
-   export let shift: boolean
-   export let alt: boolean
-   export let cmd: boolean
-   export let keyF: boolean
-   export let keyR: boolean
-   export let debug: boolean
-   export let onSymbolLeave: (
-      kind: SymbolKind,
-      grabOffset: Vector,
-      event: MouseEvent
-   ) => void
-   // Values shared with the parent component.
-   export const onToolSelected = toolSelected
-   export const onNextLineType = nextLineType
-   export const onSelectAll = selectAll
-   export const onDelete = deletePressed
-   export const onEscape = escapePressed
+   // Callbacks that must be bound by the parent component.
+   // export let onSymbolLeave: (
+   //    kind: SymbolKind,
+   //    grabOffset: Vector,
+   //    event: MouseEvent
+   // ) => void
+   // Callbacks shared with the parent component.
    export const onSymbolEnter = spawnSymbol
-   // Events triggered by updates to props.
-   $: shift ? shiftDown() : shiftUp()
-   $: alt ? altDown() : altUp()
-   $: cmd ? cmdDown() : cmdUp()
-   $: keyF ? fDown() : fUp()
-   $: keyR ? rDown() : rUp()
 
    // ------------------------------ Constants --------------------------------
    let canvas: SVGElement // the root element of this component
+   const buttonCodes = ["LMB", "RMB", "Space"]
+      .concat([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((c) => "Key" + c))
+      .concat([..."0123456789"].map((c) => "Digit" + c))
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -217,20 +197,37 @@
       let scores = ofAxes.map((axis) => Math.abs(to.dot(axis)))
       return ofAxes[scores.indexOf(Math.max(...scores))]
    }
+   function aButtonIsHeld(): boolean {
+      return (
+         (keyS.state ||
+            keyW.state ||
+            keyD.state ||
+            keyE.state ||
+            keyF.state ||
+            keyR.state ||
+            LMB.state ||
+            RMB.state) !== null
+      )
+   }
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let debug: boolean = false
    let mouse: Point
+   let [shift, alt, cmd] = [false, false, false]
    type ButtonState =
-      | { state: "up" }
+      | { state: null } // 'null' is more convenient than the string "up".
       // Pressing, but not yet moved enough to constitute a drag.
       | { state: "pressing"; downPosition: Point; downJunction?: Junction }
       | { state: "dragging"; downPosition: Point; downJunction?: Junction }
-   let LMB: ButtonState = { state: "up" }
-   let RMB: ButtonState = { state: "up" }
-   let fKey: ButtonState = { state: "up" }
-   let rKey: ButtonState = { state: "up" }
-   let tool: Tool = "draw"
+   let LMB: ButtonState = { state: null }
+   let RMB: ButtonState = { state: null }
+   let keyS: ButtonState = { state: null }
+   let keyW: ButtonState = { state: null }
+   let keyD: ButtonState = { state: null }
+   let keyE: ButtonState = { state: null }
+   let keyF: ButtonState = { state: null }
+   let keyR: ButtonState = { state: null }
    let move: null | {
       axisGrabbed: Axis
       partGrabbed: Point
@@ -649,28 +646,23 @@
          }
       }
    }
-   $: configuredToMove =
-      (tool === "select" && !shift && !alt && !cmd) ||
-      (tool === "draw" && shift && !alt && !cmd)
    let cursor: "default" | "cell" | "grab" | "grabbing"
    $: /* Set the appearance of the mouse cursor. */ {
       if (move) {
          cursor = "grabbing"
-      } else if (multiSelect || flexSelect || rigidSelect) {
-         cursor = "default"
-      } else if (configuredToMove) {
+      } else if (keyD.state || keyE.state) {
          if (closestGrabbable(mouse)) {
-            cursor = LMB.state === "pressing" ? "grabbing" : "grab"
+            cursor =
+               keyD.state === "pressing" || keyE.state === "pressing"
+                  ? "grabbing"
+                  : "grab"
          } else {
             cursor = "default"
          }
-      } else if (tool === "select") {
+      } else if (multiSelect || flexSelect || rigidSelect) {
          cursor = "default"
-      } else if (tool === "draw") {
-         cursor = "cell"
       } else {
-         cursor = "default"
-         console.warn("No cursor specified for the current configuration.")
+         cursor = "cell"
       }
    }
    let highlighted: Set<Highlightable>
@@ -680,10 +672,10 @@
          highlighted.add(move.draw.endObject)
       } else if (gapHighlighted.size > 0) {
          for (let s of gapHighlighted) highlighted.add(s)
-      } else if (configuredToMove && !move && !multiSelect) {
+      } else if ((keyD.state || keyE.state) && !move) {
          let grab = closestGrabbable(mouse)
          if (grab) highlighted.add(grab.object)
-      } else if (tool === "draw" && !move && !flexSelect && !rigidSelect) {
+      } else if (!aButtonIsHeld()) {
          let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
             if (thing.object instanceof Crossing) {
@@ -696,60 +688,59 @@
    }
    let gapHighlighted: Set<Segment>
    $: /* When activated, highlight all objects which are standardGap apart.*/ {
-      if (tool === "select" && !move && cmd) {
-         gapHighlighted = new Set()
-         let s = closestNearTo(mouse, Segment.s)
-         if (s) {
-            // Do gap highlighting (and later, selection) along the axis
-            // orthogonal to the segment's axis. To achieve this, we
-            // re-coordinatize every object that has the same orientation as
-            // the segment as an AABB, and search along the resultant y-axis.
-            let selectAxis = s.object.axis
-            let orthAxis = findAxis(selectAxis.orthogonal())
-            type SegmentInfo = {
-               segment: Segment
-               x: number[]
-               y: number[]
-               visited: boolean
-            }
-            let info = new Map<Segment, SegmentInfo>()
-            for (let seg of Segment.s) {
-               if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
-               let start = seg.start.relativeTo(selectAxis)
-               let end = seg.end.relativeTo(selectAxis)
-               let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
-               let y = start.y <= end.y ? [start.y, end.y] : [end.y, start.y]
-               info.set(seg, { segment: seg, x, y, visited: false })
-            }
-            let [front, back] =
-               s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
-               0
-                  ? [0, 1]
-                  : [1, 0]
-            gapHighlighted.add(s.object)
-            let startInfo = info.get(s.object) as SegmentInfo
-            startInfo.visited = true
-            highlightFrom(startInfo)
-            function highlightFrom(current: SegmentInfo) {
-               for (let i of info.values()) {
-                  if (i.visited) continue
-                  let disp = (back - front) * (i.y[front] - current.y[back])
-                  if (
-                     // If the bounding boxes are touching...
-                     Math.abs(disp - standardGap) < gapSelectError &&
-                     i.x[0] <= current.x[1] + standardGap &&
-                     i.x[1] >= current.x[0] - standardGap
-                  ) {
-                     gapHighlighted.add(i.segment)
-                     i.visited = true
-                     highlightFrom(i)
-                  }
-               }
-            }
-         }
-      } else {
-         gapHighlighted = new Set()
-      }
+      // if (tool === "select" && !move && cmd) {
+      //    gapHighlighted = new Set()
+      //    let s = closestNearTo(mouse, Segment.s)
+      //    if (s) {
+      //       // Do gap highlighting (and later, selection) along the axis
+      //       // orthogonal to the segment's axis. To achieve this, we
+      //       // re-coordinatize every object that has the same orientation as
+      //       // the segment as an AABB, and search along the resultant y-axis.
+      //       let selectAxis = s.object.axis
+      //       let orthAxis = findAxis(selectAxis.orthogonal())
+      //       type SegmentInfo = {
+      //          segment: Segment
+      //          x: number[]
+      //          y: number[]
+      //          visited: boolean
+      //       }
+      //       let info = new Map<Segment, SegmentInfo>()
+      //       for (let seg of Segment.s) {
+      //          if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
+      //          let start = seg.start.relativeTo(selectAxis)
+      //          let end = seg.end.relativeTo(selectAxis)
+      //          let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
+      //          let y = start.y <= end.y ? [start.y, end.y] : [end.y, start.y]
+      //          info.set(seg, { segment: seg, x, y, visited: false })
+      //       }
+      //       let [front, back] =
+      //          s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
+      //          0
+      //             ? [0, 1]
+      //             : [1, 0]
+      //       gapHighlighted.add(s.object)
+      //       let startInfo = info.get(s.object) as SegmentInfo
+      //       startInfo.visited = true
+      //       highlightFrom(startInfo)
+      //       function highlightFrom(current: SegmentInfo) {
+      //          for (let i of info.values()) {
+      //             if (i.visited) continue
+      //             let disp = (back - front) * (i.y[front] - current.y[back])
+      //             if (
+      //                // If the bounding boxes are touching...
+      //                Math.abs(disp - standardGap) < gapSelectError &&
+      //                i.x[0] <= current.x[1] + standardGap &&
+      //                i.x[1] >= current.x[0] - standardGap
+      //             ) {
+      //                gapHighlighted.add(i.segment)
+      //                i.visited = true
+      //                highlightFrom(i)
+      //             }
+      //          }
+      //       }
+      //    }
+      // } else
+      gapHighlighted = new Set()
    }
    type HighlightStyle = "hover" | "select" | "debug" | undefined
    $: styleOf = function (thing: Highlightable | Selectable): HighlightStyle {
@@ -877,52 +868,163 @@
    }
 
    // ---------------------------- Primary events -----------------------------
-   function toolSelected(newTool: Tool) {
-      if (tool === newTool && tool === "draw" && move?.draw) {
-         // Start a new draw operation at the current draw endpoint.
-         let endpoint = move.draw.segment.end as Junction
-         move.draw.endObject = undefined // Don't connect to anything else.
-         endMove(false)
-         LMB = {
-            state: "pressing",
-            downPosition: mouse,
-            downJunction: endpoint,
+   function buttonPressed(buttonCode: string) {
+      // This function abstracts over mouse and keyboard events.
+      switch (buttonCode) {
+         case "LMB":
+            abortAndReleaseAll()
+            LMB = { state: "pressing", downPosition: mouse }
+            break
+         case "RMB":
+            abortAndReleaseAll()
+            RMB = { state: "pressing", downPosition: mouse }
+            break
+         case "KeyA":
+            abortAndReleaseAll()
+            if (cmd) {
+               // Select everything in the circuit.
+               selected = new ToggleSet()
+               for (let segment of Segment.s) selected.add(segment)
+               for (let symbol of SymbolInstance.s) selected.add(symbol)
+            }
+            break
+         case "KeyS": {
+            abortAndReleaseAll()
+            keyS = { state: "pressing", downPosition: mouse }
+            let grab = closestGrabbable(mouse)
+            if (grab) {
+               if (shift) selected.toggle(grab.object)
+               else if (alt) selected.delete(grab.object)
+               else selected = new ToggleSet([grab.object])
+               selected = selected
+            } else if (!shift && !alt) {
+               selected = new ToggleSet()
+            }
+            break
          }
-      } else {
-         tool = newTool
-         if (tool === "draw" && !move) selected = new ToggleSet()
+         case "KeyW": {
+            abortAndReleaseAll()
+            keyW = { state: "pressing", downPosition: mouse }
+            break
+         }
+         case "KeyD": {
+            abortAndReleaseAll()
+            let grab = closestGrabbable(mouse)
+            if (grab) {
+               // Jump straight to a drag operation.
+               keyD = { state: "dragging", downPosition: mouse }
+               if (!selected.has(grab.object))
+                  selected = new ToggleSet([grab.object])
+               beginMove("move", {
+                  grabbed: grab.object,
+                  atPart: grab.closestPart,
+               })
+            }
+            break
+         }
+         case "KeyE":
+            abortAndReleaseAll()
+            keyE = { state: "pressing", downPosition: mouse }
+            break
+         case "KeyF":
+            if (LMB.state) {
+               chainDraw(false)
+            } else {
+               abortAndReleaseAll()
+               keyF = { state: "pressing", downPosition: mouse }
+               let segment = closestNearTo(mouse, Segment.s)?.object
+               if (segment?.isRigid) {
+                  segment.isRigid = false
+                  Segment.s = Segment.s
+               }
+            }
+            break
+         case "KeyR":
+            if (LMB.state) {
+               chainDraw(true)
+            } else {
+               abortAndReleaseAll()
+               keyR = { state: "pressing", downPosition: mouse }
+               let segment = closestNearTo(mouse, Segment.s)?.object
+               if (segment?.isRigid === false) {
+                  segment.isRigid = true
+                  Segment.s = Segment.s
+               }
+            }
+            break
+         case "Backspace":
+         case "Delete":
+            if (!aButtonIsHeld()) deleteSelected()
+            break
+         case "Escape":
+            abortAndReleaseAll()
+            break
+         case "Backquote":
+            debug = !debug
+            break
       }
    }
-   function nextLineType() {
-      // TODO — toggle through line types.
-   }
-   function selectAll() {
-      if (tool === "select") {
-         selected = new ToggleSet()
-         for (let segment of Segment.s) selected.add(segment)
-         for (let symbol of SymbolInstance.s) selected.add(symbol)
+   function buttonReleased(buttonCode: string) {
+      switch (buttonCode) {
+         case "LMB":
+            if (LMB.state === "pressing") {
+               leftMouseClicked()
+            } else if (LMB.state === "dragging") {
+               endMove()
+               endMultiSelect()
+            }
+            LMB = { state: null }
+            break
+         case "RMB":
+            if (RMB.state === "pressing") {
+               // A click occurred.
+            }
+            RMB = { state: null }
+            break
+         case "KeyS":
+            if (keyS.state) {
+               endMultiSelect()
+               keyS = { state: null }
+            }
+            break
+         case "KeyW":
+            if (keyW.state) {
+               keyW = { state: null }
+            }
+            break
+         case "KeyD":
+            if (keyD.state) {
+               endMove()
+               keyD = { state: null }
+            }
+            break
+         case "KeyE":
+            if (keyE.state) {
+               keyE = { state: null }
+            }
+            break
+         case "KeyF":
+            if (keyF.state) {
+               endFlexSelect()
+               keyF = { state: null }
+            }
+            break
+         case "KeyR":
+            if (keyR.state) {
+               endRigidSelect()
+               keyR = { state: null }
+            }
+            break
       }
    }
-   function deletePressed() {
-      if (!multiSelect && !flexSelect && !rigidSelect && !move) deleteSelected() // Disable deletion mid-action.
+   function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
+      shift = event.getModifierState("Shift")
+      alt = event.getModifierState("Alt")
+      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
    }
-   function escapePressed() {
-      // Abort the current operation.
-      cancelMove()
-      cancelMultiSelect()
-      cancelFlexSelect()
-      cancelRigidSelect()
-   }
-   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
-      // Update the mouse's state.
-      let p = mouseInCoordinateSystemOf(canvas, e)
-      LMB = { state: "dragging", downPosition: p }
-      // Spawn a symbol on the canvas, and initiate a move action.
-      let spawnPosition = mouse.displacedBy(grabOffset)
-      let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      selected = new ToggleSet([symbol])
-      beginMove("move", { grabbed: symbol, atPart: mouse })
-   }
+   $: shift ? shiftDown() : shiftUp()
+   $: alt ? altDown() : altUp()
+   $: cmd ? cmdDown() : cmdUp()
    function shiftDown() {}
    function shiftUp() {}
    function altDown() {
@@ -941,30 +1043,6 @@
    function altUp() {}
    function cmdDown() {}
    function cmdUp() {}
-   function fDown() {
-      fKey = { state: "pressing", downPosition: mouse }
-      let segment = closestNearTo(mouse, Segment.s)?.object
-      if (segment?.isRigid) {
-         segment.isRigid = false
-         Segment.s = Segment.s
-      }
-   }
-   function fUp() {
-      endFlexSelect()
-      fKey = { state: "up" }
-   }
-   function rDown() {
-      rKey = { state: "pressing", downPosition: mouse }
-      let segment = closestNearTo(mouse, Segment.s)?.object
-      if (segment?.isRigid === false) {
-         segment.isRigid = true
-         Segment.s = Segment.s
-      }
-   }
-   function rUp() {
-      endRigidSelect()
-      rKey = { state: "up" }
-   }
    let waitedOneFrameLMB = false
    let waitedOneFrameRMB = false
    function leftMouseIsDown(event: MouseEvent) {
@@ -973,96 +1051,40 @@
    function rightMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b010) !== 0
    }
-   function leftMouseDown() {
-      let grab = closestGrabbable(mouse)
-      if (configuredToMove && grab) {
-         // Immediately treat the operation as a drag.
-         LMB = { ...LMB, state: "dragging", downPosition: mouse }
-         if (cmd) {
-            selected = new ToggleSet(gapHighlighted)
-         } else if (!selected.has(grab.object)) {
-            selected = new ToggleSet([grab.object])
-         }
-         beginMove("move", {
-            grabbed: grab.object,
-            atPart: grab.closestPart,
-         })
-      } else {
-         LMB = { state: "pressing", downPosition: mouse }
-      }
-   }
-   function rightMouseDown() {
-      RMB = { state: "pressing", downPosition: mouse }
-   }
-   function leftMouseUp(unexpectedly: boolean = false) {
-      if (LMB.state === "pressing" && !unexpectedly) {
-         leftMouseClicked()
-      } else if (LMB.state === "dragging") {
-         endMove()
-         endMultiSelect()
-      }
-      LMB = { state: "up" }
-   }
-   function rightMouseUp(unexpectedly: boolean = false) {
-      if (RMB.state === "pressing" && !unexpectedly) rightMouseClicked()
-      RMB = { state: "up" }
-   }
    function leftMouseClicked() {
-      switch (tool) {
-         case "select": {
-            let grab = closestGrabbable(mouse)
-            if (grab) {
-               if (shift && cmd) for (let s of gapHighlighted) selected.add(s)
-               else if (shift && !cmd) selected.toggle(grab.object)
-               else if (alt && cmd)
-                  for (let s of gapHighlighted) selected.delete(s)
-               else if (alt && !cmd) selected.delete(grab.object)
-               else selected = new ToggleSet([grab.object])
-            } else {
-               if (!shift && !alt && !cmd) selected.clear()
-            }
-            selected = selected
-            break
+      let toggle = closestToggleable(mouse)
+      if (!toggle) return
+      if (isVertex(toggle.object)) {
+         if (toggle.object.glyph === "default") {
+            toggle.object.glyph = "plug"
+         } else {
+            toggle.object.glyph = "default"
+            if (toggle.object instanceof Junction)
+               toggle.object.convertToCrossing(
+                  crossingMap,
+                  crossingToggleSeq[0]
+               )
          }
-         case "draw": {
-            if (configuredToMove) break // Clicks should have no effect.
-            let toggle = closestToggleable(mouse)
-            if (!toggle) break
-            if (isVertex(toggle.object)) {
-               if (toggle.object.glyph === "default") {
-                  toggle.object.glyph = "plug"
-               } else {
-                  toggle.object.glyph = "default"
-                  if (toggle.object instanceof Junction)
-                     toggle.object.convertToCrossing(
-                        crossingMap,
-                        crossingToggleSeq[0]
-                     )
-               }
-            } else if (toggle.object instanceof Segment) {
-               let cutPoint = new Junction(toggle.closestPart)
-               toggle.object.splitAt(cutPoint)
-               cutPoint.glyph = "plug"
-            } else if (toggle.object instanceof Crossing) {
-               // Change the crossing glyph.
-               let { seg1, seg2 } = toggle.object
-               let oldType = seg1.crossingTypes.read(seg2)
-               let i = crossingToggleSeq.indexOf(oldType) + 1
-               if (i < crossingToggleSeq.length) {
-                  seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
-                  seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
-               } else {
-                  convertToJunction(toggle.object)
-               }
-            }
-            Junction.s = Junction.s
-            Segment.s = Segment.s
-            Port.s = Port.s
-            break
+      } else if (toggle.object instanceof Segment) {
+         let cutPoint = new Junction(toggle.closestPart)
+         toggle.object.splitAt(cutPoint)
+         cutPoint.glyph = "plug"
+      } else if (toggle.object instanceof Crossing) {
+         // Change the crossing glyph.
+         let { seg1, seg2 } = toggle.object
+         let oldType = seg1.crossingTypes.read(seg2)
+         let i = crossingToggleSeq.indexOf(oldType) + 1
+         if (i < crossingToggleSeq.length) {
+            seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
+            seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
+         } else {
+            convertToJunction(toggle.object)
          }
       }
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      Port.s = Port.s
    }
-   function rightMouseClicked() {}
    function mouseMoved(previousMousePosition: Point) {
       if (move) move.distance += mouse.distanceFrom(previousMousePosition)
       // Update the actions that depend on mouse movement. (It's important that
@@ -1072,170 +1094,175 @@
       updateMultiSelect()
       updateFlexSelect()
       updateRigidSelect()
+      // Check for the initiation of drag-based operations.
       if (LMB.state === "pressing") {
-         // Check if the mouse has moved enough to constitute a drag.
          let dragVector = mouse.displacementFrom(LMB.downPosition)
-         let sqLengthRequiredForDragStart = {
-            select: sqSelectStartDistance,
-            draw: halfGap * halfGap, // larger values help axis detection
-         }
-         if (dragVector.sqLength() >= sqLengthRequiredForDragStart[tool]) {
+         if (dragVector.sqLength() >= halfGap * halfGap) {
             LMB = { ...LMB, state: "dragging" }
-            beginLeftDragAction(dragVector)
+            beginDraw(dragVector)
          }
       }
-      if (fKey.state === "pressing") {
-         let dragVector = mouse.displacementFrom(fKey.downPosition)
+      if (keyS.state === "pressing") {
+         let dragVector = mouse.displacementFrom(keyS.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            fKey = { ...fKey, state: "dragging" }
-            beginFlexSelect(fKey.downPosition)
+            keyS = { ...keyS, state: "dragging" }
+            beginMultiSelect(keyS.downPosition)
          }
       }
-      if (rKey.state === "pressing") {
-         let dragVector = mouse.displacementFrom(rKey.downPosition)
+      if (keyF.state === "pressing") {
+         let dragVector = mouse.displacementFrom(keyF.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            rKey = { ...rKey, state: "dragging" }
-            beginRigidSelect(rKey.downPosition)
+            keyF = { ...keyF, state: "dragging" }
+            beginFlexSelect(keyF.downPosition)
          }
       }
+      if (keyR.state === "pressing") {
+         let dragVector = mouse.displacementFrom(keyR.downPosition)
+         if (dragVector.sqLength() >= sqSelectStartDistance) {
+            keyR = { ...keyR, state: "dragging" }
+            beginRigidSelect(keyR.downPosition)
+         }
+      }
+   }
+   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
+      // Update the mouse's state.
+      let p = mouseInCoordinateSystemOf(canvas, e)
+      LMB = { state: "dragging", downPosition: p }
+      // Spawn a symbol on the canvas, and initiate a move action.
+      let spawnPosition = mouse.displacedBy(grabOffset)
+      let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
+      selected = new ToggleSet([symbol])
+      beginMove("move", { grabbed: symbol, atPart: mouse })
    }
 
    // ---------------------------- Derived events -----------------------------
-   function beginLeftDragAction(dragVector: Vector) {
+   function beginDraw(dragVector: Vector) {
       if (LMB.state !== "dragging") return
-      switch (tool) {
-         case "select":
-            beginMultiSelect(LMB.downPosition)
-            break
-         case "draw": {
-            if (LMB.downJunction) {
-               // Start the draw operation at the endpoint of the previous
-               // draw operation.
-               let lastDrawAxis = LMB.downJunction.axes()[0]
-               // Determine the axis the draw operation should begin along.
-               let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
-               if (drawMode === "strafing") {
-                  drawAxis = nearestAxis(
-                     drawAxis,
-                     primaryAxes.filter((axis) => axis !== lastDrawAxis)
-                  )
-               } else if (drawMode === "snapped rotation") {
-                  drawAxis = nearestAxis(
-                     drawAxis,
-                     snapAxes.filter((axis) => axis !== lastDrawAxis)
-                  )
-               }
-               beginMove("draw", { start: LMB.downJunction, axis: drawAxis })
-               break // Exit the switch statement.
-            } else if (
-               closestAttachableOrToggleable(LMB.downPosition)
-                  ?.object instanceof Crossing
-            ) {
-               break // Don't allow draw operations to start at crossings.
-            }
-            // Otherwise, start the draw operation at the closest attachable.
-            let attach = closestAttachable(LMB.downPosition)
-            // Determine the axis the draw operation should begin along.
-            let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
-            let standardAxes =
-               drawMode === "strafing"
-                  ? primaryAxes
-                  : drawMode === "snapped rotation"
-                  ? snapAxes
-                  : [dragAxis]
-            if (attach?.object instanceof Segment) {
-               let segment = attach.object
-               let closestPart = attach.closestPart
-               let drawAxis =
-                  drawMode === "strafing"
-                     ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
-                     : drawMode === "snapped rotation"
-                     ? nearestAxis(dragAxis, standardAxes)
-                     : dragAxis
-               if (drawMode !== "free rotation" && drawAxis === segment.axis) {
-                  // Cut the segment, and allow the user to move one side of it.
-                  let direction = segment.start.displacementFrom(closestPart)
-                  let [newStart, other] =
-                     direction.dot(dragVector) > 0
-                        ? [segment.start, segment.end]
-                        : [segment.end, segment.start]
-                  let jMove = new Junction(closestPart)
-                  let jOther = new Junction(closestPart)
-                  let moveSegment = new Segment(newStart, jMove, drawAxis)
-                  let otherSegment = new Segment(other, jOther, drawAxis)
-                  segment.replaceWith(moveSegment, otherSegment)
-                  selected = new ToggleSet([jMove])
-                  beginMove("move", { grabbed: jMove, atPart: jMove })
-               } else {
-                  // Create a T-junction.
-                  let junction = new Junction(closestPart)
-                  segment.splitAt(junction)
-                  beginMove("draw", { start: junction, axis: drawAxis })
-               }
-            } else if (attach) {
-               let vertex = attach.object
-               let beganMove = false
-               if (drawMode !== "free rotation") {
-                  let considerAxis =
-                     drawMode === "strafing"
-                        ? // Consider vertex axes, in case the user wants to
-                          // extend/unplug a segment.
-                          nearestAxis(dragAxis, [
-                             ...standardAxes,
-                             ...vertex.axes(),
-                          ])
-                        : nearestAxis(dragAxis, standardAxes)
-                  if (
-                     vertex instanceof Junction &&
-                     shouldExtendTheSegmentAt(vertex, considerAxis)
-                  ) {
-                     // Extend the segment.
-                     selected = new ToggleSet([vertex])
-                     beginMove("move", { grabbed: vertex, atPart: vertex })
-                     beganMove = true
-                  } else {
-                     for (let [segment, other] of vertex.edges()) {
-                        if (segment.axis !== considerAxis) continue
-                        if (other.displacementFrom(vertex).dot(dragVector) <= 0)
-                           continue
-                        // Unplug this segment from the vertex.
-                        let junction = new Junction(vertex)
-                        segment.replaceWith(
-                           new Segment(other, junction, considerAxis)
-                        )
-                        if (
-                           vertex instanceof Junction &&
-                           vertex.edges().size === 2
-                        ) {
-                           vertex.convertToCrossing(crossingMap)
-                        }
-                        // Allow the user to move the unplugged segment around.
-                        selected = new ToggleSet([junction])
-                        beginMove("move", {
-                           grabbed: junction,
-                           atPart: junction,
-                        })
-                        beganMove = true
-                        break
-                     }
-                  }
-               }
-               if (!beganMove)
-                  beginMove("draw", {
-                     start: vertex,
-                     axis: nearestAxis(dragAxis, standardAxes),
-                  })
-            } else
-               beginMove("draw", {
-                  start: new Junction(LMB.downPosition),
-                  axis: nearestAxis(dragAxis, standardAxes),
-               })
-            break
+      if (LMB.downJunction) {
+         // Start the draw operation at the endpoint of the previous
+         // draw operation.
+         let lastDrawAxis = LMB.downJunction.axes()[0]
+         // Determine the axis the draw operation should begin along.
+         let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+         if (drawMode === "strafing") {
+            drawAxis = nearestAxis(
+               drawAxis,
+               primaryAxes.filter((axis) => axis !== lastDrawAxis)
+            )
+         } else if (drawMode === "snapped rotation") {
+            drawAxis = nearestAxis(
+               drawAxis,
+               snapAxes.filter((axis) => axis !== lastDrawAxis)
+            )
          }
+         beginMove("draw", { start: LMB.downJunction, axis: drawAxis })
+         return
+      } else if (
+         closestAttachableOrToggleable(LMB.downPosition)?.object instanceof
+         Crossing
+      ) {
+         return // Don't allow draw operations to start at crossings.
       }
+      // Otherwise, start the draw operation at the closest attachable.
+      let attach = closestAttachable(LMB.downPosition)
+      // Determine the axis the draw operation should begin along.
+      let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+      let standardAxes =
+         drawMode === "strafing"
+            ? primaryAxes
+            : drawMode === "snapped rotation"
+            ? snapAxes
+            : [dragAxis]
+      if (attach?.object instanceof Segment) {
+         let segment = attach.object
+         let closestPart = attach.closestPart
+         let drawAxis =
+            drawMode === "strafing"
+               ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
+               : drawMode === "snapped rotation"
+               ? nearestAxis(dragAxis, standardAxes)
+               : dragAxis
+         if (drawMode !== "free rotation" && drawAxis === segment.axis) {
+            // Cut the segment, and allow the user to move one side of it.
+            let direction = segment.start.displacementFrom(closestPart)
+            let [newStart, other] =
+               direction.dot(dragVector) > 0
+                  ? [segment.start, segment.end]
+                  : [segment.end, segment.start]
+            let jMove = new Junction(closestPart)
+            let jOther = new Junction(closestPart)
+            let moveSegment = new Segment(newStart, jMove, drawAxis)
+            let otherSegment = new Segment(other, jOther, drawAxis)
+            segment.replaceWith(moveSegment, otherSegment)
+            selected = new ToggleSet([jMove])
+            beginMove("move", { grabbed: jMove, atPart: jMove })
+         } else {
+            // Create a T-junction.
+            let junction = new Junction(closestPart)
+            segment.splitAt(junction)
+            beginMove("draw", { start: junction, axis: drawAxis })
+         }
+      } else if (attach) {
+         let vertex = attach.object
+         let beganMove = false
+         if (drawMode !== "free rotation") {
+            let considerAxis =
+               drawMode === "strafing"
+                  ? // Consider vertex axes, in case the user wants to
+                    // extend/unplug a segment.
+                    nearestAxis(dragAxis, [...standardAxes, ...vertex.axes()])
+                  : nearestAxis(dragAxis, standardAxes)
+            if (
+               vertex instanceof Junction &&
+               shouldExtendTheSegmentAt(vertex, considerAxis)
+            ) {
+               // Extend the segment.
+               selected = new ToggleSet([vertex])
+               beginMove("move", { grabbed: vertex, atPart: vertex })
+               beganMove = true
+            } else {
+               for (let [segment, other] of vertex.edges()) {
+                  if (segment.axis !== considerAxis) continue
+                  if (other.displacementFrom(vertex).dot(dragVector) <= 0)
+                     continue
+                  // Unplug this segment from the vertex.
+                  let junction = new Junction(vertex)
+                  segment.replaceWith(
+                     new Segment(other, junction, considerAxis)
+                  )
+                  if (vertex instanceof Junction && vertex.edges().size === 2)
+                     vertex.convertToCrossing(crossingMap)
+                  // Allow the user to move the unplugged segment around.
+                  selected = new ToggleSet([junction])
+                  beginMove("move", { grabbed: junction, atPart: junction })
+                  beganMove = true
+                  break
+               }
+            }
+         }
+         if (!beganMove)
+            beginMove("draw", {
+               start: vertex,
+               axis: nearestAxis(dragAxis, standardAxes),
+            })
+      } else
+         beginMove("draw", {
+            start: new Junction(LMB.downPosition),
+            axis: nearestAxis(dragAxis, standardAxes),
+         })
    }
-   function beginRightDragAction(dragVector: Vector) {
-      if (RMB.state !== "dragging") return
+   function chainDraw(makeCurrentRigid: boolean) {
+      if (!move?.draw) return
+      move.draw.segment.isRigid = makeCurrentRigid
+      // Start a new draw operation at the current draw endpoint.
+      let endpoint = move.draw.segment.end as Junction
+      move.draw.endObject = undefined // Don't connect to anything else.
+      endMove(false)
+      LMB = {
+         state: "pressing",
+         downPosition: mouse,
+         downJunction: endpoint,
+      }
    }
    type DrawInfo = { start: Vertex; axis: Axis }
    type MoveInfo = { grabbed: Grabbable; atPart: Point }
@@ -1313,7 +1340,13 @@
       }
    }
    function updateMove() {
-      if (!move || LMB.state === "up") return
+      if (!move) return
+      let downPosition: Point
+      if (LMB.state === "dragging") {
+         downPosition = LMB.downPosition
+      } else if (keyD.state === "dragging") {
+         downPosition = keyD.downPosition
+      } else return
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -1415,7 +1448,7 @@
          // The user may have grabbed slightly-away from their target object.
          // If so, gradually pull the object towards the mouse cursor.
          fullMove = mouse.displacementFrom(
-            LMB.downPosition.interpolatedToward(
+            downPosition.interpolatedToward(
                move.partGrabbed,
                move.distance / 15
             )
@@ -1841,14 +1874,14 @@
          } else if (allowedToDelete) deleteSelected()
       }
       move = null
-      if (tool === "draw") selected = new ToggleSet()
+      if (LMB.state) selected = new ToggleSet()
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
    }
-   function cancelMove() {
+   function abortMove() {
       if (!move) return
       // TODO: This approach doesn't work if Alt or Shift are used during the
       // movement, since this resets move.originalPositions. The "right" way to
@@ -1923,14 +1956,21 @@
       Segment.s = Segment.s
       rigidSelect = null
    }
-   function cancelMultiSelect() {
+   function abortMultiSelect() {
       multiSelect = null
    }
-   function cancelFlexSelect() {
+   function abortFlexSelect() {
       flexSelect = null
    }
-   function cancelRigidSelect() {
+   function abortRigidSelect() {
       rigidSelect = null
+   }
+   function abortAndReleaseAll() {
+      abortMove()
+      abortMultiSelect()
+      abortFlexSelect()
+      abortRigidSelect()
+      for (let code of buttonCodes) buttonReleased(code)
    }
    function deleteSelected() {
       let junctionsToConvert = new Set<Junction>()
@@ -1957,25 +1997,46 @@
    })
 </script>
 
+<!-- svelte-ignore missing-declaration -->
+<!----------------------------- Keyboard events ------------------------------>
+<svelte:window
+   on:mousemove={updateModifierKeys}
+   on:keydown={(event) => {
+      updateModifierKeys(event)
+      if (event.repeat) return // Ignore repeated events from held-down keys.
+      buttonPressed(event.code)
+   }}
+   on:keyup={(event) => {
+      updateModifierKeys(event)
+      buttonReleased(event.code)
+   }}
+   on:blur={() => {
+      shift = false
+      alt = false
+      cmd = false
+      abortAndReleaseAll()
+   }}
+/>
+
 <svg
    bind:this={canvas}
    style="cursor: {cursor}"
    on:mousedown={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (leftMouseIsDown(event) && LMB.state === "up") leftMouseDown()
-      if (rightMouseIsDown(event) && RMB.state === "up") rightMouseDown()
+      if (leftMouseIsDown(event) && LMB.state === null) buttonPressed("LMB")
+      if (rightMouseIsDown(event) && RMB.state === null) buttonPressed("RMB")
    }}
    on:mousemove={(event) => {
       let previousMousePosition = mouse
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== "up") {
-         if (waitedOneFrameLMB) leftMouseUp(true)
+      if (!leftMouseIsDown(event) && LMB.state !== null) {
+         if (waitedOneFrameLMB) abortAndReleaseAll()
          else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
-      if (!rightMouseIsDown(event) && RMB.state !== "up") {
-         if (waitedOneFrameRMB) rightMouseUp(true)
+      if (!rightMouseIsDown(event) && RMB.state !== null) {
+         if (waitedOneFrameRMB) abortAndReleaseAll()
          else waitedOneFrameRMB = true
       } else {
          waitedOneFrameRMB = false
@@ -1984,13 +2045,13 @@
    }}
    on:mouseup={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== "up") leftMouseUp()
-      if (!rightMouseIsDown(event) && RMB.state !== "up") rightMouseUp()
+      if (!leftMouseIsDown(event) && LMB.state !== null) buttonReleased("LMB")
+      if (!rightMouseIsDown(event) && RMB.state !== null) buttonReleased("RMB")
    }}
    on:mouseenter={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== "up") leftMouseUp(true)
-      if (!rightMouseIsDown(event) && RMB.state !== "up") rightMouseUp(true)
+      if (!leftMouseIsDown(event) && LMB.state !== null) abortAndReleaseAll()
+      if (!rightMouseIsDown(event) && RMB.state !== null) abortAndReleaseAll()
    }}
 >
    <!-- Symbol highlight/selection layer -->

@@ -2,22 +2,14 @@
    import type { SymbolKind } from "~/shared/definitions"
    import { Vector, Point, Range1D, Range2D } from "~/shared/geometry"
    import { mouseInCoordinateSystemOf } from "~/shared/utilities"
-   import CircuitView, { Tool } from "~/components/CircuitView.svelte"
+   import CircuitView from "~/components/CircuitView.svelte"
    // State
    let mouse: Point = Point.zero
 
-   // State passed to CircuitView
-   let tool: Tool = "draw"
-   let [shift, alt, cmd, keyF, keyR] = [false, false, false, false, false]
-   let debug: boolean = false
-   function onSymbolLeave() {}
+   // Callbacks passed to CircuitView
+   // function onSymbolLeave() {}
 
    // Callbacks obtained from circuitView
-   let onToolSelected: (newTool: Tool) => void
-   let onNextLineType: () => void
-   let onSelectAll: () => void
-   let onDelete: () => void
-   let onEscape: () => void
    let onSymbolEnter: (
       kind: SymbolKind,
       grabOffset: Vector,
@@ -78,70 +70,7 @@
    function absolutePosition(p: Point) {
       return `position: absolute; left: ${p.x}px; top: ${p.y}px`
    }
-   function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
-      shift = event.getModifierState("Shift")
-      alt = event.getModifierState("Alt")
-      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
-   }
 </script>
-
-<svelte:window
-   on:mousemove={updateModifierKeys}
-   on:keydown={(event) => {
-      updateModifierKeys(event)
-      if (event.repeat) return // Ignore repeated events from held-down keys.
-      switch (event.code) {
-         case "KeyA":
-            if (cmd) onSelectAll()
-            break
-         case "KeyS":
-            tool = "select"
-            onToolSelected(tool) // called even if the tool is the same
-            break
-         case "KeyD":
-            tool = "draw"
-            onToolSelected(tool) // called even if the tool is the same
-            break
-         case "KeyE":
-            onNextLineType()
-            break
-         case "KeyF":
-            keyF = true
-            break
-         case "KeyR":
-            keyR = true
-            break
-         case "Backspace":
-         case "Delete":
-            onDelete()
-            break
-         case "Escape":
-            onEscape()
-            break
-         case "Backquote":
-            debug = !debug
-            break
-      }
-   }}
-   on:keyup={(event) => {
-      updateModifierKeys(event)
-      switch (event.code) {
-         case "KeyF":
-            keyF = false
-            break
-         case "KeyR":
-            keyR = false
-            break
-      }
-   }}
-   on:blur={() => {
-      shift = false
-      alt = false
-      cmd = false
-      keyF = false
-      keyR = false
-   }}
-/>
 
 <div
    id="app"
@@ -154,22 +83,7 @@
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
    }}
 >
-   <CircuitView
-      {shift}
-      {alt}
-      {cmd}
-      {keyF}
-      {keyR}
-      {debug}
-      {onSymbolLeave}
-      bind:onToolSelected
-      bind:onNextLineType
-      bind:onSelectAll
-      bind:onDelete
-      bind:onEscape
-      bind:onSymbolEnter
-   />
-   <div class="toolText">{tool}</div>
+   <CircuitView bind:onSymbolEnter />
    <div
       class="symbolPane"
       on:mouseup={() => {
@@ -293,7 +207,7 @@
    .grabbedSymbolImage {
       pointer-events: none;
    }
-   .toolText {
+   /* .toolText {
       position: absolute;
       left: 8px;
       top: 8px;
@@ -302,5 +216,5 @@
       user-select: none;
       -webkit-user-select: none;
       cursor: default;
-   }
+   } */
 </style>
