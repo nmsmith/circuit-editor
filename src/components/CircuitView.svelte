@@ -270,6 +270,7 @@
       operationG: { state: null },
       nothing: { state: null },
    }
+   let [lmbShouldBeDown, rmbShouldBeDown] = [false, false]
    let move: null | {
       axisGrabbed: Axis
       partGrabbed: Point
@@ -1866,6 +1867,8 @@
       abortFreezeSelect()
       for (let b of Object.keys(button) as Array<keyof typeof button>)
          buttonReleased(b)
+      lmbShouldBeDown = false
+      rmbShouldBeDown = false
    }
    function deleteItems(items: Iterable<Grabbable>) {
       let junctionsToConvert = new Set<Junction>()
@@ -1919,21 +1922,25 @@
    style="cursor: {cursor}"
    on:mousedown={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (leftMouseIsDown(event) && button[buttonMap.LMB].state === null)
+      if (leftMouseIsDown(event) && !lmbShouldBeDown) {
          buttonPressed(buttonMap.LMB)
-      if (rightMouseIsDown(event) && button[buttonMap.RMB].state === null)
+         lmbShouldBeDown = true
+      }
+      if (rightMouseIsDown(event) && !rmbShouldBeDown) {
          buttonPressed(buttonMap.RMB)
+         rmbShouldBeDown = true
+      }
    }}
    on:mousemove={(event) => {
       let previousMousePosition = mouse
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null) {
+      if (!leftMouseIsDown(event) && lmbShouldBeDown) {
          if (waitedOneFrameLMB) abortAndReleaseAll()
          else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
-      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null) {
+      if (!rightMouseIsDown(event) && rmbShouldBeDown) {
          if (waitedOneFrameRMB) abortAndReleaseAll()
          else waitedOneFrameRMB = true
       } else {
@@ -1943,17 +1950,19 @@
    }}
    on:mouseup={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null)
+      if (!leftMouseIsDown(event) && lmbShouldBeDown) {
          buttonReleased(buttonMap.LMB)
-      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null)
+         lmbShouldBeDown = false
+      }
+      if (!rightMouseIsDown(event) && rmbShouldBeDown) {
          buttonReleased(buttonMap.RMB)
+         rmbShouldBeDown = false
+      }
    }}
    on:mouseenter={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null)
-         abortAndReleaseAll()
-      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null)
-         abortAndReleaseAll()
+      if (!leftMouseIsDown(event) && lmbShouldBeDown) abortAndReleaseAll()
+      if (!rightMouseIsDown(event) && rmbShouldBeDown) abortAndReleaseAll()
    }}
 >
    <!-- Symbol highlight/selection layer -->
