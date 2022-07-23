@@ -155,11 +155,11 @@
    :global(.fluid.fill) {
       fill: blue;
    }
-   :global(.flexible.stroke) {
+   :global(.relaxed.stroke) {
       stroke: rgb(0, 140, 75);
       fill: none;
    }
-   :global(.flexible.fill) {
+   :global(.relaxed.fill) {
       fill: rgb(0, 140, 75);
    }
    :global(.hover.stroke) {

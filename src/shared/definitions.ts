@@ -162,7 +162,7 @@ export class Port extends Point {
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
-   isRigid = false
+   isFrozen = false
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(
       () => "H up"
    )

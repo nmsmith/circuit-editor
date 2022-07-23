@@ -458,11 +458,20 @@ export class Range2D {
          let mySides = new Rectangle(Point.zero, Rotation.zero, this).sides()
          return (
             object.corners().some((corner) => this.contains(corner)) ||
+            this.corners().some((corner) => object.contains(corner)) ||
             object
                .sides()
                .some((side) => mySides.some((s) => s.intersection(side)))
          )
       }
+   }
+   corners(): Point[] {
+      return [
+         new Point(this.x.low, this.y.low),
+         new Point(this.x.high, this.y.low),
+         new Point(this.x.high, this.y.high),
+         new Point(this.x.low, this.y.high),
+      ]
    }
 }
 
@@ -501,13 +510,7 @@ export class Rectangle extends Object2D {
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
    }
    corners(): Point[] {
-      let { x, y } = this.range
-      return [
-         new Point(x.low, y.low),
-         new Point(x.high, y.low),
-         new Point(x.high, y.high),
-         new Point(x.low, y.high),
-      ].map((p) => this.fromRectCoordinates(p))
+      return this.range.corners().map((p) => this.fromRectCoordinates(p))
    }
    sides(): LineSegment[] {
       let [p1, p2, p3, p4] = this.corners()

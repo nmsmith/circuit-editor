@@ -39,6 +39,7 @@
    import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
+   import ToolButton from "./Toolbutton.svelte"
 
    // ---------------------- Props (for input & output) -----------------------
    // Callbacks that must be bound by the parent component.
@@ -52,9 +53,40 @@
 
    // ------------------------------ Constants --------------------------------
    let canvas: SVGElement // the root element of this component
-   const buttonCodes = ["LMB", "RMB", "Space"]
-      .concat([..."ABCDEFGHIJKLMNOPQRSTUVWXYZ"].map((c) => "Key" + c))
-      .concat([..."0123456789"].map((c) => "Digit" + c))
+   type Button = keyof typeof button
+   const buttonMap: {
+      LMB: Button
+      RMB: Button
+      KeyQ: Button
+      KeyW: Button
+      KeyE: Button
+      KeyR: Button
+      KeyT: Button
+      KeyA: Button
+      KeyS: Button
+      KeyD: Button
+      KeyF: Button
+      KeyG: Button
+      Backquote: Button
+   } = {
+      LMB: "draw",
+      RMB: "nothing",
+      KeyQ: "query",
+      KeyW: "weave",
+      KeyE: "erase",
+      KeyR: "relax",
+      KeyT: "tether",
+      KeyA: "operationA",
+      KeyS: "slide",
+      KeyD: "draw",
+      KeyF: "freeze",
+      KeyG: "operationG",
+      Backquote: "debug",
+   }
+   function buttonOf(key: string): Button | undefined {
+      return buttonMap[key as keyof typeof buttonMap]
+   }
+   const toolButtonSize = 56
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -198,36 +230,46 @@
       return ofAxes[scores.indexOf(Math.max(...scores))]
    }
    function aButtonIsHeld(): boolean {
-      return (
-         (keyS.state ||
-            keyW.state ||
-            keyD.state ||
-            keyE.state ||
-            keyF.state ||
-            keyR.state ||
-            LMB.state ||
-            RMB.state) !== null
-      )
+      return Object.values(button).some((k) => k.state)
    }
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let debug: boolean = false
-   let mouse: Point
+   let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
    type ButtonState =
       | { state: null } // 'null' is more convenient than the string "up".
       // Pressing, but not yet moved enough to constitute a drag.
       | { state: "pressing"; downPosition: Point; downJunction?: Junction }
       | { state: "dragging"; downPosition: Point; downJunction?: Junction }
-   let LMB: ButtonState = { state: null }
-   let RMB: ButtonState = { state: null }
-   let keyS: ButtonState = { state: null }
-   let keyW: ButtonState = { state: null }
-   let keyD: ButtonState = { state: null }
-   let keyE: ButtonState = { state: null }
-   let keyF: ButtonState = { state: null }
-   let keyR: ButtonState = { state: null }
+   let button: {
+      query: ButtonState
+      weave: ButtonState
+      erase: ButtonState
+      relax: ButtonState
+      tether: ButtonState
+      slide: ButtonState
+      draw: ButtonState
+      freeze: ButtonState
+      debug: ButtonState
+      operationA: ButtonState
+      operationG: ButtonState
+      nothing: ButtonState // A dummy button.
+   } = {
+      query: { state: null },
+      weave: { state: null },
+      erase: { state: null },
+      relax: { state: null },
+      tether: { state: null },
+      slide: { state: null },
+      draw: { state: null },
+      freeze: { state: null },
+      debug: { state: null },
+      operationA: { state: null },
+      operationG: { state: null },
+      nothing: { state: null },
+   }
    let move: null | {
       axisGrabbed: Axis
       partGrabbed: Point
@@ -245,17 +287,24 @@
       start: Point
       items: Set<Selectable>
    } = null
-   let flexSelect: null | {
+   type SelectOperation<T> = null | {
       start: Point
-      items: Set<Segment>
+      items: Set<T>
    }
-   let rigidSelect: null | {
-      start: Point
-      items: Set<Segment>
+   let eraseSelect: SelectOperation<Grabbable>
+   $: {
+      for (let symbol of SymbolInstance.s)
+         symbol.svg.style.visibility = eraseSelect?.items.has(symbol)
+            ? "hidden"
+            : "visible"
    }
+   let relaxSelect: SelectOperation<Segment>
+   let freezeSelect: SelectOperation<Segment>
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
+   $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
+   $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
    let unconfirmedSelected: Set<Selectable>
    $: /* Combine the confirmed selection with the selection-in-progress.  */ {
       unconfirmedSelected = new Set(selected)
@@ -650,16 +699,17 @@
    $: /* Set the appearance of the mouse cursor. */ {
       if (move) {
          cursor = "grabbing"
-      } else if (keyD.state || keyE.state) {
+      } else if (button.slide.state || button.weave.state) {
          if (closestGrabbable(mouse)) {
             cursor =
-               keyD.state === "pressing" || keyE.state === "pressing"
+               button.slide.state === "pressing" ||
+               button.weave.state === "pressing"
                   ? "grabbing"
                   : "grab"
          } else {
             cursor = "default"
          }
-      } else if (multiSelect || flexSelect || rigidSelect) {
+      } else if (multiSelect || eraseSelect || relaxSelect || freezeSelect) {
          cursor = "default"
       } else {
          cursor = "cell"
@@ -670,11 +720,6 @@
       highlighted = new Set()
       if (move?.draw?.endObject instanceof Segment) {
          highlighted.add(move.draw.endObject)
-      } else if (gapHighlighted.size > 0) {
-         for (let s of gapHighlighted) highlighted.add(s)
-      } else if ((keyD.state || keyE.state) && !move) {
-         let grab = closestGrabbable(mouse)
-         if (grab) highlighted.add(grab.object)
       } else if (!aButtonIsHeld()) {
          let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
@@ -685,62 +730,6 @@
             }
          }
       }
-   }
-   let gapHighlighted: Set<Segment>
-   $: /* When activated, highlight all objects which are standardGap apart.*/ {
-      // if (tool === "select" && !move && cmd) {
-      //    gapHighlighted = new Set()
-      //    let s = closestNearTo(mouse, Segment.s)
-      //    if (s) {
-      //       // Do gap highlighting (and later, selection) along the axis
-      //       // orthogonal to the segment's axis. To achieve this, we
-      //       // re-coordinatize every object that has the same orientation as
-      //       // the segment as an AABB, and search along the resultant y-axis.
-      //       let selectAxis = s.object.axis
-      //       let orthAxis = findAxis(selectAxis.orthogonal())
-      //       type SegmentInfo = {
-      //          segment: Segment
-      //          x: number[]
-      //          y: number[]
-      //          visited: boolean
-      //       }
-      //       let info = new Map<Segment, SegmentInfo>()
-      //       for (let seg of Segment.s) {
-      //          if (seg.axis !== selectAxis && seg.axis !== orthAxis) continue
-      //          let start = seg.start.relativeTo(selectAxis)
-      //          let end = seg.end.relativeTo(selectAxis)
-      //          let x = start.x <= end.x ? [start.x, end.x] : [end.x, start.x]
-      //          let y = start.y <= end.y ? [start.y, end.y] : [end.y, start.y]
-      //          info.set(seg, { segment: seg, x, y, visited: false })
-      //       }
-      //       let [front, back] =
-      //          s.closestPart.displacementFrom(mouse).relativeTo(selectAxis).y >
-      //          0
-      //             ? [0, 1]
-      //             : [1, 0]
-      //       gapHighlighted.add(s.object)
-      //       let startInfo = info.get(s.object) as SegmentInfo
-      //       startInfo.visited = true
-      //       highlightFrom(startInfo)
-      //       function highlightFrom(current: SegmentInfo) {
-      //          for (let i of info.values()) {
-      //             if (i.visited) continue
-      //             let disp = (back - front) * (i.y[front] - current.y[back])
-      //             if (
-      //                // If the bounding boxes are touching...
-      //                Math.abs(disp - standardGap) < gapSelectError &&
-      //                i.x[0] <= current.x[1] + standardGap &&
-      //                i.x[1] >= current.x[0] - standardGap
-      //             ) {
-      //                gapHighlighted.add(i.segment)
-      //                i.visited = true
-      //                highlightFrom(i)
-      //             }
-      //          }
-      //       }
-      //    }
-      // } else
-      gapHighlighted = new Set()
    }
    type HighlightStyle = "hover" | "select" | "debug" | undefined
    $: styleOf = function (thing: Highlightable | Selectable): HighlightStyle {
@@ -868,51 +857,35 @@
    }
 
    // ---------------------------- Primary events -----------------------------
-   function buttonPressed(buttonCode: string) {
+   function buttonPressed(name: keyof typeof button) {
       // This function abstracts over mouse and keyboard events.
-      switch (buttonCode) {
-         case "LMB":
-            abortAndReleaseAll()
-            LMB = { state: "pressing", downPosition: mouse }
-            break
-         case "RMB":
-            abortAndReleaseAll()
-            RMB = { state: "pressing", downPosition: mouse }
-            break
-         case "KeyA":
-            abortAndReleaseAll()
-            if (cmd) {
-               // Select everything in the circuit.
-               selected = new ToggleSet()
-               for (let segment of Segment.s) selected.add(segment)
-               for (let symbol of SymbolInstance.s) selected.add(symbol)
+      if ((name === "relax" || name === "freeze") && button.draw.state) {
+         chainDraw(name === "freeze")
+      } else {
+         abortAndReleaseAll()
+         button[name] = { state: "pressing", downPosition: mouse }
+         if (name === "relax") {
+            let segment = closestNearTo(mouse, Segment.s)?.object
+            if (segment?.isFrozen) {
+               segment.isFrozen = false
+               Segment.s = Segment.s
             }
-            break
-         case "KeyS": {
-            abortAndReleaseAll()
-            keyS = { state: "pressing", downPosition: mouse }
-            let grab = closestGrabbable(mouse)
-            if (grab) {
-               if (shift) selected.toggle(grab.object)
-               else if (alt) selected.delete(grab.object)
-               else selected = new ToggleSet([grab.object])
-               selected = selected
-            } else if (!shift && !alt) {
-               selected = new ToggleSet()
+         } else if (name === "freeze") {
+            let segment = closestNearTo(mouse, Segment.s)?.object
+            if (segment?.isFrozen === false) {
+               segment.isFrozen = true
+               Segment.s = Segment.s
             }
-            break
-         }
-         case "KeyW": {
-            abortAndReleaseAll()
-            keyW = { state: "pressing", downPosition: mouse }
-            break
-         }
-         case "KeyD": {
-            abortAndReleaseAll()
+            // } else if (name === "A" && cmd) {
+            //    // Select everything in the circuit.
+            //    selected = new ToggleSet()
+            //    for (let segment of Segment.s) selected.add(segment)
+            //    for (let symbol of SymbolInstance.s) selected.add(symbol)
+         } else if (name === "slide") {
             let grab = closestGrabbable(mouse)
             if (grab) {
                // Jump straight to a drag operation.
-               keyD = { state: "dragging", downPosition: mouse }
+               button[name] = { state: "dragging", downPosition: mouse }
                if (!selected.has(grab.object))
                   selected = new ToggleSet([grab.object])
                beginMove("move", {
@@ -920,101 +893,35 @@
                   atPart: grab.closestPart,
                })
             }
-            break
-         }
-         case "KeyE":
-            abortAndReleaseAll()
-            keyE = { state: "pressing", downPosition: mouse }
-            break
-         case "KeyF":
-            if (LMB.state) {
-               chainDraw(false)
-            } else {
-               abortAndReleaseAll()
-               keyF = { state: "pressing", downPosition: mouse }
-               let segment = closestNearTo(mouse, Segment.s)?.object
-               if (segment?.isRigid) {
-                  segment.isRigid = false
-                  Segment.s = Segment.s
-               }
-            }
-            break
-         case "KeyR":
-            if (LMB.state) {
-               chainDraw(true)
-            } else {
-               abortAndReleaseAll()
-               keyR = { state: "pressing", downPosition: mouse }
-               let segment = closestNearTo(mouse, Segment.s)?.object
-               if (segment?.isRigid === false) {
-                  segment.isRigid = true
-                  Segment.s = Segment.s
-               }
-            }
-            break
-         case "Backspace":
-         case "Delete":
-            if (!aButtonIsHeld()) deleteSelected()
-            break
-         case "Escape":
-            abortAndReleaseAll()
-            break
-         case "Backquote":
+         } else if (name === "debug") {
             debug = !debug
-            break
+         }
       }
    }
-   function buttonReleased(buttonCode: string) {
-      switch (buttonCode) {
-         case "LMB":
-            if (LMB.state === "pressing") {
-               leftMouseClicked()
-            } else if (LMB.state === "dragging") {
+   function buttonReleased(name: keyof typeof button) {
+      if (button[name].state) {
+         switch (name) {
+            case "draw":
+               if (button[name].state === "pressing") {
+                  drawButtonTapped()
+               } else if (button[name].state === "dragging") {
+                  endMove()
+               }
+               break
+            case "erase":
+               endEraseSelect()
+               break
+            case "relax":
+               endRelaxSelect()
+               break
+            case "slide":
                endMove()
-               endMultiSelect()
-            }
-            LMB = { state: null }
-            break
-         case "RMB":
-            if (RMB.state === "pressing") {
-               // A click occurred.
-            }
-            RMB = { state: null }
-            break
-         case "KeyS":
-            if (keyS.state) {
-               endMultiSelect()
-               keyS = { state: null }
-            }
-            break
-         case "KeyW":
-            if (keyW.state) {
-               keyW = { state: null }
-            }
-            break
-         case "KeyD":
-            if (keyD.state) {
-               endMove()
-               keyD = { state: null }
-            }
-            break
-         case "KeyE":
-            if (keyE.state) {
-               keyE = { state: null }
-            }
-            break
-         case "KeyF":
-            if (keyF.state) {
-               endFlexSelect()
-               keyF = { state: null }
-            }
-            break
-         case "KeyR":
-            if (keyR.state) {
-               endRigidSelect()
-               keyR = { state: null }
-            }
-            break
+               break
+            case "freeze":
+               endFreezeSelect()
+               break
+         }
+         button[name] = { state: null }
       }
    }
    function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
@@ -1051,7 +958,7 @@
    function rightMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b010) !== 0
    }
-   function leftMouseClicked() {
+   function drawButtonTapped() {
       let toggle = closestToggleable(mouse)
       if (!toggle) return
       if (isVertex(toggle.object)) {
@@ -1091,43 +998,43 @@
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
       updateMove()
-      updateMultiSelect()
-      updateFlexSelect()
-      updateRigidSelect()
+      updateEraseSelect()
+      updateRelaxSelect()
+      updateFreezeSelect()
       // Check for the initiation of drag-based operations.
-      if (LMB.state === "pressing") {
-         let dragVector = mouse.displacementFrom(LMB.downPosition)
+      if (button.draw.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.draw.downPosition)
          if (dragVector.sqLength() >= halfGap * halfGap) {
-            LMB = { ...LMB, state: "dragging" }
+            button.draw = { ...button.draw, state: "dragging" }
             beginDraw(dragVector)
          }
       }
-      if (keyS.state === "pressing") {
-         let dragVector = mouse.displacementFrom(keyS.downPosition)
+      if (button.erase.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.erase.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            keyS = { ...keyS, state: "dragging" }
-            beginMultiSelect(keyS.downPosition)
+            button.erase = { ...button.erase, state: "dragging" }
+            beginEraseSelect(button.erase.downPosition)
          }
       }
-      if (keyF.state === "pressing") {
-         let dragVector = mouse.displacementFrom(keyF.downPosition)
+      if (button.relax.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.relax.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            keyF = { ...keyF, state: "dragging" }
-            beginFlexSelect(keyF.downPosition)
+            button.relax = { ...button.relax, state: "dragging" }
+            beginRelaxSelect(button.relax.downPosition)
          }
       }
-      if (keyR.state === "pressing") {
-         let dragVector = mouse.displacementFrom(keyR.downPosition)
+      if (button.freeze.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.freeze.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            keyR = { ...keyR, state: "dragging" }
-            beginRigidSelect(keyR.downPosition)
+            button.freeze = { ...button.freeze, state: "dragging" }
+            beginFreezeSelect(button.freeze.downPosition)
          }
       }
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
       // Update the mouse's state.
       let p = mouseInCoordinateSystemOf(canvas, e)
-      LMB = { state: "dragging", downPosition: p }
+      button.draw = { state: "dragging", downPosition: p }
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
@@ -1137,11 +1044,11 @@
 
    // ---------------------------- Derived events -----------------------------
    function beginDraw(dragVector: Vector) {
-      if (LMB.state !== "dragging") return
-      if (LMB.downJunction) {
+      if (button.draw.state !== "dragging") return
+      if (button.draw.downJunction) {
          // Start the draw operation at the endpoint of the previous
          // draw operation.
-         let lastDrawAxis = LMB.downJunction.axes()[0]
+         let lastDrawAxis = button.draw.downJunction.axes()[0]
          // Determine the axis the draw operation should begin along.
          let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
          if (drawMode === "strafing") {
@@ -1155,16 +1062,16 @@
                snapAxes.filter((axis) => axis !== lastDrawAxis)
             )
          }
-         beginMove("draw", { start: LMB.downJunction, axis: drawAxis })
+         beginMove("draw", { start: button.draw.downJunction, axis: drawAxis })
          return
       } else if (
-         closestAttachableOrToggleable(LMB.downPosition)?.object instanceof
-         Crossing
+         closestAttachableOrToggleable(button.draw.downPosition)
+            ?.object instanceof Crossing
       ) {
          return // Don't allow draw operations to start at crossings.
       }
       // Otherwise, start the draw operation at the closest attachable.
-      let attach = closestAttachable(LMB.downPosition)
+      let attach = closestAttachable(button.draw.downPosition)
       // Determine the axis the draw operation should begin along.
       let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
       let standardAxes =
@@ -1247,18 +1154,18 @@
             })
       } else
          beginMove("draw", {
-            start: new Junction(LMB.downPosition),
+            start: new Junction(button.draw.downPosition),
             axis: nearestAxis(dragAxis, standardAxes),
          })
    }
-   function chainDraw(makeCurrentRigid: boolean) {
+   function chainDraw(freezeCurrent: boolean) {
       if (!move?.draw) return
-      move.draw.segment.isRigid = makeCurrentRigid
+      move.draw.segment.isFrozen = freezeCurrent
       // Start a new draw operation at the current draw endpoint.
       let endpoint = move.draw.segment.end as Junction
       move.draw.endObject = undefined // Don't connect to anything else.
       endMove(false)
-      LMB = {
+      button.draw = {
          state: "pressing",
          downPosition: mouse,
          downJunction: endpoint,
@@ -1342,10 +1249,10 @@
    function updateMove() {
       if (!move) return
       let downPosition: Point
-      if (LMB.state === "dragging") {
-         downPosition = LMB.downPosition
-      } else if (keyD.state === "dragging") {
-         downPosition = keyD.downPosition
+      if (button.draw.state === "dragging") {
+         downPosition = button.draw.downPosition
+      } else if (button.slide.state === "dragging") {
+         downPosition = button.slide.downPosition
       } else return
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
@@ -1871,10 +1778,10 @@
                      (endObject as Junction).convertToCrossing(crossingMap)
                }
             }
-         } else if (allowedToDelete) deleteSelected()
+         } else if (allowedToDelete) deleteItems(selected)
       }
       move = null
-      if (LMB.state) selected = new ToggleSet()
+      if (button.draw.state) selected = new ToggleSet()
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -1891,90 +1798,78 @@
       // Move all the circuit elements back to their original positions.
       for (let m of movables()) m.moveTo(move.originalPositions.read(m))
       // If a new line was being drawn, delete it.
-      if (move.draw?.segmentIsNew) deleteSelected()
+      if (move.draw?.segmentIsNew) deleteItems(selected)
       move = null
    }
-   function beginMultiSelect(start: Point) {
-      multiSelect = {
-         mode: alt ? "remove" : shift ? "add" : "new",
-         start,
-         items: new Set(),
-      }
-      if (multiSelect.mode === "new") selected = new ToggleSet()
+   function beginEraseSelect(start: Point) {
+      eraseSelect = { start, items: new Set() }
    }
-   function beginFlexSelect(start: Point) {
-      flexSelect = { start, items: new Set() }
+   function beginRelaxSelect(start: Point) {
+      relaxSelect = { start, items: new Set() }
    }
-   function beginRigidSelect(start: Point) {
-      rigidSelect = { start, items: new Set() }
+   function beginFreezeSelect(start: Point) {
+      freezeSelect = { start, items: new Set() }
    }
-   function updateMultiSelect() {
-      if (!multiSelect) return
-      multiSelect.items = new Set()
-      let range = Range2D.fromCorners(multiSelect.start, mouse)
+   function updateEraseSelect() {
+      if (!eraseSelect) return
+      eraseSelect.items = new Set()
+      let range = Range2D.fromCorners(eraseSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) multiSelect.items.add(segment)
+         if (range.intersects(segment)) eraseSelect.items.add(segment)
       for (let symbol of SymbolInstance.s)
-         if (range.intersects(symbol)) multiSelect.items.add(symbol)
-      if (multiSelect.mode === "remove")
-         for (let junction of Junction.s)
-            if (range.intersects(junction)) multiSelect.items.add(junction)
+         if (range.intersects(symbol)) eraseSelect.items.add(symbol)
    }
-   function updateFlexSelect() {
-      if (!flexSelect) return
-      flexSelect.items = new Set()
-      let range = Range2D.fromCorners(flexSelect.start, mouse)
+   function updateRelaxSelect() {
+      if (!relaxSelect) return
+      relaxSelect.items = new Set()
+      let range = Range2D.fromCorners(relaxSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) flexSelect.items.add(segment)
+         if (range.intersects(segment)) relaxSelect.items.add(segment)
    }
-   function updateRigidSelect() {
-      if (!rigidSelect) return
-      rigidSelect.items = new Set()
-      let range = Range2D.fromCorners(rigidSelect.start, mouse)
+   function updateFreezeSelect() {
+      if (!freezeSelect) return
+      freezeSelect.items = new Set()
+      let range = Range2D.fromCorners(freezeSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) rigidSelect.items.add(segment)
+         if (range.intersects(segment)) freezeSelect.items.add(segment)
    }
-   function endMultiSelect() {
-      if (!multiSelect) return
-      if (multiSelect.mode === "remove") {
-         for (let item of multiSelect.items) selected.delete(item)
-      } else {
-         for (let item of multiSelect.items) selected.add(item)
-      }
-      selected = selected
-      multiSelect = null
+   function endEraseSelect() {
+      if (!eraseSelect) return
+      deleteItems(eraseSelect.items)
+      eraseSelect = null
    }
-   function endFlexSelect() {
-      if (!flexSelect) return
-      for (let item of flexSelect.items) item.isRigid = false
+   function endRelaxSelect() {
+      if (!relaxSelect) return
+      for (let item of relaxSelect.items) item.isFrozen = false
       Segment.s = Segment.s
-      flexSelect = null
+      relaxSelect = null
    }
-   function endRigidSelect() {
-      if (!rigidSelect) return
-      for (let item of rigidSelect.items) item.isRigid = true
+   function endFreezeSelect() {
+      if (!freezeSelect) return
+      for (let item of freezeSelect.items) item.isFrozen = true
       Segment.s = Segment.s
-      rigidSelect = null
+      freezeSelect = null
    }
-   function abortMultiSelect() {
-      multiSelect = null
+   function abortEraseSelect() {
+      eraseSelect = null
    }
-   function abortFlexSelect() {
-      flexSelect = null
+   function abortRelaxSelect() {
+      relaxSelect = null
    }
-   function abortRigidSelect() {
-      rigidSelect = null
+   function abortFreezeSelect() {
+      freezeSelect = null
    }
    function abortAndReleaseAll() {
       abortMove()
-      abortMultiSelect()
-      abortFlexSelect()
-      abortRigidSelect()
-      for (let code of buttonCodes) buttonReleased(code)
+      abortEraseSelect()
+      abortRelaxSelect()
+      abortFreezeSelect()
+      for (let b of Object.keys(button) as Array<keyof typeof button>)
+         buttonReleased(b)
    }
-   function deleteSelected() {
+   function deleteItems(items: Iterable<Grabbable>) {
       let junctionsToConvert = new Set<Junction>()
-      for (let thing of selected) {
+      for (let thing of items) {
          if (thing instanceof Port) continue // Ports are not deletable.
          thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
       }
@@ -1982,7 +1877,6 @@
          if (junction.edges().size === 2)
             junction.convertToCrossing(crossingMap)
       }
-      selected = new ToggleSet()
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
@@ -2004,11 +1898,13 @@
    on:keydown={(event) => {
       updateModifierKeys(event)
       if (event.repeat) return // Ignore repeated events from held-down keys.
-      buttonPressed(event.code)
+      let b = buttonOf(event.code)
+      if (b) buttonPressed(b)
    }}
    on:keyup={(event) => {
       updateModifierKeys(event)
-      buttonReleased(event.code)
+      let b = buttonOf(event.code)
+      if (b) buttonReleased(b)
    }}
    on:blur={() => {
       shift = false
@@ -2023,19 +1919,21 @@
    style="cursor: {cursor}"
    on:mousedown={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (leftMouseIsDown(event) && LMB.state === null) buttonPressed("LMB")
-      if (rightMouseIsDown(event) && RMB.state === null) buttonPressed("RMB")
+      if (leftMouseIsDown(event) && button[buttonMap.LMB].state === null)
+         buttonPressed(buttonMap.LMB)
+      if (rightMouseIsDown(event) && button[buttonMap.RMB].state === null)
+         buttonPressed(buttonMap.RMB)
    }}
    on:mousemove={(event) => {
       let previousMousePosition = mouse
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== null) {
+      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null) {
          if (waitedOneFrameLMB) abortAndReleaseAll()
          else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
-      if (!rightMouseIsDown(event) && RMB.state !== null) {
+      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null) {
          if (waitedOneFrameRMB) abortAndReleaseAll()
          else waitedOneFrameRMB = true
       } else {
@@ -2045,13 +1943,17 @@
    }}
    on:mouseup={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== null) buttonReleased("LMB")
-      if (!rightMouseIsDown(event) && RMB.state !== null) buttonReleased("RMB")
+      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null)
+         buttonReleased(buttonMap.LMB)
+      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null)
+         buttonReleased(buttonMap.RMB)
    }}
    on:mouseenter={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && LMB.state !== null) abortAndReleaseAll()
-      if (!rightMouseIsDown(event) && RMB.state !== null) abortAndReleaseAll()
+      if (!leftMouseIsDown(event) && button[buttonMap.LMB].state !== null)
+         abortAndReleaseAll()
+      if (!rightMouseIsDown(event) && button[buttonMap.RMB].state !== null)
+         abortAndReleaseAll()
    }}
 >
    <!-- Symbol highlight/selection layer -->
@@ -2092,11 +1994,14 @@
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
          {#each sections as section}
-            <FluidLine
-               segment={section}
-               isRigid={(segment.isRigid && !flexSelect?.items.has(segment)) ||
-                  rigidSelect?.items.has(segment)}
-            />
+            {#if !eraseSelect?.items.has(segment)}
+               <FluidLine
+                  segment={section}
+                  isFrozen={(segment.isFrozen &&
+                     !relaxSelect?.items.has(segment)) ||
+                     freezeSelect?.items.has(segment)}
+               />
+            {/if}
          {/each}
       {/each}
    </g>
@@ -2133,9 +2038,9 @@
                start={glyph.start}
                end={glyph.end}
                flip={glyph.flip}
-               isRigid={(glyph.segment.isRigid &&
-                  !flexSelect?.items.has(glyph.segment)) ||
-                  rigidSelect?.items.has(glyph.segment)}
+               isFrozen={(glyph.segment.isFrozen &&
+                  !relaxSelect?.items.has(glyph.segment)) ||
+                  freezeSelect?.items.has(glyph.segment)}
             />
          {/if}
       {/each}
@@ -2164,15 +2069,20 @@
    </g>
    <!-- HUD layer -->
    <g>
-      {#if multiSelect}
+      <!-- Selection boxes -->
+      <!-- {#if multiSelect}
          <RectSelectBox start={multiSelect.start} end={mouse} />
+      {/if} -->
+      {#if eraseSelect}
+         <RectSelectBox start={eraseSelect.start} end={mouse} />
       {/if}
-      {#if flexSelect}
-         <RectSelectBox start={flexSelect.start} end={mouse} />
+      {#if relaxSelect}
+         <RectSelectBox start={relaxSelect.start} end={mouse} />
       {/if}
-      {#if rigidSelect}
-         <RectSelectBox start={rigidSelect.start} end={mouse} />
+      {#if freezeSelect}
+         <RectSelectBox start={freezeSelect.start} end={mouse} />
       {/if}
+      <!-- Debug info -->
       {#each [...pushPaths] as [pass, path]}
          <path style="fill:{pass === 1 ? 'purple' : '#cc7a00'}" d={path} />
       {/each}
@@ -2187,6 +2097,77 @@
       {#each [...basisPaths] as path}
          <path style="stroke-width: 1px; stroke: white" d={path} />
       {/each}
+      <!-- Tool bar -->
+      <ToolButton
+         label="Query"
+         x={0 * toolButtonSize}
+         y={canvasHeight - 2 * toolButtonSize}
+         size={toolButtonSize}
+         active={button.query.state !== null}
+      />
+      <ToolButton
+         label="Weave"
+         x={1 * toolButtonSize}
+         y={canvasHeight - 2 * toolButtonSize}
+         size={toolButtonSize}
+         active={button.weave.state !== null}
+      />
+      <ToolButton
+         label="Erase"
+         x={2 * toolButtonSize}
+         y={canvasHeight - 2 * toolButtonSize}
+         size={toolButtonSize}
+         active={button.erase.state !== null}
+      />
+      <ToolButton
+         label="Relax"
+         x={3 * toolButtonSize}
+         y={canvasHeight - 2 * toolButtonSize}
+         size={toolButtonSize}
+         active={button.relax.state !== null}
+      />
+      <ToolButton
+         label="Tether"
+         x={4 * toolButtonSize}
+         y={canvasHeight - 2 * toolButtonSize}
+         size={toolButtonSize}
+         active={button.tether.state !== null}
+      />
+      <ToolButton
+         label="A"
+         x={0 * toolButtonSize}
+         y={canvasHeight - toolButtonSize}
+         size={toolButtonSize}
+         active={button.operationA.state !== null}
+      />
+      <ToolButton
+         label="Slide"
+         x={1 * toolButtonSize}
+         y={canvasHeight - toolButtonSize}
+         size={toolButtonSize}
+         active={button.slide.state !== null}
+      />
+      <ToolButton
+         label="Draw"
+         x={2 * toolButtonSize}
+         y={canvasHeight - toolButtonSize}
+         size={toolButtonSize}
+         active={button.draw.state !== null}
+      />
+      <ToolButton
+         label="Freeze"
+         x={3 * toolButtonSize}
+         y={canvasHeight - toolButtonSize}
+         size={toolButtonSize}
+         active={button.freeze.state !== null}
+      />
+      <ToolButton
+         label="G"
+         x={4 * toolButtonSize}
+         y={canvasHeight - toolButtonSize}
+         size={toolButtonSize}
+         active={button.operationG.state !== null}
+      />
    </g>
 </svg>
 
