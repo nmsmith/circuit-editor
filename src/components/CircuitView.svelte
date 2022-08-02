@@ -19,6 +19,7 @@
       Object2D,
       Vector,
       Point,
+      Rotation,
       Direction,
       Axis,
       Range1D,
@@ -68,7 +69,6 @@
       KeyD: Button
       KeyF: Button
       KeyG: Button
-      Backquote: Button
    } = {
       LMB: "draw",
       RMB: "nothing",
@@ -77,12 +77,11 @@
       KeyE: "erase",
       KeyR: "relax",
       KeyT: "tether",
-      KeyA: "operationA",
+      KeyA: "adjust",
       KeyS: "slide",
       KeyD: "draw",
       KeyF: "freeze",
       KeyG: "operationG",
-      Backquote: "debug",
    }
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
@@ -203,6 +202,12 @@
          closestNearTo(point, Segment.s)
       )
    }
+   function closestMovable(point: Point): ClosenessResult<Movable> {
+      return (
+         closestNearTo(point, Junction.s) ||
+         closestNearTo(point, SymbolInstance.s)
+      )
+   }
    // ✨ A magical easing function for aesthetically-pleasing snapping. The
    // source is displaced from its true position as it approaches the target.
    function easeFn(distance: number): number {
@@ -239,7 +244,6 @@
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
-   let debug: boolean = false
    let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
    type ButtonState =
@@ -253,11 +257,10 @@
       erase: ButtonState
       relax: ButtonState
       tether: ButtonState
+      adjust: ButtonState
       slide: ButtonState
       draw: ButtonState
       freeze: ButtonState
-      debug: ButtonState
-      operationA: ButtonState
       operationG: ButtonState
       nothing: ButtonState // A dummy button.
    } = {
@@ -266,11 +269,10 @@
       erase: { state: null },
       relax: { state: null },
       tether: { state: null },
+      adjust: { state: null },
       slide: { state: null },
       draw: { state: null },
       freeze: { state: null },
-      debug: { state: null },
-      operationA: { state: null },
       operationG: { state: null },
       nothing: { state: null },
    }
@@ -297,6 +299,10 @@
       negInstructions: SlideInstruction[]
       distance: number
    } = null
+   let adjust: null | {
+      movable: Movable
+      offset: Vector
+   }
    let multiSelect: null | {
       mode: "new" | "add" | "remove"
       start: Point
@@ -516,7 +522,14 @@
       } else {
          abortAndReleaseAll()
          button[name] = { state: "pressing", downPosition: mouse }
-         if (name === "relax") {
+         if (name === "adjust") {
+            let closest = closestMovable(mouse)
+            if (closest) {
+               // Begin the operation immediately.
+               button[name].state = "dragging"
+               beginAdjust(closest.object, closest.closestPart)
+            }
+         } else if (name === "relax") {
             let segment = closestNearTo(mouse, Segment.s)?.object
             if (segment?.isFrozen) {
                segment.isFrozen = false
@@ -533,14 +546,15 @@
             //    selected = new ToggleSet()
             //    for (let segment of Segment.s) selected.add(segment)
             //    for (let symbol of SymbolInstance.s) selected.add(symbol)
-         } else if (name === "debug") {
-            debug = !debug
          }
       }
    }
    function buttonReleased(name: keyof typeof button) {
       if (button[name].state) {
          switch (name) {
+            case "adjust":
+               endAdjust()
+               break
             case "draw": {
                let b = button[name]
                if (b.state === "pressing" && !b.downJunction) {
@@ -624,6 +638,7 @@
       // funcs may induce changes to derived data that the updates need to see.)
       updateDraw()
       updateSlide()
+      updateAdjust()
       updateEraseSelect()
       updateRelaxSelect()
       updateFreezeSelect()
@@ -673,11 +688,10 @@
       // Update the mouse's state.
       let p = mouseInCoordinateSystemOf(canvas, e)
       button.draw = { state: "dragging", downPosition: p }
-      // Spawn a symbol on the canvas, and initiate a slide action.
+      // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.displacedBy(grabOffset)
-      //TODO: "Free move" the symbols into the canvas.
-      // let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      // beginSlide(symbol, mouse)
+      let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
+      beginAdjust(symbol, mouse)
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -1175,14 +1189,14 @@
       let shouldSnap: boolean
       if (draw) {
          // The slideDistance has already been determined by updateDraw().
-         // Move enough to "straighten out" the line being drawn.
+         // Move just enough to "straighten out" the line being drawn.
          let [slideVector] = draw.end
             .displacementFrom(draw.segment.start)
             .inTermsOfBasis([slide.axis, draw.segment.axis])
          slideDistance = slideVector.scalarProjectionOnto(slide.axis)
          shouldSnap = false
       } else {
-         // The slideDistance will be determined by updateSlide().
+         // The slideDistance will be determined here.
          slideDistance = mouse
             .displacementFrom(slide.partGrabbed)
             .scalarProjectionOnto(slide.axis)
@@ -1251,6 +1265,29 @@
       // Move all the circuit elements back to their original positions.
       for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
       slide = null
+   }
+   function beginAdjust(movable: Movable, partGrabbed: Point) {
+      let movablePos = movable instanceof Junction ? movable : movable.position
+      adjust = { movable, offset: movablePos.displacementFrom(partGrabbed) }
+   }
+   function updateAdjust() {
+      if (!adjust) return
+      adjust.movable.moveTo(mouse.displacedBy(adjust.offset))
+      for (let [segment] of adjust.movable.edges()) {
+         let axis = findAxis(
+            Axis.fromVector(segment.end.displacementFrom(segment.start))
+         )
+         if (!axis) continue
+         ;(segment.axis as Axis) = axis
+      }
+
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+   }
+   function endAdjust() {
+      adjust = null
    }
    function beginEraseSelect(start: Point) {
       eraseSelect = { start, items: new Set() }
@@ -1582,7 +1619,7 @@
          x={0 * toolButtonSize}
          y={canvasHeight - toolButtonSize}
          size={toolButtonSize}
-         active={button.operationA.state !== null}
+         active={button.adjust.state !== null}
       />
       <ToolButton
          label="Slide"
