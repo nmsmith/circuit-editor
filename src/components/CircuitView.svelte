@@ -19,9 +19,9 @@
       Object2D,
       Vector,
       Point,
-      Rotation,
       Direction,
       Axis,
+      Range1D,
       Range2D,
       ClosenessResult,
       closestTo,
@@ -233,6 +233,9 @@
    function aButtonIsHeld(): boolean {
       return Object.values(button).some((k) => k.state)
    }
+   function selectedDrawMode(): DrawMode {
+      return alt ? (shift ? "free rotation" : "snapped rotation") : "strafing"
+   }
 
    // ---------------------------- Primary state ------------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
@@ -272,8 +275,9 @@
       nothing: { state: null },
    }
    let [lmbShouldBeDown, rmbShouldBeDown] = [false, false]
+   type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
-      mode: "strafing" | "snapped rotation" | "free rotation"
+      mode: DrawMode
       segment: Segment
       end: Junction
       segmentIsNew: boolean
@@ -503,15 +507,6 @@
          })
       }
    }
-   let chosenDrawMode: "strafing" | "snapped rotation" | "free rotation"
-   $: /* Keep the draw operation synced to the modifier keys. */ {
-      chosenDrawMode = alt
-         ? shift
-            ? "free rotation"
-            : "snapped rotation"
-         : "strafing"
-      updateDraw()
-   }
 
    // ---------------------------- Primary events -----------------------------
    function buttonPressed(name: keyof typeof button) {
@@ -546,13 +541,15 @@
    function buttonReleased(name: keyof typeof button) {
       if (button[name].state) {
          switch (name) {
-            case "draw":
-               if (button[name].state === "pressing") {
+            case "draw": {
+               let b = button[name]
+               if (b.state === "pressing" && !b.downJunction) {
                   drawButtonTapped()
-               } else if (button[name].state === "dragging") {
+               } else if (b.state === "dragging") {
                   endDraw()
                }
                break
+            }
             case "erase":
                endEraseSelect()
                break
@@ -573,28 +570,11 @@
       shift = event.getModifierState("Shift")
       alt = event.getModifierState("Alt")
       cmd = event.getModifierState("Control") || event.getModifierState("Meta")
-   }
-   $: shift ? shiftDown() : shiftUp()
-   $: alt ? altDown() : altUp()
-   $: cmd ? cmdDown() : cmdUp()
-   function shiftDown() {}
-   function shiftUp() {}
-   function altDown() {
-      if (draw) {
-         // Reset the reference information for the movement.
-         move.partGrabbed = move.draw.segment.end.clone()
-         for (let thing of move.originalPositions.keys()) {
-            if (thing instanceof Junction || thing instanceof Port) {
-               move.originalPositions.set(thing, thing.clone())
-            } else {
-               move.originalPositions.set(thing, thing.position.clone())
-            }
-         }
+      if (draw?.mode !== selectedDrawMode()) {
+         updateDraw()
+         updateSlide()
       }
    }
-   function altUp() {}
-   function cmdDown() {}
-   function cmdUp() {}
    let waitedOneFrameLMB = false
    let waitedOneFrameRMB = false
    function leftMouseIsDown(event: MouseEvent) {
@@ -695,26 +675,27 @@
       button.draw = { state: "dragging", downPosition: p }
       // Spawn a symbol on the canvas, and initiate a slide action.
       let spawnPosition = mouse.displacedBy(grabOffset)
-      let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      selected = new ToggleSet([symbol])
-      beginMove("move", { grabbed: symbol, atPart: mouse })
+      //TODO: "Free move" the symbols into the canvas.
+      // let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
+      // beginSlide(symbol, mouse)
    }
 
    // ---------------------------- Derived events -----------------------------
    function beginDraw(dragVector: Vector) {
       if (button.draw.state !== "dragging") return
+      let drawMode = selectedDrawMode()
       if (button.draw.downJunction) {
          // Start the draw operation at the endpoint of the previous
          // draw operation.
          let lastDrawAxis = button.draw.downJunction.axes()[0]
          // Determine the axis the draw operation should begin along.
          let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
-         if (chosenDrawMode === "strafing") {
+         if (drawMode === "strafing") {
             drawAxis = nearestAxis(
                drawAxis,
                primaryAxes.filter((axis) => axis !== lastDrawAxis)
             )
-         } else if (chosenDrawMode === "snapped rotation") {
+         } else if (drawMode === "snapped rotation") {
             drawAxis = nearestAxis(
                drawAxis,
                snapAxes.filter((axis) => axis !== lastDrawAxis)
@@ -733,21 +714,21 @@
       // Determine the axis the draw operation should begin along.
       let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
       let standardAxes =
-         chosenDrawMode === "strafing"
+         drawMode === "strafing"
             ? primaryAxes
-            : chosenDrawMode === "snapped rotation"
+            : drawMode === "snapped rotation"
             ? snapAxes
             : [dragAxis]
       if (attach?.object instanceof Segment) {
          let segment = attach.object
          let closestPart = attach.closestPart
          let drawAxis =
-            chosenDrawMode === "strafing"
+            drawMode === "strafing"
                ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
-               : chosenDrawMode === "snapped rotation"
+               : drawMode === "snapped rotation"
                ? nearestAxis(dragAxis, standardAxes)
                : dragAxis
-         if (chosenDrawMode !== "free rotation" && drawAxis === segment.axis) {
+         if (drawMode !== "free rotation" && drawAxis === segment.axis) {
             // Cut the segment, and allow the user to move one side of it.
             let direction = segment.start.displacementFrom(closestPart)
             let [newStart, other] =
@@ -769,9 +750,9 @@
       } else if (attach) {
          let vertex = attach.object
          let continuedDraw = false
-         if (chosenDrawMode !== "free rotation") {
+         if (drawMode !== "free rotation") {
             let considerAxis =
-               chosenDrawMode === "strafing"
+               drawMode === "strafing"
                   ? // Consider vertex axes, in case the user wants to
                     // extend/unplug a segment.
                     nearestAxis(dragAxis, [...standardAxes, ...vertex.axes()])
@@ -809,20 +790,62 @@
             nearestAxis(dragAxis, standardAxes)
          )
    }
+   function newDraw(start: Vertex, axis: Axis) {
+      let mode: DrawMode = selectedDrawMode()
+      let end = new Junction(start)
+      let segment = new Segment(start, end, axis)
+      draw = {
+         mode,
+         segment,
+         end,
+         segmentIsNew: true,
+         shouldEaseIn: false,
       }
+      if (mode === "strafing") beginDrawStrafing()
+   }
+   function continueDraw(drawSegment: Segment, end: Junction) {
+      let mode: DrawMode = selectedDrawMode()
+      let segment
+      if (end === drawSegment.end) {
+         segment = drawSegment
       } else {
+         // Flip the segment around.
+         segment = new Segment(drawSegment.end, end, drawSegment.axis)
+         drawSegment.replaceWith(segment)
       }
+      draw = {
+         mode,
+         segment,
+         end,
+         segmentIsNew: false,
+         shouldEaseIn: mode === "strafing",
       }
+      if (mode === "strafing") beginDrawStrafing()
+   }
+   function beginDrawStrafing() {
+      if (!draw) return
+      let thingToMove = movableAt(draw.segment.start)
+      let axes = thingToMove.axes()
+      let drawAxis = draw.segment.axis
+      let slideAxis
+      if (axes.length === 1 && axes[0] !== drawAxis) {
+         slideAxis = axes[0]
+      } else if (axes.length === 2 && axes.includes(drawAxis)) {
+         slideAxis = axes[0] === drawAxis ? axes[1] : axes[0]
+      } else {
+         slideAxis = findAxis(drawAxis.orthogonal())
       }
+      beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
    function updateDraw() {
       if (!draw) return
-      if (draw.mode !== chosenDrawMode) {
-         // Change modes.
-         // TODO:
 
-         draw.mode = chosenDrawMode
+      if (draw.mode !== selectedDrawMode()) {
+         // Change the draw mode.
+         endSlide() // If we were sliding, commit the operation.
          draw.shouldEaseIn = false
+         draw.mode = selectedDrawMode()
+         if (draw.mode === "strafing") beginDrawStrafing()
       }
       if (draw.mode === "snapped rotation") {
          let dragVector = mouse.displacementFrom(draw.segment.start)
@@ -954,16 +977,17 @@
       if (!draw) return
       draw.segment.isFrozen = freezeCurrent
       // Start a new draw operation at the current draw endpoint.
-      draw.endObject = undefined // Don't connect to anything else.
-      endDraw(false)
       button.draw = {
          state: "pressing",
          downPosition: mouse,
          downJunction: draw.end,
       }
+      draw.endObject = undefined // Don't connect to anything else.
+      endDraw(false)
    }
    function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
       let orthogonalAxis = findAxis(slideAxis.orthogonal())
+      let partGrabbed = atPart.clone()
       // Before movement commences, record the position of every Movable.
       // We need to use the original positions as a reference, because we will
       // be mutating them over the course of the movement.
@@ -980,68 +1004,153 @@
       }
       function generateInstructions(slideDir: Direction): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
+
+         // ------------- PART 1: Definitions and required data. --------------
+         type Pushable = Junction | Segment | SymbolInstance
+         function* pushables() {
+            for (let p of Junction.s) yield p
+            for (let p of Segment.s) yield p
+            for (let p of SymbolInstance.s) yield p
+         }
+         // "slideRanges" stores the extent of Pushables in the slide direction,
+         // whilst "orthRanges" stores their extent in the orthogonal direction.
+         let slideRanges = new Map<Pushable, Range1D>()
+         let orthRanges = new Map<Pushable, Range1D>()
+         for (let junction of Junction.s) {
+            let d = junction.displacementFrom(Point.zero)
+            let s = d.scalarProjectionOnto(slideDir)
+            let o = d.scalarProjectionOnto(orthogonalAxis)
+            slideRanges.set(junction, new Range1D(s, s))
+            orthRanges.set(junction, new Range1D(o, o))
+         }
+         for (let segment of Segment.s) {
+            if (segment.axis !== orthogonalAxis) continue
+            // We only need to consider orthogonal segments.
+            let dStart = segment.start.displacementFrom(Point.zero)
+            let dEnd = segment.end.displacementFrom(Point.zero)
+            let sStart = dStart.scalarProjectionOnto(slideDir)
+            let sEnd = dEnd.scalarProjectionOnto(slideDir)
+            let oStart = dStart.scalarProjectionOnto(orthogonalAxis)
+            let oEnd = dEnd.scalarProjectionOnto(orthogonalAxis)
+            slideRanges.set(segment, new Range1D(sStart, sEnd))
+            orthRanges.set(segment, new Range1D(oStart, oEnd))
+         }
+         for (let symbol of SymbolInstance.s) {
+            let symbolAxis = findAxis(
+               Axis.fromDirection(
+                  Direction.positiveX.rotatedBy(symbol.rotation)
+               )
+            )
+            if (symbolAxis === slideAxis || symbolAxis === orthogonalAxis) {
+               slideRanges.set(symbol, rangeAlong(slideDir, symbol))
+               orthRanges.set(symbol, rangeAlong(orthogonalAxis, symbol))
+            }
+         }
+         function rangeAlong(dir: Vector, symbol: SymbolInstance): Range1D {
+            return new Range1D(
+               ...symbol
+                  .corners()
+                  .map((corner) =>
+                     corner
+                        .displacementFrom(Point.zero)
+                        .scalarProjectionOnto(dir)
+                  )
+            )
+         }
+
+         // ------------------ PART 2: Initialize the heap. -------------------
+         // Instructions need to be scheduled in order of priority. Thus, as
+         // instructions are proposed, we insert them into a heap.
          let heap = new Heap<SlideInstruction>((a, b) => a.delay - b.delay)
-         // Store both preliminary and finalized proposals.
+         // Proposals are also stored in a Map, so that we can update them.
          let proposals = new Map<Movable, SlideInstruction>()
-         // Add initial proposals to the heap.
+         // Add the initial proposals to the heap.
          if (grabbed instanceof Segment) {
             let i1 = { movable: movableAt(grabbed.start), delay: 0 }
             let i2 = { movable: movableAt(grabbed.end), delay: 0 }
-            proposals.set(movableAt(grabbed.start), i1)
-            proposals.set(movableAt(grabbed.end), i2)
             heap.push(i1)
             heap.push(i2)
+            proposals.set(movableAt(grabbed.start), i1)
+            proposals.set(movableAt(grabbed.end), i2)
          } else {
             let i = { movable: grabbed, delay: 0 }
-            proposals.set(grabbed, i)
             heap.push(i)
+            proposals.set(grabbed, i)
          }
+
+         // --------------- PART 3: Generate the instructions. ----------------
          while (heap.size() > 0) {
             let nextInstruction = heap.pop() as SlideInstruction
             let { movable, delay } = nextInstruction
-            // Schedule this Movable.
-            instructions.push(nextInstruction)
-            // Push via adjacent segments.
+            instructions.push(nextInstruction) // Finalize this instruction.
+
+            function pushNonConnected(pusher: Pushable) {
+               if (!slideRanges.has(pusher)) return
+               let pusherSlide = slideRanges.get(pusher) as Range1D
+               let pusherOrthogonal = orthRanges.get(pusher) as Range1D
+               for (let target of pushables()) {
+                  if (!slideRanges.has(target)) continue
+                  let targetOrthogonal = orthRanges.get(target) as Range1D
+                  if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
+                  let targetSlide = slideRanges.get(target) as Range1D
+                  let displacement = targetSlide.displacementFrom(pusherSlide)
+                  if (displacement <= 0) continue
+                  let distance = Math.max(0, displacement - standardGap)
+                  if (target instanceof Segment) {
+                     proposeTo(movableAt(target.start), delay + distance)
+                     proposeTo(movableAt(target.end), delay + distance)
+                  } else {
+                     proposeTo(target, delay + distance)
+                  }
+               }
+            }
+            pushNonConnected(movable) // The movable pushes things in its path.
+
+            // Propagate the movement along the Movable's edges.
             for (let [segment, adjVertex] of movable.edges()) {
-               if (segment === draw?.segment) continue
+               if (segment === draw?.segment) continue // handled elsewhere
+               if (segment.axis === orthogonalAxis) {
+                  pushNonConnected(segment) // Orthogonal segments push things!
+               }
+
+               // ---------- Logic for pushing connected Movables. ------------
                let nearVertex =
                   adjVertex === segment.end ? segment.start : segment.end
-               let adjDirection = adjVertex.directionFrom(nearVertex)
-               if (!adjDirection) continue
-               let adjDelay = delay
-               if (!segment.isFrozen) {
-                  if (adjDirection.approxEquals(slideDir, 0.1)) {
-                     // Allow the edge to contract to a length of standardGap.
-                     adjDelay += Math.max(0, segment.length() - standardGap)
-                  } else if (segment.axis === slideAxis) {
-                     // The segment can stretch indefinitely.
-                     continue
-                  }
-               }
-               let adjMovable = movableAt(adjVertex)
-               let adjProposal = proposals.get(adjMovable)
-               if (adjProposal) {
-                  if (adjProposal.delay > adjDelay) {
-                     // We've found something that will push the adjacent
-                     // Movable *sooner*. Decrease its delay.
-                     adjProposal.delay = delay
-                     heap.updateItem(adjProposal)
-                  }
+               let adjDir = adjVertex.directionFrom(nearVertex)
+               if (!adjDir) continue
+               if (!segment.isFrozen && adjDir.approxEquals(slideDir, 0.1)) {
+                  // Allow the edge to contract to a length of standardGap.
+                  let contraction = Math.max(0, segment.length() - standardGap)
+                  proposeTo(movableAt(adjVertex), delay + contraction)
+               } else if (!segment.isFrozen && segment.axis === slideAxis) {
+                  // The segment can stretch indefinitely.
+                  continue
                } else {
-                  // Add an initial proposal to the heap.
-                  let proposal = { movable: adjMovable, delay: adjDelay }
-                  proposals.set(adjMovable, proposal)
-                  heap.push(proposal)
+                  proposeTo(movableAt(adjVertex), delay)
                }
-               if (segment.axis === orthogonalAxis) {
+            }
+         }
+         function proposeTo(movable: Movable, delay: number) {
+            let existingProposal = proposals.get(movable)
+            if (existingProposal) {
+               if (existingProposal.delay > delay) {
+                  // We've found something that will push the
+                  // Movable *sooner*. Decrease its delay.
+                  existingProposal.delay = delay
+                  heap.updateItem(existingProposal)
                }
+            } else {
+               // Add an initial proposal to the heap.
+               let proposal = { movable: movable, delay }
+               heap.push(proposal)
+               proposals.set(movable, proposal)
             }
          }
          return instructions
       }
       slide = {
          originalPositions,
-         partGrabbed: atPart.clone(),
+         partGrabbed,
          axis: slideAxis,
          posInstructions: generateInstructions(slideAxis.posDirection()),
          negInstructions: generateInstructions(slideAxis.negDirection()),
@@ -1100,10 +1209,23 @@
          instructions = slide.negInstructions
          slideDistance = -slideDistance
       }
-      // TODO: Do a pre-pass through the instruction set, and if the movement
-      // is *close* to pushing the next object, increase the slideDistance so
-      // that it does. (Note: this must be done BEFORE the main movement loop.)
-
+      if (!draw) {
+         // If the current slideDistance is _close_ to the distance at which
+         // two objects touch, ease toward that distance.
+         let smallestDistance = Infinity
+         for (let instruction of instructions) {
+            if (instruction.delay === 0) continue
+            let distance = slideDistance - instruction.delay
+            if (Math.abs(distance) < Math.abs(smallestDistance))
+               smallestDistance = distance
+         }
+         if (Math.abs(smallestDistance) <= snapRadius) {
+            slideDistance -= smallestDistance
+         } else if (Math.abs(smallestDistance) < easeRadius) {
+            slideDistance -=
+               Math.sign(smallestDistance) * easeFn(Math.abs(smallestDistance))
+         }
+      }
       // Perform the new movement.
       for (let instruction of instructions) {
          let distance = slideDistance - instruction.delay

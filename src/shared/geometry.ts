@@ -416,9 +416,20 @@ export class Range1D {
    readonly low: number
    readonly high: number
    // Return the unsigned Range between the given numbers.
-   constructor(v1: number, v2: number) {
-      this.low = Math.min(v1, v2)
-      this.high = Math.max(v1, v2)
+   constructor(...values: number[]) {
+      this.low = Math.min(...values)
+      this.high = Math.max(...values)
+   }
+   intersects(range: Range1D): boolean {
+      return this.low < range.high && this.high > range.low
+   }
+   displacementFrom(range: Range1D): number {
+      if (this.intersects(range)) return 0
+      else if (this.high <= range.low) {
+         return this.high - range.low
+      } else {
+         return this.low - range.high
+      }
    }
 }
 
@@ -443,8 +454,10 @@ export class Range2D {
          point.y <= this.y.high
       )
    }
-   intersects(object: Point | LineSegment | Rectangle) {
-      if (object instanceof Point) {
+   intersects(object: Range2D | Point | LineSegment | Rectangle) {
+      if (object instanceof Range2D) {
+         return this.x.intersects(object.x) && this.y.intersects(object.y)
+      } else if (object instanceof Point) {
          return this.contains(object)
       } else if (object instanceof LineSegment) {
          return (
