@@ -2,13 +2,13 @@
    import type { LineSegment } from "~/shared/geometry"
    export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
    export let segment: LineSegment
-   export let isFrozen: boolean = true
+   export let isRigid: boolean = true
    $: start = segment.start
    $: end = segment.end
 </script>
 
 <line
-   class="fluid {isFrozen ? 'frozen' : 'relaxed'} line {renderStyle} stroke"
+   class="fluid {isRigid ? 'frozen' : 'relaxed'} line {renderStyle} stroke"
    x1={start.x}
    y1={start.y}
    x2={end.x}

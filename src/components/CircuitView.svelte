@@ -73,14 +73,14 @@
       LMB: "draw",
       RMB: "nothing",
       KeyQ: "query",
-      KeyW: "weave",
+      KeyW: "warp",
       KeyE: "erase",
-      KeyR: "relax",
+      KeyR: "rigid",
       KeyT: "tether",
-      KeyA: "adjust",
+      KeyA: "operationA",
       KeyS: "slide",
       KeyD: "draw",
-      KeyF: "freeze",
+      KeyF: "flex",
       KeyG: "operationG",
    }
    function buttonOf(key: string): Button | undefined {
@@ -253,26 +253,26 @@
       | { state: "dragging"; downPosition: Point; downJunction?: Junction }
    let button: {
       query: ButtonState
-      weave: ButtonState
+      warp: ButtonState
       erase: ButtonState
-      relax: ButtonState
+      rigid: ButtonState
       tether: ButtonState
-      adjust: ButtonState
+      operationA: ButtonState
       slide: ButtonState
       draw: ButtonState
-      freeze: ButtonState
+      flex: ButtonState
       operationG: ButtonState
       nothing: ButtonState // A dummy button.
    } = {
       query: { state: null },
-      weave: { state: null },
+      warp: { state: null },
       erase: { state: null },
-      relax: { state: null },
+      rigid: { state: null },
       tether: { state: null },
-      adjust: { state: null },
+      operationA: { state: null },
       slide: { state: null },
       draw: { state: null },
-      freeze: { state: null },
+      flex: { state: null },
       operationG: { state: null },
       nothing: { state: null },
    }
@@ -295,11 +295,13 @@
       originalPositions: DefaultMap<Movable | Vertex, Point>
       partGrabbed: Point
       axis: Axis
-      posInstructions: SlideInstruction[]
-      negInstructions: SlideInstruction[]
+      posInstructionsFull: SlideInstruction[]
+      negInstructionsFull: SlideInstruction[]
+      posInstructionsConn: SlideInstruction[]
+      negInstructionsConn: SlideInstruction[]
       distance: number
    } = null
-   let adjust: null | {
+   let warp: null | {
       movable: Movable
       offset: Vector
    }
@@ -319,8 +321,8 @@
             ? "hidden"
             : "visible"
    }
-   let relaxSelect: SelectOperation<Segment>
-   let freezeSelect: SelectOperation<Segment>
+   let rigidSelect: SelectOperation<Segment>
+   let flexSelect: SelectOperation<Segment>
    let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
@@ -361,17 +363,13 @@
    $: /* Set the appearance of the mouse cursor. */ {
       if (slide) {
          cursor = "grabbing"
-      } else if (button.slide.state || button.weave.state) {
+      } else if (button.slide.state) {
          if (closestGrabbable(mouse)) {
-            cursor =
-               button.slide.state === "pressing" ||
-               button.weave.state === "pressing"
-                  ? "grabbing"
-                  : "grab"
+            cursor = button.slide.state === "pressing" ? "grabbing" : "grab"
          } else {
             cursor = "default"
          }
-      } else if (multiSelect || eraseSelect || relaxSelect || freezeSelect) {
+      } else if (multiSelect || eraseSelect || rigidSelect || flexSelect) {
          cursor = "default"
       } else {
          cursor = "cell"
@@ -517,28 +515,28 @@
    // ---------------------------- Primary events -----------------------------
    function buttonPressed(name: keyof typeof button) {
       // This function abstracts over mouse and keyboard events.
-      if ((name === "relax" || name === "freeze") && button.draw.state) {
-         chainDraw(name === "freeze")
+      if ((name === "rigid" || name === "flex") && button.draw.state) {
+         chainDraw(name === "rigid")
       } else {
          abortAndReleaseAll()
          button[name] = { state: "pressing", downPosition: mouse }
-         if (name === "adjust") {
+         if (name === "warp") {
             let closest = closestMovable(mouse)
             if (closest) {
                // Begin the operation immediately.
                button[name].state = "dragging"
-               beginAdjust(closest.object, closest.closestPart)
+               beginWarp(closest.object, closest.closestPart)
             }
-         } else if (name === "relax") {
+         } else if (name === "rigid") {
             let segment = closestNearTo(mouse, Segment.s)?.object
-            if (segment?.isFrozen) {
-               segment.isFrozen = false
+            if (segment?.isRigid === false) {
+               segment.isRigid = true
                Segment.s = Segment.s
             }
-         } else if (name === "freeze") {
+         } else if (name === "flex") {
             let segment = closestNearTo(mouse, Segment.s)?.object
-            if (segment?.isFrozen === false) {
-               segment.isFrozen = true
+            if (segment?.isRigid) {
+               segment.isRigid = false
                Segment.s = Segment.s
             }
             // } else if (name === "A" && cmd) {
@@ -552,8 +550,8 @@
    function buttonReleased(name: keyof typeof button) {
       if (button[name].state) {
          switch (name) {
-            case "adjust":
-               endAdjust()
+            case "warp":
+               endWarp()
                break
             case "draw": {
                let b = button[name]
@@ -567,14 +565,14 @@
             case "erase":
                endEraseSelect()
                break
-            case "relax":
-               endRelaxSelect()
+            case "rigid":
+               endRigidSelect()
                break
             case "slide":
                endSlide()
                break
-            case "freeze":
-               endFreezeSelect()
+            case "flex":
+               endFlexSelect()
                break
          }
          button[name] = { state: null }
@@ -638,10 +636,10 @@
       // funcs may induce changes to derived data that the updates need to see.)
       updateDraw()
       updateSlide()
-      updateAdjust()
+      updateWarp()
       updateEraseSelect()
-      updateRelaxSelect()
-      updateFreezeSelect()
+      updateRigidSelect()
+      updateFlexSelect()
       // Check for the initiation of drag-based operations.
       if (button.draw.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.draw.downPosition)
@@ -669,18 +667,18 @@
             beginEraseSelect(button.erase.downPosition)
          }
       }
-      if (button.relax.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.relax.downPosition)
+      if (button.rigid.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.rigid.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            button.relax = { ...button.relax, state: "dragging" }
-            beginRelaxSelect(button.relax.downPosition)
+            button.rigid = { ...button.rigid, state: "dragging" }
+            beginRigidSelect(button.rigid.downPosition)
          }
       }
-      if (button.freeze.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.freeze.downPosition)
+      if (button.flex.state === "pressing") {
+         let dragVector = mouse.displacementFrom(button.flex.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            button.freeze = { ...button.freeze, state: "dragging" }
-            beginFreezeSelect(button.freeze.downPosition)
+            button.flex = { ...button.flex, state: "dragging" }
+            beginFlexSelect(button.flex.downPosition)
          }
       }
    }
@@ -691,7 +689,7 @@
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      beginAdjust(symbol, mouse)
+      beginWarp(symbol, mouse)
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -987,9 +985,9 @@
    function abortDraw() {
       if (draw?.segmentIsNew) deleteItems([draw.end])
    }
-   function chainDraw(freezeCurrent: boolean) {
+   function chainDraw(rigidifyCurrent: boolean) {
       if (!draw) return
-      draw.segment.isFrozen = freezeCurrent
+      draw.segment.isRigid = rigidifyCurrent
       // Start a new draw operation at the current draw endpoint.
       button.draw = {
          state: "pressing",
@@ -1016,7 +1014,10 @@
          for (let port of symbol.ports)
             originalPositions.set(port, port.clone())
       }
-      function generateInstructions(slideDir: Direction): SlideInstruction[] {
+      function generateInstructions(
+         slideDir: Direction,
+         shouldPushNonConnected: boolean
+      ): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
 
          // ------------- PART 1: Definitions and required data. --------------
@@ -1118,25 +1119,25 @@
                   }
                }
             }
-            pushNonConnected(movable) // The movable pushes things in its path.
-
+            if (shouldPushNonConnected) {
+               pushNonConnected(movable) // Movable pushes things in its path.
+            }
             // Propagate the movement along the Movable's edges.
             for (let [segment, adjVertex] of movable.edges()) {
                if (segment === draw?.segment) continue // handled elsewhere
-               if (segment.axis === orthogonalAxis) {
+               if (segment.axis === orthogonalAxis && shouldPushNonConnected) {
                   pushNonConnected(segment) // Orthogonal segments push things!
                }
-
                // ---------- Logic for pushing connected Movables. ------------
                let nearVertex =
                   adjVertex === segment.end ? segment.start : segment.end
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
-               if (!segment.isFrozen && adjDir.approxEquals(slideDir, 0.1)) {
+               if (!segment.isRigid && adjDir.approxEquals(slideDir, 0.1)) {
                   // Allow the edge to contract to a length of standardGap.
                   let contraction = Math.max(0, segment.length() - standardGap)
                   proposeTo(movableAt(adjVertex), delay + contraction)
-               } else if (!segment.isFrozen && segment.axis === slideAxis) {
+               } else if (!segment.isRigid && segment.axis === slideAxis) {
                   // The segment can stretch indefinitely.
                   continue
                } else {
@@ -1162,12 +1163,15 @@
          }
          return instructions
       }
+      let [pos, neg] = [slideAxis.posDirection(), slideAxis.negDirection()]
       slide = {
          originalPositions,
          partGrabbed,
          axis: slideAxis,
-         posInstructions: generateInstructions(slideAxis.posDirection()),
-         negInstructions: generateInstructions(slideAxis.negDirection()),
+         posInstructionsFull: generateInstructions(pos, true),
+         negInstructionsFull: generateInstructions(neg, true),
+         posInstructionsConn: generateInstructions(pos, false),
+         negInstructionsConn: generateInstructions(neg, false),
          distance: 0,
       }
    }
@@ -1217,10 +1221,14 @@
       let direction, instructions
       if (slideDistance > 0) {
          direction = slide.axis.posDirection()
-         instructions = slide.posInstructions
+         instructions = shift
+            ? slide.posInstructionsConn
+            : slide.posInstructionsFull
       } else {
          direction = slide.axis.negDirection()
-         instructions = slide.negInstructions
+         instructions = shift
+            ? slide.negInstructionsConn
+            : slide.negInstructionsFull
          slideDistance = -slideDistance
       }
       if (!draw) {
@@ -1266,14 +1274,14 @@
       for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
       slide = null
    }
-   function beginAdjust(movable: Movable, partGrabbed: Point) {
+   function beginWarp(movable: Movable, partGrabbed: Point) {
       let movablePos = movable instanceof Junction ? movable : movable.position
-      adjust = { movable, offset: movablePos.displacementFrom(partGrabbed) }
+      warp = { movable, offset: movablePos.displacementFrom(partGrabbed) }
    }
-   function updateAdjust() {
-      if (!adjust) return
-      adjust.movable.moveTo(mouse.displacedBy(adjust.offset))
-      for (let [segment] of adjust.movable.edges()) {
+   function updateWarp() {
+      if (!warp) return
+      warp.movable.moveTo(mouse.displacedBy(warp.offset))
+      for (let [segment] of warp.movable.edges()) {
          let axis = findAxis(
             Axis.fromVector(segment.end.displacementFrom(segment.start))
          )
@@ -1286,17 +1294,17 @@
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
    }
-   function endAdjust() {
-      adjust = null
+   function endWarp() {
+      warp = null
    }
    function beginEraseSelect(start: Point) {
       eraseSelect = { start, items: new Set() }
    }
-   function beginRelaxSelect(start: Point) {
-      relaxSelect = { start, items: new Set() }
+   function beginRigidSelect(start: Point) {
+      rigidSelect = { start, items: new Set() }
    }
-   function beginFreezeSelect(start: Point) {
-      freezeSelect = { start, items: new Set() }
+   function beginFlexSelect(start: Point) {
+      flexSelect = { start, items: new Set() }
    }
    function updateEraseSelect() {
       if (!eraseSelect) return
@@ -1307,52 +1315,52 @@
       for (let symbol of SymbolInstance.s)
          if (range.intersects(symbol)) eraseSelect.items.add(symbol)
    }
-   function updateRelaxSelect() {
-      if (!relaxSelect) return
-      relaxSelect.items = new Set()
-      let range = Range2D.fromCorners(relaxSelect.start, mouse)
+   function updateRigidSelect() {
+      if (!rigidSelect) return
+      rigidSelect.items = new Set()
+      let range = Range2D.fromCorners(rigidSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) relaxSelect.items.add(segment)
+         if (range.intersects(segment)) rigidSelect.items.add(segment)
    }
-   function updateFreezeSelect() {
-      if (!freezeSelect) return
-      freezeSelect.items = new Set()
-      let range = Range2D.fromCorners(freezeSelect.start, mouse)
+   function updateFlexSelect() {
+      if (!flexSelect) return
+      flexSelect.items = new Set()
+      let range = Range2D.fromCorners(flexSelect.start, mouse)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) freezeSelect.items.add(segment)
+         if (range.intersects(segment)) flexSelect.items.add(segment)
    }
    function endEraseSelect() {
       if (!eraseSelect) return
       deleteItems(eraseSelect.items)
       eraseSelect = null
    }
-   function endRelaxSelect() {
-      if (!relaxSelect) return
-      for (let item of relaxSelect.items) item.isFrozen = false
+   function endRigidSelect() {
+      if (!rigidSelect) return
+      for (let item of rigidSelect.items) item.isRigid = true
       Segment.s = Segment.s
-      relaxSelect = null
+      rigidSelect = null
    }
-   function endFreezeSelect() {
-      if (!freezeSelect) return
-      for (let item of freezeSelect.items) item.isFrozen = true
+   function endFlexSelect() {
+      if (!flexSelect) return
+      for (let item of flexSelect.items) item.isRigid = false
       Segment.s = Segment.s
-      freezeSelect = null
+      flexSelect = null
    }
    function abortEraseSelect() {
       eraseSelect = null
    }
-   function abortRelaxSelect() {
-      relaxSelect = null
+   function abortRigidSelect() {
+      rigidSelect = null
    }
-   function abortFreezeSelect() {
-      freezeSelect = null
+   function abortFlexSelect() {
+      flexSelect = null
    }
    function abortAndReleaseAll() {
       abortDraw()
       abortSlide()
       abortEraseSelect()
-      abortRelaxSelect()
-      abortFreezeSelect()
+      abortRigidSelect()
+      abortFlexSelect()
       for (let b of Object.keys(button) as Array<keyof typeof button>)
          buttonReleased(b)
       lmbShouldBeDown = false
@@ -1493,9 +1501,9 @@
             {#if !eraseSelect?.items.has(segment)}
                <FluidLine
                   segment={section}
-                  isFrozen={(segment.isFrozen &&
-                     !relaxSelect?.items.has(segment)) ||
-                     freezeSelect?.items.has(segment)}
+                  isRigid={(segment.isRigid &&
+                     !flexSelect?.items.has(segment)) ||
+                     rigidSelect?.items.has(segment)}
                />
             {/if}
          {/each}
@@ -1534,9 +1542,9 @@
                start={glyph.start}
                end={glyph.end}
                flip={glyph.flip}
-               isFrozen={(glyph.segment.isFrozen &&
-                  !relaxSelect?.items.has(glyph.segment)) ||
-                  freezeSelect?.items.has(glyph.segment)}
+               isRigid={(glyph.segment.isRigid &&
+                  !flexSelect?.items.has(glyph.segment)) ||
+                  rigidSelect?.items.has(glyph.segment)}
             />
          {/if}
       {/each}
@@ -1572,11 +1580,11 @@
       {#if eraseSelect}
          <RectSelectBox start={eraseSelect.start} end={mouse} />
       {/if}
-      {#if relaxSelect}
-         <RectSelectBox start={relaxSelect.start} end={mouse} />
+      {#if rigidSelect}
+         <RectSelectBox start={rigidSelect.start} end={mouse} />
       {/if}
-      {#if freezeSelect}
-         <RectSelectBox start={freezeSelect.start} end={mouse} />
+      {#if flexSelect}
+         <RectSelectBox start={flexSelect.start} end={mouse} />
       {/if}
       <!-- Tool bar -->
       <ToolButton
@@ -1587,11 +1595,11 @@
          active={button.query.state !== null}
       />
       <ToolButton
-         label="Weave"
+         label="Warp"
          x={1 * toolButtonSize}
          y={canvasHeight - 2 * toolButtonSize}
          size={toolButtonSize}
-         active={button.weave.state !== null}
+         active={button.warp.state !== null}
       />
       <ToolButton
          label="Erase"
@@ -1601,11 +1609,11 @@
          active={button.erase.state !== null}
       />
       <ToolButton
-         label="Relax"
+         label="Rigid"
          x={3 * toolButtonSize}
          y={canvasHeight - 2 * toolButtonSize}
          size={toolButtonSize}
-         active={button.relax.state !== null}
+         active={button.rigid.state !== null}
       />
       <ToolButton
          label="Tether"
@@ -1615,11 +1623,11 @@
          active={button.tether.state !== null}
       />
       <ToolButton
-         label="Adjust"
+         label="A"
          x={0 * toolButtonSize}
          y={canvasHeight - toolButtonSize}
          size={toolButtonSize}
-         active={button.adjust.state !== null}
+         active={button.operationA.state !== null}
       />
       <ToolButton
          label="Slide"
@@ -1636,11 +1644,11 @@
          active={button.draw.state !== null}
       />
       <ToolButton
-         label="Freeze"
+         label="Flex"
          x={3 * toolButtonSize}
          y={canvasHeight - toolButtonSize}
          size={toolButtonSize}
-         active={button.freeze.state !== null}
+         active={button.flex.state !== null}
       />
       <ToolButton
          label="G"
