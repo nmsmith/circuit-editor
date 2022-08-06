@@ -56,7 +56,7 @@
    // ------------------------------ Constants --------------------------------
    let canvas: SVGElement // the root element of this component
    type Button = keyof typeof button
-   const buttonMap: {
+   export const buttonMap: {
       LMB: Button
       RMB: Button
       KeyQ: Button
@@ -83,6 +83,7 @@
       KeyF: "flex",
       KeyG: "operationG",
    }
+   export const buttonForSidebarDragging: Button = "warp"
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
@@ -242,8 +243,7 @@
       return alt ? (shift ? "free rotation" : "snapped rotation") : "strafing"
    }
 
-   // ---------------------------- Primary state ------------------------------
-   // Note: This is the state of the editor. The circuit is stored elsewhere.
+   // ---------------------- State of input peripherals -----------------------
    let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
    type ButtonState =
@@ -277,6 +277,13 @@
       nothing: { state: null },
    }
    let [lmbShouldBeDown, rmbShouldBeDown] = [false, false]
+   // This is a hack that I'm using to have the act of dragging from the
+   // sidebar be interpreted as a move operation, irrespective of what
+   // operation the LMB is actually mapped to.
+   let lmbShouldSimulate: keyof typeof button | null = null
+
+   // ------------------------- Primary editor state --------------------------
+   // Note: This is the state of the editor. The circuit is stored elsewhere.
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
       mode: DrawMode
@@ -548,35 +555,34 @@
       }
    }
    function buttonReleased(name: keyof typeof button) {
-      if (button[name].state) {
-         switch (name) {
-            case "warp":
-               endWarp()
-               break
-            case "draw": {
-               let b = button[name]
-               if (b.state === "pressing" && !b.downJunction) {
-                  drawButtonTapped()
-               } else if (b.state === "dragging") {
-                  endDraw()
-               }
-               break
+      if (!button[name].state) return
+      switch (name) {
+         case "warp":
+            endWarp()
+            break
+         case "draw": {
+            let b = button[name]
+            if (b.state === "pressing" && !b.downJunction) {
+               drawButtonTapped()
+            } else if (b.state === "dragging") {
+               endDraw()
             }
-            case "erase":
-               endEraseSelect()
-               break
-            case "rigid":
-               endRigidSelect()
-               break
-            case "slide":
-               endSlide()
-               break
-            case "flex":
-               endFlexSelect()
-               break
+            break
          }
-         button[name] = { state: null }
+         case "erase":
+            endEraseSelect()
+            break
+         case "rigid":
+            endRigidSelect()
+            break
+         case "slide":
+            endSlide()
+            break
+         case "flex":
+            endFlexSelect()
+            break
       }
+      button[name] = { state: null }
    }
    function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
       shift = event.getModifierState("Shift")
@@ -682,14 +688,25 @@
          }
       }
    }
-   function spawnSymbol(kind: SymbolKind, grabOffset: Vector, e: MouseEvent) {
-      // Update the mouse's state.
-      let p = mouseInCoordinateSystemOf(canvas, e)
-      button.draw = { state: "dragging", downPosition: p }
+   function spawnSymbol(
+      kind: SymbolKind,
+      grabOffset: Vector,
+      e: MouseEvent,
+      draggingUsingLMB: boolean
+   ) {
+      // Update the mouse position.
+      mouse = mouseInCoordinateSystemOf(canvas, e)
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       beginWarp(symbol, mouse)
+      button.warp = { state: "dragging", downPosition: mouse }
+      if (draggingUsingLMB) {
+         // Set some flags so that when the LMB is released, the move operation
+         // is terminated.
+         lmbShouldBeDown = true
+         lmbShouldSimulate = "warp"
+      }
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -1446,12 +1463,14 @@
    on:mouseup={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
       if (!leftMouseIsDown(event) && lmbShouldBeDown) {
-         buttonReleased(buttonMap.LMB)
+         buttonReleased(lmbShouldSimulate || buttonMap.LMB)
          lmbShouldBeDown = false
+         lmbShouldSimulate = null
       }
       if (!rightMouseIsDown(event) && rmbShouldBeDown) {
-         buttonReleased(buttonMap.RMB)
+         buttonReleased(lmbShouldSimulate || buttonMap.RMB)
          rmbShouldBeDown = false
+         lmbShouldSimulate = null
       }
    }}
    on:mouseenter={(event) => {

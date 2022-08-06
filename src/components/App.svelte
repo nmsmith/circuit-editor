@@ -5,15 +5,19 @@
    import CircuitView from "~/components/CircuitView.svelte"
    // State
    let mouse: Point = Point.zero
+   let client: Point = Point.zero
 
-   // Callbacks passed to CircuitView
+   // Definitions passed to CircuitView
    // function onSymbolLeave() {}
 
-   // Callbacks obtained from circuitView
+   // Definitions obtained from circuitView
+   let buttonMap: any
+   let buttonForSidebarDragging: any
    let onSymbolEnter: (
       kind: SymbolKind,
       grabOffset: Vector,
-      event: MouseEvent
+      event: MouseEvent,
+      draggingUsingLMB: boolean
    ) => void
 
    // Data related to schematic symbols
@@ -25,6 +29,7 @@
    ]
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
+   let mouseEvents = new Map<EventTarget, MouseEvent>()
 
    // Pre-process the SVG (already in the DOM) of the schematic symbol whose
    // file path is given.
@@ -72,6 +77,26 @@
    }
 </script>
 
+<svelte:window
+   on:keydown={(event) => {
+      // If the key pressed corresponds to the key for moving symbols in the
+      // editor, simulate a mousedown event so that the symbol can be dragged.
+      if (event.repeat) return // Ignore repeated events from held-down keys.
+      if (buttonMap[event.code] !== buttonForSidebarDragging) return
+      let symbolUnderMouse = document.elementFromPoint(client.x, client.y)
+      if (!symbolUnderMouse) return
+      let symbolMouseEvent = mouseEvents.get(symbolUnderMouse)
+      if (!symbolMouseEvent) return
+      symbolUnderMouse.dispatchEvent(
+         new MouseEvent("mousedown", symbolMouseEvent)
+      )
+   }}
+   on:keyup={(event) => {
+      if (event.repeat) return // Ignore repeated events from held-down keys.
+      if (buttonMap[event.code] !== buttonForSidebarDragging) return
+      grabbedSymbol = null
+   }}
+/>
 <div
    id="app"
    on:contextmenu={(event) => {
@@ -81,17 +106,28 @@
    }}
    on:mousemove={(event) => {
       mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
+      client = new Point(event.clientX, event.clientY)
    }}
 >
-   <CircuitView bind:onSymbolEnter />
+   <CircuitView
+      bind:buttonMap
+      bind:buttonForSidebarDragging
+      bind:onSymbolEnter
+   />
    <div
       class="symbolPane"
       on:mouseup={() => {
          grabbedSymbol = null
       }}
       on:mouseleave={(event) => {
+         let leftMouseIsDown = (event.buttons & 0b001) !== 0
          if (grabbedSymbol) {
-            onSymbolEnter(grabbedSymbol.kind, grabbedSymbol.grabOffset, event)
+            onSymbolEnter(
+               grabbedSymbol.kind,
+               grabbedSymbol.grabOffset,
+               event,
+               leftMouseIsDown
+            )
             grabbedSymbol = null
          }
       }}
@@ -104,6 +140,11 @@
             style="visibility: {kind.filePath === grabbedSymbol?.kind.filePath
                ? 'hidden'
                : 'visible'}"
+            on:mousemove={(event) => {
+               // Store the "mousemove" event so that it can later be used to
+               // simulate a "mousedown" event with the right metadata!
+               if (event.target) mouseEvents.set(event.target, event)
+            }}
             on:mousedown={(event) => {
                grabbedSymbol = {
                   kind,
