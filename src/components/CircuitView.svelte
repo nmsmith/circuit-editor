@@ -249,11 +249,16 @@
    // ---------------------- State of input peripherals -----------------------
    let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
+   type ButtonDownInfo = {
+      downTime: number
+      downPosition: Point
+      downJunction?: Junction
+   }
    type ButtonState =
       | { state: null } // 'null' is more convenient than the string "up".
       // Pressing, but not yet moved enough to constitute a drag.
-      | { state: "pressing"; downPosition: Point; downJunction?: Junction }
-      | { state: "dragging"; downPosition: Point; downJunction?: Junction }
+      | ({ state: "pressing" } & ButtonDownInfo)
+      | ({ state: "dragging" } & ButtonDownInfo)
    let button: {
       query: ButtonState
       warp: ButtonState
@@ -523,67 +528,68 @@
    }
 
    // ---------------------------- Primary events -----------------------------
+   function buttonSelected(name: keyof typeof button) {
+      buttonMap.LMB = name
+   }
    function buttonPressed(name: keyof typeof button) {
+      let instantActionPossible = buttonMap.LMB === name
       // This function abstracts over mouse and keyboard events.
       if ((name === "rigid" || name === "flex") && button.draw.state) {
          chainDraw(name === "rigid")
       } else {
          abortAndReleaseAll()
-         button[name] = { state: "pressing", downPosition: mouse }
-         if (name === "warp") {
-            let closest = closestMovable(mouse)
-            if (closest) {
-               // Begin the operation immediately.
-               button[name].state = "dragging"
-               beginWarp(closest.object, closest.closestPart)
-            }
-         } else if (name === "rigid") {
+         button[name] = {
+            state: "pressing",
+            downTime: performance.now(),
+            downPosition: mouse,
+         }
+         if (name === "rigid" && instantActionPossible) {
             let segment = closestNearTo(mouse, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
                Segment.s = Segment.s
             }
-         } else if (name === "flex") {
+         } else if (name === "flex" && instantActionPossible) {
             let segment = closestNearTo(mouse, Segment.s)?.object
             if (segment?.isRigid) {
                segment.isRigid = false
                Segment.s = Segment.s
             }
-            // } else if (name === "A" && cmd) {
-            //    // Select everything in the circuit.
-            //    selected = new ToggleSet()
-            //    for (let segment of Segment.s) selected.add(segment)
-            //    for (let symbol of SymbolInstance.s) selected.add(symbol)
          }
       }
    }
    function buttonReleased(name: keyof typeof button) {
-      if (!button[name].state) return
-      switch (name) {
-         case "warp":
-            endWarp()
-            break
-         case "draw": {
-            let b = button[name]
-            if (b.state === "pressing" && !b.downJunction) {
-               drawButtonTapped()
-            } else if (b.state === "dragging") {
-               endDraw()
+      let b = button[name]
+      if (!b.state) return
+      if (b.state === "pressing" && buttonMap.LMB !== name) {
+         // The button was tapped.
+         buttonSelected(name)
+      } else {
+         switch (name) {
+            case "warp":
+               endWarp()
+               break
+            case "draw": {
+               if (b.state === "pressing" && !b.downJunction) {
+                  drawButtonTapped()
+               } else if (b.state === "dragging") {
+                  endDraw()
+               }
+               break
             }
-            break
+            case "erase":
+               endEraseSelect()
+               break
+            case "rigid":
+               endRigidSelect()
+               break
+            case "slide":
+               endSlide()
+               break
+            case "flex":
+               endFlexSelect()
+               break
          }
-         case "erase":
-            endEraseSelect()
-            break
-         case "rigid":
-            endRigidSelect()
-            break
-         case "slide":
-            endSlide()
-            break
-         case "flex":
-            endFlexSelect()
-            break
       }
       button[name] = { state: null }
    }
@@ -657,6 +663,14 @@
             beginDraw(dragVector)
          }
       }
+      if (button.warp.state === "pressing") {
+         let grabbed = closestMovable(button.warp.downPosition)
+         let dragVector = mouse.displacementFrom(button.warp.downPosition)
+         if (grabbed && dragVector.sqLength() >= halfGap * halfGap) {
+            button.warp = { ...button.warp, state: "dragging" }
+            beginWarp(grabbed.object, grabbed.closestPart)
+         }
+      }
       if (button.slide.state === "pressing") {
          let grabbed = closestGrabbable(button.slide.downPosition)
          let dragVector = mouse.displacementFrom(button.slide.downPosition)
@@ -703,7 +717,11 @@
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       beginWarp(symbol, mouse)
-      button.warp = { state: "dragging", downPosition: mouse }
+      button.warp = {
+         state: "dragging",
+         downTime: performance.now(),
+         downPosition: mouse,
+      }
       if (draggingUsingLMB) {
          // Set some flags so that when the LMB is released, the move operation
          // is terminated.
@@ -1011,6 +1029,7 @@
       // Start a new draw operation at the current draw endpoint.
       button.draw = {
          state: "pressing",
+         downTime: performance.now(),
          downPosition: mouse,
          downJunction: draw.end,
       }
@@ -1618,7 +1637,7 @@
          isMouseButton={buttonMap.LMB === b}
          isPressed={button[b].state !== null}
          on:mousedown={() => {
-            buttonMap.LMB = b
+            buttonSelected(b)
          }}
       />
    {/each}
@@ -1628,7 +1647,7 @@
          isMouseButton={buttonMap.LMB === b}
          isPressed={button[b].state !== null}
          on:mousedown={() => {
-            buttonMap.LMB = b
+            buttonSelected(b)
          }}
       />
    {/each}
