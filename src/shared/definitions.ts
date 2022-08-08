@@ -1,4 +1,6 @@
 import {
+   rememberAxis,
+   forgetAxis,
    Vector,
    Point,
    Rotation,
@@ -14,29 +16,6 @@ export type Vertex = Junction | Port
 export type VertexGlyph = "default" | "plug"
 export function isVertex(thing: any): thing is Vertex {
    return thing instanceof Junction || thing instanceof Port
-}
-
-// We use a global variable to keep track of the Axes that the circuit elements
-// in the scene "identify with", and the quantity thereof.
-const axes = new DefaultMap<Axis, number>(() => 0)
-export function rememberAxis(axis: Axis) {
-   axes.update(axis, (c) => c + 1)
-}
-export function forgetAxis(axis: Axis) {
-   let count = axes.read(axis)
-   count > 1 ? axes.set(axis, count - 1) : axes.delete(axis)
-}
-// The error ratio (∈ [0, 1]) at which two axes should be considered parallel.
-const axisErrorTolerance = 0.00001
-// Find an Axis in the scene that has approx. the same value as the given Axis.
-export function findAxis(subject: Axis): Axis
-export function findAxis(subject: Axis | undefined): Axis | undefined
-export function findAxis(subject: Axis | undefined): Axis | undefined {
-   if (!subject) return undefined
-   for (let axis of axes.keys()) {
-      if (subject.approxEquals(axis, axisErrorTolerance)) return axis
-   }
-   return subject
 }
 
 export interface Deletable {

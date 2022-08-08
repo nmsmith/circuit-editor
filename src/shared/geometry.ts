@@ -1,3 +1,31 @@
+import { DefaultMap } from "./utilities"
+
+// This global variable keeps track of the Axes used by the program. The goal
+// is to simulate value equality, which JavaScript doesn't have.
+const axes = new DefaultMap<Axis, number>(() => 0)
+// Users need to declare which Axis objects they want to be remembered, so that
+// the Axis static methods can return these existing objects rather than create
+// new ones. (i.e. this is manual memory management.)
+export function rememberAxis(axis: Axis) {
+   axes.update(axis, (c) => c + 1)
+}
+export function forgetAxis(axis: Axis) {
+   let count = axes.read(axis)
+   count > 1 ? axes.set(axis, count - 1) : axes.delete(axis)
+}
+// The error ratio (∈ [0, 1]) at which two axes should be considered parallel.
+const axisErrorTolerance = 0.00001
+// Find an existing Axis object that has approximately the same value.
+function findAxis(subject: Axis): Axis
+function findAxis(subject: Axis | undefined): Axis | undefined
+function findAxis(subject: Axis | undefined): Axis | undefined {
+   if (!subject) return undefined
+   for (let axis of axes.keys()) {
+      if (subject.approxEquals(axis, axisErrorTolerance)) return axis
+   }
+   return subject
+}
+
 export abstract class Object2D {
    abstract partClosestTo(point: Point): Point
    sqDistanceFrom(point: Point): number {
@@ -215,24 +243,26 @@ export class Axis extends Vector {
       // Ensure the angle is in [-90°, 90°).
       const quarterTurn = Math.PI / 2
       radians = mod(radians + quarterTurn, Math.PI) - quarterTurn
-      return new Axis(Math.cos(radians), Math.sin(radians))
+      return findAxis(new Axis(Math.cos(radians), Math.sin(radians)))
    }
    static fromVector(vec: Vector): Axis | undefined {
       if (vec.x === 0 && vec.y === 0) {
          return undefined
       } else if (vec.x > 0 || (vec.x === 0 && vec.y < 0)) {
          let v = vec.scaledBy(1 / vec.length())
-         return new Axis(v.x, v.y)
+         return findAxis(new Axis(v.x, v.y))
       } else {
          let v = vec.scaledBy(-1 / vec.length())
-         return new Axis(v.x, v.y)
+         return findAxis(new Axis(v.x, v.y))
       }
    }
    static fromDirection(dir: Direction): Axis {
       return Axis.fromVector(dir) as Axis
    }
    orthogonal(): Axis {
-      return this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
+      return findAxis(
+         this.y >= 0 ? new Axis(this.y, -this.x) : new Axis(-this.y, this.x)
+      )
    }
    posDirection(): Direction {
       return Direction.fromVector(this) as Direction

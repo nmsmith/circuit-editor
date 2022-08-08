@@ -3,8 +3,6 @@
    import {
       Vertex,
       isVertex,
-      rememberAxis,
-      findAxis,
       Junction,
       Port,
       Segment,
@@ -15,6 +13,7 @@
       convertToJunction,
    } from "~/shared/definitions"
    import {
+      rememberAxis,
       Object2D,
       Vector,
       Point,
@@ -110,8 +109,8 @@
    const snapAxes = [
       Axis.horizontal,
       Axis.vertical,
-      findAxis(Axis.fromAngle(0.125 * tau)), // 45 degrees
-      findAxis(Axis.fromAngle(0.375 * tau)), // 135 degrees
+      Axis.fromAngle(0.125 * tau), // 45 degrees
+      Axis.fromAngle(0.375 * tau), // 135 degrees
    ]
    snapAxes.forEach(rememberAxis)
    // The toggle order of the glyphs that appear at crossings.
@@ -739,7 +738,7 @@
          // draw operation.
          let lastDrawAxis = button.draw.downJunction.axes()[0]
          // Determine the axis the draw operation should begin along.
-         let drawAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+         let drawAxis = Axis.fromVector(dragVector) as Axis
          if (drawMode === "strafing") {
             drawAxis = nearestAxis(
                drawAxis,
@@ -762,7 +761,7 @@
       // Otherwise, start the draw operation at the closest attachable.
       let attach = closestAttachable(button.draw.downPosition)
       // Determine the axis the draw operation should begin along.
-      let dragAxis = findAxis(Axis.fromVector(dragVector) as Axis)
+      let dragAxis = Axis.fromVector(dragVector) as Axis
       let standardAxes =
          drawMode === "strafing"
             ? primaryAxes
@@ -883,7 +882,7 @@
       } else if (axes.length === 2 && axes.includes(drawAxis)) {
          slideAxis = axes[0] === drawAxis ? axes[1] : axes[0]
       } else {
-         slideAxis = findAxis(drawAxis.orthogonal())
+         slideAxis = drawAxis.orthogonal()
       }
       beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
@@ -899,7 +898,7 @@
       }
       if (draw.mode === "snapped rotation") {
          let dragVector = mouse.displacementFrom(draw.segment.start)
-         let dragAxis = findAxis(Axis.fromVector(dragVector))
+         let dragAxis = Axis.fromVector(dragVector)
          if (dragAxis) {
             // Snap to the nearest standard axis.
             let drawAxis = nearestAxis(dragAxis, snapAxes)
@@ -926,11 +925,9 @@
          } else {
             // draw.mode === "free rotation"
             associatedDrawAxis = (vertex: Vertex) =>
-               findAxis(
-                  Axis.fromVector(vertex.displacementFrom(draw!.segment.start))
-               )
-            defaultDrawAxis = findAxis(
-               Axis.fromVector(mouse.displacementFrom(draw.segment.start))
+               Axis.fromVector(vertex.displacementFrom(draw!.segment.start))
+            defaultDrawAxis = Axis.fromVector(
+               mouse.displacementFrom(draw.segment.start)
             )
          }
          function isAcceptable(vertex: Vertex) {
@@ -1037,7 +1034,7 @@
       endDraw(false)
    }
    function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
-      let orthogonalAxis = findAxis(slideAxis.orthogonal())
+      let orthogonalAxis = slideAxis.orthogonal()
       let partGrabbed = atPart.clone()
       // Before movement commences, record the position of every Movable.
       // We need to use the original positions as a reference, because we will
@@ -1090,10 +1087,8 @@
             orthRanges.set(segment, new Range1D(oStart, oEnd))
          }
          for (let symbol of SymbolInstance.s) {
-            let symbolAxis = findAxis(
-               Axis.fromDirection(
-                  Direction.positiveX.rotatedBy(symbol.rotation)
-               )
+            let symbolAxis = Axis.fromDirection(
+               Direction.positiveX.rotatedBy(symbol.rotation)
             )
             if (symbolAxis === slideAxis || symbolAxis === orthogonalAxis) {
                slideRanges.set(symbol, rangeAlong(slideDir, symbol))
@@ -1321,9 +1316,7 @@
       if (!warp) return
       warp.movable.moveTo(mouse.displacedBy(warp.offset))
       for (let [segment] of warp.movable.edges()) {
-         let axis = findAxis(
-            Axis.fromVector(segment.end.displacementFrom(segment.start))
-         )
+         let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
          ;(segment.axis as Axis) = axis
       }
