@@ -13,7 +13,6 @@
       SymbolKind,
       SymbolInstance,
       convertToJunction,
-      Edge,
    } from "~/shared/definitions"
    import {
       Object2D,
@@ -40,7 +39,7 @@
    import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
-   import ToolButton from "./Toolbutton.svelte"
+   import Button from "./Button.svelte"
    import Heap from "heap"
 
    // ---------------------- Props (for input & output) -----------------------
@@ -77,17 +76,18 @@
       KeyE: "erase",
       KeyR: "rigid",
       KeyT: "tether",
-      KeyA: "operationA",
+      KeyA: "aButton",
       KeyS: "slide",
       KeyD: "draw",
       KeyF: "flex",
-      KeyG: "operationG",
+      KeyG: "gButton",
    }
+   const row1Buttons: Button[] = ["query", "warp", "erase", "rigid", "tether"]
+   const row2Buttons: Button[] = ["aButton", "slide", "draw", "flex", "gButton"]
    export const buttonForSidebarDragging: Button = "warp"
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
-   const toolButtonSize = 56
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -98,7 +98,6 @@
    const standardGap = 30 // standard spacing between scene elements
    const halfGap = standardGap / 2
    const hopoverRadius = halfGap / 2
-   const gapSelectError = 1 // diff from standardGap acceptable to gap select
    // Snapping constants
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
    const snapRadius = 12 // dist btw mouse & snap point at which snapping occurs
@@ -242,6 +241,10 @@
    function selectedDrawMode(): DrawMode {
       return alt ? (shift ? "free rotation" : "snapped rotation") : "strafing"
    }
+   function labelOfButton(s: string): string {
+      if (s.endsWith("Button")) return s[0].toUpperCase()
+      else return s[0].toUpperCase() + s.slice(1)
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouse: Point = Point.zero
@@ -257,11 +260,11 @@
       erase: ButtonState
       rigid: ButtonState
       tether: ButtonState
-      operationA: ButtonState
+      aButton: ButtonState
       slide: ButtonState
       draw: ButtonState
       flex: ButtonState
-      operationG: ButtonState
+      gButton: ButtonState
       nothing: ButtonState // A dummy button.
    } = {
       query: { state: null },
@@ -269,11 +272,11 @@
       erase: { state: null },
       rigid: { state: null },
       tether: { state: null },
-      operationA: { state: null },
+      aButton: { state: null },
       slide: { state: null },
       draw: { state: null },
       flex: { state: null },
-      operationG: { state: null },
+      gButton: { state: null },
       nothing: { state: null },
    }
    let [lmbShouldBeDown, rmbShouldBeDown] = [false, false]
@@ -900,7 +903,7 @@
          let associatedDrawAxis: (vertex: Vertex) => Axis | undefined
          let defaultDrawAxis: Axis | undefined
          if (draw.mode === "strafing") {
-            associatedDrawAxis = (vertex: Vertex) => draw!.segment.axis
+            associatedDrawAxis = () => draw!.segment.axis
             defaultDrawAxis = draw.segment.axis
          } else {
             // draw.mode === "free rotation"
@@ -1605,84 +1608,50 @@
       {#if flexSelect}
          <RectSelectBox start={flexSelect.start} end={mouse} />
       {/if}
-      <!-- Tool bar -->
-      <ToolButton
-         label="Query"
-         x={0 * toolButtonSize}
-         y={canvasHeight - 2 * toolButtonSize}
-         size={toolButtonSize}
-         active={button.query.state !== null}
-      />
-      <ToolButton
-         label="Warp"
-         x={1 * toolButtonSize}
-         y={canvasHeight - 2 * toolButtonSize}
-         size={toolButtonSize}
-         active={button.warp.state !== null}
-      />
-      <ToolButton
-         label="Erase"
-         x={2 * toolButtonSize}
-         y={canvasHeight - 2 * toolButtonSize}
-         size={toolButtonSize}
-         active={button.erase.state !== null}
-      />
-      <ToolButton
-         label="Rigid"
-         x={3 * toolButtonSize}
-         y={canvasHeight - 2 * toolButtonSize}
-         size={toolButtonSize}
-         active={button.rigid.state !== null}
-      />
-      <ToolButton
-         label="Tether"
-         x={4 * toolButtonSize}
-         y={canvasHeight - 2 * toolButtonSize}
-         size={toolButtonSize}
-         active={button.tether.state !== null}
-      />
-      <ToolButton
-         label="A"
-         x={0 * toolButtonSize}
-         y={canvasHeight - toolButtonSize}
-         size={toolButtonSize}
-         active={button.operationA.state !== null}
-      />
-      <ToolButton
-         label="Slide"
-         x={1 * toolButtonSize}
-         y={canvasHeight - toolButtonSize}
-         size={toolButtonSize}
-         active={button.slide.state !== null}
-      />
-      <ToolButton
-         label="Draw"
-         x={2 * toolButtonSize}
-         y={canvasHeight - toolButtonSize}
-         size={toolButtonSize}
-         active={button.draw.state !== null}
-      />
-      <ToolButton
-         label="Flex"
-         x={3 * toolButtonSize}
-         y={canvasHeight - toolButtonSize}
-         size={toolButtonSize}
-         active={button.flex.state !== null}
-      />
-      <ToolButton
-         label="G"
-         x={4 * toolButtonSize}
-         y={canvasHeight - toolButtonSize}
-         size={toolButtonSize}
-         active={button.operationG.state !== null}
-      />
    </g>
 </svg>
+
+<div id="tool-bar">
+   {#each row1Buttons as b}
+      <Button
+         label={labelOfButton(b)}
+         isMouseButton={buttonMap.LMB === b}
+         isPressed={button[b].state !== null}
+         on:mousedown={() => {
+            buttonMap.LMB = b
+         }}
+      />
+   {/each}
+   {#each row2Buttons as b}
+      <Button
+         label={labelOfButton(b)}
+         isMouseButton={buttonMap.LMB === b}
+         isPressed={button[b].state !== null}
+         on:mousedown={() => {
+            buttonMap.LMB = b
+         }}
+      />
+   {/each}
+</div>
+/
 
 <style>
    svg {
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
+   }
+   #tool-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      display: grid;
+      grid-template-rows: 50px 50px;
+      grid-template-columns: repeat(5, 50px);
+      gap: 1px;
+      background-color: rgb(58, 58, 58);
+      border-style: solid;
+      border-color: black;
+      border-width: 3px;
    }
 </style>

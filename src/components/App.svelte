@@ -77,6 +77,7 @@
    }
 </script>
 
+<!-- svelte-ignore missing-declaration -->
 <svelte:window
    on:keydown={(event) => {
       // If the key pressed corresponds to the key for moving symbols in the
