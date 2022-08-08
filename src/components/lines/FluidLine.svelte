@@ -2,7 +2,7 @@
    import type { LineSegment } from "~/shared/geometry"
    export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
    export let segment: LineSegment
-   export let isRigid: boolean = true
+   export let isRigid: boolean = false
    $: start = segment.start
    $: end = segment.end
 </script>

@@ -1535,9 +1535,10 @@
             {#if !eraseSelect?.items.has(segment)}
                <FluidLine
                   segment={section}
-                  isRigid={(segment.isRigid &&
-                     !flexSelect?.items.has(segment)) ||
-                     rigidSelect?.items.has(segment)}
+                  isRigid={Boolean(
+                     (segment.isRigid && !flexSelect?.items.has(segment)) ||
+                        rigidSelect?.items.has(segment)
+                  )}
                />
             {/if}
          {/each}
