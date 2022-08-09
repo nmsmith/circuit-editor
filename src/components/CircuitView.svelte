@@ -28,11 +28,7 @@
       closestSegmentTo,
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
-   import {
-      mouseInCoordinateSystemOf,
-      DefaultMap,
-      ToggleSet,
-   } from "~/shared/utilities"
+   import { mouseInCoordinateSystemOf, DefaultMap } from "~/shared/utilities"
    import FluidLine from "~/components/lines/FluidLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
    import JunctionNode from "~/components/lines/JunctionNode.svelte"
@@ -299,7 +295,6 @@
       segment: Segment
       end: Junction
       segmentIsNew: boolean
-      shouldEaseIn: boolean
       endObject?: Attachable
    }
    type SlideInstruction = { movable: Movable; delay: number }
@@ -863,7 +858,6 @@
          segment,
          end,
          segmentIsNew: true,
-         shouldEaseIn: false,
       }
       if (mode === "strafing") beginDrawStrafing()
    }
@@ -882,7 +876,6 @@
          segment,
          end,
          segmentIsNew: false,
-         shouldEaseIn: mode === "strafing",
       }
       if (mode === "strafing") beginDrawStrafing()
    }
@@ -907,7 +900,6 @@
       if (draw.mode !== selectedDrawMode()) {
          // Change the draw mode.
          endSlide() // If we were sliding, commit the operation.
-         draw.shouldEaseIn = false
          draw.mode = selectedDrawMode()
          if (draw.mode === "strafing") beginDrawStrafing()
       }
@@ -1227,12 +1219,6 @@
    }
    function updateSlide() {
       if (!slide) return
-      let downPosition: Point
-      if (button.draw.state === "dragging") {
-         downPosition = button.draw.downPosition
-      } else if (button.slide.state === "dragging") {
-         downPosition = button.slide.downPosition
-      } else return
       // Revert the previous movement.
       for (let m of movables()) {
          if (draw && m === draw.end) continue
@@ -1240,7 +1226,6 @@
       }
       // Determine the direction and distance things should move.
       let slideDistance: number
-      let shouldSnap: boolean
       if (draw) {
          // The slideDistance has already been determined by updateDraw().
          // Move just enough to "straighten out" the line being drawn.
@@ -1248,26 +1233,12 @@
             .displacementFrom(draw.segment.start)
             .inTermsOfBasis([slide.axis, draw.segment.axis])
          slideDistance = slideVector.scalarProjectionOnto(slide.axis)
-         shouldSnap = false
       } else {
          // The slideDistance will be determined here.
          slideDistance = mouse
             .displacementFrom(slide.partGrabbed)
             .scalarProjectionOnto(slide.axis)
-         shouldSnap = true
       }
-      // if (slide.distance < 15 && (!draw || draw.shouldEaseIn)) {
-      //    // The user may have grabbed slightly-away from their target object.
-      //    // If so, gradually pull the object towards the mouse cursor.
-      //    dragVector = mouse.displacementFrom(
-      //       downPosition.interpolatedToward(
-      //          slide.partGrabbed,
-      //          slide.distance / 15
-      //       )
-      //    )
-      // } else {
-      //    dragVector = mouse.displacementFrom(slide.partGrabbed)
-      // }
       let direction, instructions
       if (slideDistance > 0) {
          direction = slide.axis.posDirection()
