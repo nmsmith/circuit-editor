@@ -127,7 +127,6 @@
    type Attachable = Vertex | Segment // Something a segment can be attached to.
    type Toggleable = Vertex | Segment | Crossing
    type Grabbable = Junction | Segment | SymbolInstance
-   type Selectable = Grabbable
    type Movable = Junction | SymbolInstance // Things that move when dragged.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
@@ -234,7 +233,7 @@
       let scores = ofAxes.map((axis) => Math.abs(to.dot(axis)))
       return ofAxes[scores.indexOf(Math.max(...scores))]
    }
-   function aButtonIsHeld(): boolean {
+   $: aButtonIsHeld = (): boolean => {
       return Object.values(button).some((k) => k.state)
    }
    function selectedDrawMode(): DrawMode {
@@ -248,28 +247,29 @@
    // ---------------------- State of input peripherals -----------------------
    let mouse: Point = Point.zero
    let [shift, alt, cmd] = [false, false, false]
-   type ButtonDownInfo = {
+   type ButtonDownInfo<Target> = {
       downTime: number
       downPosition: Point
-      downJunction?: Junction
+      target?: { object: Target; part: Point }
+      repeated?: boolean
    }
-   type ButtonState =
+   type ButtonState<Target> =
       | { state: null } // 'null' is more convenient than the string "up".
       // Pressing, but not yet moved enough to constitute a drag.
-      | ({ state: "pressing" } & ButtonDownInfo)
-      | ({ state: "dragging" } & ButtonDownInfo)
+      | ({ state: "pressing" } & ButtonDownInfo<Target>)
+      | ({ state: "dragging" } & ButtonDownInfo<Target>)
    let button: {
-      query: ButtonState
-      warp: ButtonState
-      erase: ButtonState
-      rigid: ButtonState
-      tether: ButtonState
-      aButton: ButtonState
-      slide: ButtonState
-      draw: ButtonState
-      flex: ButtonState
-      gButton: ButtonState
-      nothing: ButtonState // A dummy button.
+      query: ButtonState<null>
+      warp: ButtonState<Movable>
+      erase: ButtonState<null>
+      rigid: ButtonState<null>
+      tether: ButtonState<null>
+      aButton: ButtonState<null>
+      slide: ButtonState<Grabbable>
+      draw: ButtonState<Attachable>
+      flex: ButtonState<null>
+      gButton: ButtonState<null>
+      nothing: ButtonState<null> // A dummy button.
    } = {
       query: { state: null },
       warp: { state: null },
@@ -322,7 +322,7 @@
    let multiSelect: null | {
       mode: "new" | "add" | "remove"
       start: Point
-      items: Set<Selectable>
+      items: Set<Grabbable>
    } = null
    type SelectOperation<T> = null | {
       start: Point
@@ -337,22 +337,10 @@
    }
    let rigidSelect: SelectOperation<Segment>
    let flexSelect: SelectOperation<Segment>
-   let selected: ToggleSet<Selectable> = new ToggleSet()
 
    // ---------------------------- Derived state ------------------------------
    $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
    $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
-   let unconfirmedSelected: Set<Selectable>
-   $: /* Combine the confirmed selection with the selection-in-progress.  */ {
-      unconfirmedSelected = new Set(selected)
-      if (multiSelect) {
-         if (multiSelect.mode === "remove") {
-            for (let item of multiSelect.items) unconfirmedSelected.delete(item)
-         } else {
-            for (let item of multiSelect.items) unconfirmedSelected.add(item)
-         }
-      }
-   }
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
       crossingMap = new DefaultMap(() => new Map())
@@ -389,28 +377,39 @@
          cursor = "cell"
       }
    }
-   let highlighted: Set<Highlightable>
+   let hoverLight: Set<Highlightable>
    $: /* Highlight objects near the mouse cursor. */ {
-      highlighted = new Set()
+      hoverLight = new Set()
       if (draw?.endObject instanceof Segment) {
-         highlighted.add(draw.endObject)
+         hoverLight.add(draw.endObject)
       } else if (!aButtonIsHeld()) {
          let thing = closestAttachableOrToggleable(mouse)
          if (thing) {
             if (thing.object instanceof Crossing) {
-               highlighted.add(thing.closestPart)
+               hoverLight.add(thing.closestPart)
             } else {
-               highlighted.add(thing.object)
+               hoverLight.add(thing.object)
             }
          }
       }
    }
-   type HighlightStyle = "hover" | "select" | undefined
-   $: styleOf = function (thing: Highlightable | Selectable): HighlightStyle {
+   let grabLight: Set<Highlightable>
+   $: {
+      grabLight = new Set()
+      if (draw) grabLight.add(draw.end)
+      if (button.warp.state && button.warp.target?.object)
+         grabLight.add(button.warp.target.object)
+      else if (button.slide.state && button.slide.target?.object)
+         grabLight.add(button.slide.target.object)
+      else if (button.tether.state && button.tether.target?.object)
+         grabLight.add(button.tether.target.object)
+   }
+   type HighlightStyle = "hover" | "grab" | undefined
+   $: styleOf = function (thing: Highlightable): HighlightStyle {
       // This function _must_ be defined within $, because its behaviour changes
       // whenever the state below changes, and Svelte needs to know that.
-      if (unconfirmedSelected.has(thing as Selectable)) return "select"
-      else if (highlighted.has(thing)) return "hover"
+      if (grabLight.has(thing)) return "grab"
+      else if (hoverLight.has(thing)) return "hover"
    }
    type Section = Geometry.LineSegment<Point>
    type Glyph =
@@ -468,7 +467,7 @@
                   flip,
                   style: styleOf(segment) || styleOf(crossPoint),
                })
-            } else if (type === "no hop" && highlighted.has(crossPoint)) {
+            } else if (type === "no hop" && hoverLight.has(crossPoint)) {
                glyphsToDraw.add({
                   type: "point marker",
                   point: crossPoint,
@@ -500,8 +499,8 @@
                })
             } else if (
                v.isStraightLine() ||
-               highlighted.has(v) ||
-               unconfirmedSelected.has(v)
+               hoverLight.has(v) ||
+               grabLight.has(v)
             ) {
                glyphsToDraw.add({
                   type: "point marker",
@@ -509,20 +508,13 @@
                   style: styleOf(v),
                })
             }
-         } else if (v instanceof Port && highlighted.has(v)) {
+         } else if (v instanceof Port && hoverLight.has(v)) {
             glyphsToDraw.add({
                type: "point marker",
                point: v,
                style: styleOf(v),
             })
          }
-      }
-      if (draw) {
-         glyphsToDraw.add({
-            type: "point marker",
-            point: draw.end,
-            style: "select",
-         })
       }
    }
 
@@ -537,23 +529,37 @@
          chainDraw(name === "rigid")
       } else {
          abortAndReleaseAll()
-         button[name] = {
-            state: "pressing",
-            downTime: performance.now(),
-            downPosition: mouse,
-         }
-         if (name === "rigid" && instantActionPossible) {
+         let downTime = performance.now()
+         let downPosition = mouse
+         let target
+         if (name === "draw") {
+            let c = closestAttachable(downPosition)
+            if (c) target = { object: c.object, part: c.closestPart }
+            button.draw = { state: "pressing", downTime, downPosition, target }
+         } else if (name === "warp") {
+            let c = closestMovable(downPosition)
+            if (c) target = { object: c.object, part: c.closestPart }
+            button.warp = { state: "pressing", downTime, downPosition, target }
+         } else if (name === "slide") {
+            let c = closestGrabbable(downPosition)
+            if (c) target = { object: c.object, part: c.closestPart }
+            button.slide = { state: "pressing", downTime, downPosition, target }
+         } else if (name === "rigid" && instantActionPossible) {
             let segment = closestNearTo(mouse, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
                Segment.s = Segment.s
             }
+            button.rigid = { state: "pressing", downTime, downPosition }
          } else if (name === "flex" && instantActionPossible) {
             let segment = closestNearTo(mouse, Segment.s)?.object
             if (segment?.isRigid) {
                segment.isRigid = false
                Segment.s = Segment.s
             }
+            button.flex = { state: "pressing", downTime, downPosition }
+         } else {
+            button[name] = { state: "pressing", downTime, downPosition }
          }
       }
    }
@@ -569,7 +575,7 @@
                endWarp()
                break
             case "draw": {
-               if (b.state === "pressing" && !b.downJunction) {
+               if (b.state === "pressing" && !b.repeated) {
                   drawButtonTapped()
                } else if (b.state === "dragging") {
                   endDraw()
@@ -658,49 +664,54 @@
       if (button.draw.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.draw.downPosition)
          if (dragVector.sqLength() >= halfGap * halfGap) {
-            button.draw = { ...button.draw, state: "dragging" }
             beginDraw(dragVector)
+            button.draw = { ...button.draw, state: "dragging" }
          }
       }
       if (button.warp.state === "pressing") {
-         let grabbed = closestMovable(button.warp.downPosition)
          let dragVector = mouse.displacementFrom(button.warp.downPosition)
-         if (grabbed && dragVector.sqLength() >= halfGap * halfGap) {
+         if (button.warp.target && dragVector.sqLength() >= halfGap * halfGap) {
+            beginWarp(button.warp.target.object, button.warp.target.part)
             button.warp = { ...button.warp, state: "dragging" }
-            beginWarp(grabbed.object, grabbed.closestPart)
          }
       }
       if (button.slide.state === "pressing") {
-         let grabbed = closestGrabbable(button.slide.downPosition)
          let dragVector = mouse.displacementFrom(button.slide.downPosition)
-         if (grabbed && dragVector.sqLength() >= halfGap * halfGap) {
-            button.slide = { ...button.slide, state: "dragging" }
+         if (
+            button.slide.target &&
+            dragVector.sqLength() >= halfGap * halfGap
+         ) {
             let dragAxis = Axis.fromVector(dragVector)
             if (dragAxis) {
                let slideAxis = nearestAxis(dragAxis, primaryAxes)
-               beginSlide(slideAxis, grabbed.object, grabbed.closestPart)
+               beginSlide(
+                  slideAxis,
+                  button.slide.target.object,
+                  button.slide.target.part
+               )
             }
+            button.slide = { ...button.slide, state: "dragging" }
          }
       }
       if (button.erase.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.erase.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            button.erase = { ...button.erase, state: "dragging" }
             beginEraseSelect(button.erase.downPosition)
+            button.erase = { ...button.erase, state: "dragging" }
          }
       }
       if (button.rigid.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.rigid.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            button.rigid = { ...button.rigid, state: "dragging" }
             beginRigidSelect(button.rigid.downPosition)
+            button.rigid = { ...button.rigid, state: "dragging" }
          }
       }
       if (button.flex.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.flex.downPosition)
          if (dragVector.sqLength() >= sqSelectStartDistance) {
-            button.flex = { ...button.flex, state: "dragging" }
             beginFlexSelect(button.flex.downPosition)
+            button.flex = { ...button.flex, state: "dragging" }
          }
       }
    }
@@ -731,12 +742,15 @@
 
    // ---------------------------- Derived events -----------------------------
    function beginDraw(dragVector: Vector) {
-      if (button.draw.state !== "dragging") return
+      if (!button.draw.state) return
       let drawMode = selectedDrawMode()
-      if (button.draw.downJunction) {
+      if (
+         button.draw.repeated &&
+         button.draw.target?.object instanceof Junction
+      ) {
          // Start the draw operation at the endpoint of the previous
          // draw operation.
-         let lastDrawAxis = button.draw.downJunction.axes()[0]
+         let lastDrawAxis = button.draw.target.object.axes()[0]
          // Determine the axis the draw operation should begin along.
          let drawAxis = Axis.fromVector(dragVector) as Axis
          if (drawMode === "strafing") {
@@ -750,7 +764,7 @@
                snapAxes.filter((axis) => axis !== lastDrawAxis)
             )
          }
-         newDraw(button.draw.downJunction, drawAxis)
+         newDraw(button.draw.target.object, drawAxis)
          return
       } else if (
          closestAttachableOrToggleable(button.draw.downPosition)
@@ -759,7 +773,7 @@
          return // Don't allow draw operations to start at crossings.
       }
       // Otherwise, start the draw operation at the closest attachable.
-      let attach = closestAttachable(button.draw.downPosition)
+      let attach = button.draw.target
       // Determine the axis the draw operation should begin along.
       let dragAxis = Axis.fromVector(dragVector) as Axis
       let standardAxes =
@@ -770,7 +784,6 @@
             : [dragAxis]
       if (attach?.object instanceof Segment) {
          let segment = attach.object
-         let closestPart = attach.closestPart
          let drawAxis =
             drawMode === "strafing"
                ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
@@ -779,20 +792,20 @@
                : dragAxis
          if (drawMode !== "free rotation" && drawAxis === segment.axis) {
             // Cut the segment, and allow the user to move one side of it.
-            let direction = segment.start.displacementFrom(closestPart)
+            let direction = segment.start.displacementFrom(attach.part)
             let [newStart, other] =
                direction.dot(dragVector) > 0
                   ? [segment.start, segment.end]
                   : [segment.end, segment.start]
-            let jMove = new Junction(closestPart)
-            let jOther = new Junction(closestPart)
+            let jMove = new Junction(attach.part)
+            let jOther = new Junction(attach.part)
             let moveSegment = new Segment(newStart, jMove, drawAxis)
             let otherSegment = new Segment(other, jOther, drawAxis)
             segment.replaceWith(moveSegment, otherSegment)
             continueDraw(moveSegment, jMove)
          } else {
             // Create a T-junction.
-            let junction = new Junction(closestPart)
+            let junction = new Junction(attach.part)
             segment.splitAt(junction)
             newDraw(junction, drawAxis)
          }
@@ -1028,7 +1041,8 @@
          state: "pressing",
          downTime: performance.now(),
          downPosition: mouse,
-         downJunction: draw.end,
+         target: { object: draw.end, part: draw.end },
+         repeated: true,
       }
       draw.endObject = undefined // Don't connect to anything else.
       endDraw(false)
@@ -1494,7 +1508,7 @@
       if (!rightMouseIsDown(event) && rmbShouldBeDown) abortAndReleaseAll()
    }}
 >
-   <!-- Symbol highlight/selection layer -->
+   <!-- Symbol highlight layer -->
    <g>
       {#each [...SymbolInstance.s] as symbol}
          {@const c = symbol.svgCorners()}
@@ -1508,22 +1522,22 @@
          {/if}
       {/each}
    </g>
-   <!-- Segment highlight layer -->
+   <!-- Segment highlight layer 1 -->
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
-         {#if highlighted.has(segment)}
+         {#if hoverLight.has(segment)}
             {#each sections as section}
                <FluidLine renderStyle="hover" segment={section} />
             {/each}
          {/if}
       {/each}
    </g>
-   <!-- Segment selection layer -->
+   <!-- Segment highlight layer 2 -->
    <g>
       {#each [...segmentsToDraw] as [segment, sections]}
-         {#if unconfirmedSelected.has(segment)}
+         {#if grabLight.has(segment)}
             {#each sections as section}
-               <FluidLine renderStyle="select" segment={section} />
+               <FluidLine renderStyle="grab" segment={section} />
             {/each}
          {/if}
       {/each}
@@ -1544,7 +1558,7 @@
          {/each}
       {/each}
    </g>
-   <!-- Lower glyph highlight/selection layer -->
+   <!-- Lower glyph highlight layer -->
    <g>
       {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
          {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
@@ -1586,7 +1600,7 @@
    </g>
    <!-- Symbol layer -->
    <g id="symbol layer" />
-   <!-- Upper glyph highlight/selection layer -->
+   <!-- Upper glyph highlight layer -->
    <g>
       {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
          {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}

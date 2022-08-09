@@ -211,11 +211,11 @@
    :global(.hover.fill) {
       fill: rgb(0, 234, 255);
    }
-   :global(.select.stroke) {
+   :global(.grab.stroke) {
       stroke: white;
       fill: none;
    }
-   :global(.select.fill) {
+   :global(.grab.fill) {
       fill: white;
    }
    :global(.debug.stroke) {

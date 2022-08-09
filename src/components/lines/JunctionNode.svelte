@@ -1,6 +1,6 @@
 <script lang="ts">
    import type { Point } from "~/shared/geometry"
-   export let renderStyle: "default" | "hover" | "select" | "debug" = "default"
+   export let renderStyle: "default" | "hover" | "grab" | "debug" = "default"
    export let position: Point
 </script>
 
