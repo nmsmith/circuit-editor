@@ -673,19 +673,21 @@
          }
       }
       if (button.slide.state === "pressing") {
+         let target = button.slide.target
          let dragVector = mouse.displacementFrom(button.slide.downPosition)
-         if (
-            button.slide.target &&
-            dragVector.sqLength() >= halfGap * halfGap
-         ) {
+         if (target && dragVector.sqLength() >= halfGap * halfGap) {
             let dragAxis = Axis.fromVector(dragVector)
             if (dragAxis) {
-               let slideAxis = nearestAxis(dragAxis, primaryAxes)
-               beginSlide(
-                  slideAxis,
-                  button.slide.target.object,
-                  button.slide.target.part
-               )
+               let slideAxis: Axis
+               if (target.object instanceof Segment) {
+                  slideAxis = nearestAxis(dragAxis, [
+                     ...target.object.start.axes(),
+                     ...target.object.end.axes(),
+                  ])
+               } else {
+                  slideAxis = nearestAxis(dragAxis, target.object.axes())
+               }
+               beginSlide(slideAxis, target.object, target.part)
             }
             button.slide = { ...button.slide, state: "dragging" }
          }
