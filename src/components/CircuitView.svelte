@@ -20,6 +20,7 @@
       Rotation,
       Direction,
       Axis,
+      Line,
       Range1D,
       Range2D,
       ClosenessResult,
@@ -90,6 +91,7 @@
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
+   const infinityVector = new Vector(Infinity, Infinity)
    // Configurable constants
    const sqMinSegmentLength = 15 * 15
    const sqSelectStartDistance = 8 * 8
@@ -1284,12 +1286,11 @@
          // two objects touch, ease toward that distance.
          let smallestDistance = Infinity
          for (let instruction of instructions) {
-            if (instruction.delay === 0) continue
             let distance = slideDistance - instruction.delay
             if (Math.abs(distance) < Math.abs(smallestDistance))
                smallestDistance = distance
          }
-         if (Math.abs(smallestDistance) <= snapRadius) {
+         if (Math.abs(smallestDistance) < snapRadius) {
             slideDistance -= smallestDistance
          } else if (Math.abs(smallestDistance) < easeRadius) {
             slideDistance -=
@@ -1328,7 +1329,72 @@
    }
    function updateWarp() {
       if (!warp) return
+      // Move the object to the mouse position.
       warp.movable.moveTo(mouse.displacedBy(warp.offset))
+
+      // Determine whether displacing the object slightly will result in some
+      // of its incident edges having a "nice" axis. If so, displace the object.
+
+      // Begin by computing the minimum rejection from each axis.
+      let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
+      for (let [segment, farVertex] of warp.movable.edges()) {
+         let nearVertex =
+            farVertex === segment.end ? segment.start : segment.end
+         for (let axis of snapAxes) {
+            let rejection = new Line(farVertex, axis)
+               .partClosestTo(nearVertex)
+               .displacementFrom(nearVertex)
+            if (rejection.sqLength() < axisRejections.read(axis).sqLength())
+               axisRejections.set(axis, rejection)
+         }
+      }
+      // Sort the rejections so that the two smallest ones can be used.
+      let rejections = [...axisRejections].sort(
+         (x, y) => x[1].sqLength() - y[1].sqLength()
+      )
+      let oneAxisDisplacement = infinityVector
+      if (rejections.length >= 1) {
+         oneAxisDisplacement = rejections[0][1]
+      }
+      let twoAxisDisplacement = infinityVector
+      if (rejections.length >= 2) {
+         // Find the displacement vector that satisfies both of the rejections
+         // simultaneously. (Take the intersection of the dual lines associated
+         // with each displacement vector.)
+         let [[axis1, reject1], [axis2, reject2]] = rejections
+         let dualLine1 = new Line(Point.zero.displacedBy(reject1), axis1)
+         let dualLine2 = new Line(Point.zero.displacedBy(reject2), axis2)
+         let intersection = dualLine1.intersection(dualLine2)
+         if (intersection) {
+            twoAxisDisplacement = intersection.displacementFrom(Point.zero)
+         }
+      }
+      let displacement = zeroVector
+      // First, ease to the nearest axis. This keeps the movement "on a rail".
+      let sqLength1 = oneAxisDisplacement.sqLength()
+      if (sqLength1 < sqSnapRadius) {
+         displacement = oneAxisDisplacement
+      } else if (sqLength1 < sqEaseRadius) {
+         displacement = oneAxisDisplacement
+            .direction()
+            ?.scaledBy(easeFn(Math.sqrt(sqLength1))) as Vector
+      }
+      // Next, ease to the intersection.
+      let remainingDisplacement = twoAxisDisplacement.sub(displacement)
+      let sqLength2 = remainingDisplacement.sqLength()
+      if (sqLength2 < sqSnapRadius) {
+         displacement = twoAxisDisplacement
+      } else if (sqLength2 < sqEaseRadius) {
+         displacement = displacement.add(
+            remainingDisplacement
+               .direction()
+               ?.scaledBy(easeFn(Math.sqrt(sqLength2))) as Vector
+         )
+      }
+      // Execute the movement.
+      warp.movable.moveBy(displacement)
+
+      // Update the axis object associated with each incident edge.
       for (let [segment] of warp.movable.edges()) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
