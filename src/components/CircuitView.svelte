@@ -165,9 +165,10 @@
    }
    function closestSegmentNearTo(
       point: Point,
-      alongAxis: Axis
+      alongAxis: Axis,
+      segments: Iterable<Segment> = Segment.s
    ): ClosenessResult<Segment> {
-      let closest = closestSegmentTo(point, alongAxis, Segment.s)
+      let closest = closestSegmentTo(point, alongAxis, segments)
       let sqBuffer = hopoverRadius * hopoverRadius
       if (
          closest &&
@@ -974,6 +975,10 @@
          draw.mode = selectedDrawMode()
          if (draw.mode === "strafing") beginDrawStrafing()
       }
+
+      let targetSegments = [...Segment.s].filter(
+         (seg) => ![...draw!.segment.start.edges()].find(([s]) => s === seg)
+      )
       if (draw.mode === "snapped rotation") {
          let dragVector = mouse.displacementFrom(draw.segment.start)
          let dragAxis = Axis.fromVector(dragVector)
@@ -985,7 +990,7 @@
             let end = draw.segment.start.displacedBy(
                dragVector.projectionOnto(drawAxis)
             )
-            let s = closestSegmentNearTo(end, drawAxis)
+            let s = closestSegmentNearTo(end, drawAxis, targetSegments)
             if (s) {
                draw.end.moveTo(s.closestPart)
                draw.endObject = s.object
@@ -998,6 +1003,12 @@
          let associatedDrawAxis: (vertex: Vertex) => Axis | undefined
          let defaultDrawAxis: Axis | undefined
          if (draw.mode === "strafing") {
+            // For temporal consistency, we have to reset draw.segment.start
+            // each time we update a strafe operation.
+            if (slide)
+               movableAt(draw.segment.start).moveTo(
+                  slide.originalPositions.read(draw.segment.start)
+               )
             associatedDrawAxis = () => draw!.segment.axis
             defaultDrawAxis = draw.segment.axis
          } else {
@@ -1009,7 +1020,8 @@
             )
          }
          function isAcceptable(vertex: Vertex) {
-            if (vertex === draw!.end) return false
+            if (vertex === draw!.segment.start || vertex === draw!.end)
+               return false
             let start = draw!.segment.start
             let drawAxis = associatedDrawAxis(vertex)
             if (!drawAxis) return false
@@ -1054,9 +1066,6 @@
                   let orthoRange = new Range1D([
                      ve.scalarProjectionOnto(orthoAxis),
                   ])
-                  let drawStart = slide.originalPositions.read(
-                     draw.segment.start
-                  )
                   // This function checks whether draw.segment can be displaced
                   // toward the given Movable by the given displacement, without
                   // causing the Movable itself to be moved (by updateSlide()).
@@ -1069,7 +1078,7 @@
                      // "pull" draw.segment.start into alignment with draw.end.
                      let slideDistance = mouse
                         .displacedBy(orthoAxis.scaledBy(displacement))
-                        .displacementFrom(drawStart)
+                        .displacementFrom(draw!.segment.start)
                         .inTermsOfBasis([slide!.axis, draw!.segment.axis])[0]
                         .scalarProjectionOnto(slide!.axis)
                      let instructions =
@@ -1108,7 +1117,7 @@
                   draw.end.moveBy(orthoAxis.scaledBy(minDisp))
                }
                // Try snapping the endpoint to nearby segments.
-               let s = closestSegmentNearTo(draw.end, drawAxis)
+               let s = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
                if (s) {
                   draw.end.moveTo(s.closestPart)
                   draw.endObject = s.object
