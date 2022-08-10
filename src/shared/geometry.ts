@@ -446,9 +446,9 @@ export class Range1D {
    readonly low: number
    readonly high: number
    // Return the unsigned Range between the given numbers.
-   constructor(...values: number[]) {
-      this.low = Math.min(...values)
-      this.high = Math.max(...values)
+   constructor(values: number[], pad: number = 0) {
+      this.low = Math.min(...values) - pad
+      this.high = Math.max(...values) + pad
    }
    intersects(range: Range1D): boolean {
       return this.low < range.high && this.high > range.low
@@ -461,6 +461,11 @@ export class Range1D {
          return this.low - range.high
       }
    }
+   displacementFromContact(range: Range1D): number {
+      let d1 = this.high - range.low
+      let d2 = this.low - range.high
+      return Math.abs(d1) <= Math.abs(d2) ? d1 : d2
+   }
 }
 
 export class Range2D {
@@ -471,7 +476,7 @@ export class Range2D {
       this.y = y
    }
    static fromCorners(p1: Point, p2: Point) {
-      return new Range2D(new Range1D(p1.x, p2.x), new Range1D(p1.y, p2.y))
+      return new Range2D(new Range1D([p1.x, p2.x]), new Range1D([p1.y, p2.y]))
    }
    static fromXY(x: Range1D, y: Range1D) {
       return new Range2D(x, y)

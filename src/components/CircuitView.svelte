@@ -126,6 +126,7 @@
    type Toggleable = Vertex | Segment | Crossing
    type Grabbable = Junction | Segment | SymbolInstance
    type Movable = Junction | SymbolInstance // Things that move when dragged.
+   type Pushable = Junction | Segment | SymbolInstance
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -144,6 +145,11 @@
    function* movables(): Generator<Movable> {
       for (let m of Junction.s) yield m
       for (let m of SymbolInstance.s) yield m
+   }
+   function* pushables(): Generator<Pushable> {
+      for (let p of Junction.s) yield p
+      for (let p of Segment.s) yield p
+      for (let p of SymbolInstance.s) yield p
    }
    function closestNearTo<T extends Object2D>(
       point: Point,
@@ -241,6 +247,60 @@
       if (s.endsWith("Button")) return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
    }
+   // Returns the "shadow" each circuit element casts onto the given vector.
+   // Only circuit elements parallel or orthogonal to the vector are considered.
+   function projectionOfCircuitOnto(
+      vector: Vector,
+      pad: number = 0
+   ): Map<Pushable, Range1D> {
+      if (vector.sqLength() === 0) return new Map()
+
+      let ranges = new Map<Pushable, Range1D>()
+      let vectorAxis = Axis.fromVector(vector) as Axis
+      let axesConsidered = [vectorAxis, vectorAxis.orthogonal()]
+
+      for (let junction of Junction.s) {
+         let s = junction
+            .displacementFrom(Point.zero)
+            .scalarProjectionOnto(vector)
+         ranges.set(junction, new Range1D([s], pad))
+      }
+      for (let segment of Segment.s) {
+         if (axesConsidered.includes(segment.axis))
+            ranges.set(
+               segment,
+               new Range1D(
+                  [
+                     segment.start
+                        .displacementFrom(Point.zero)
+                        .scalarProjectionOnto(vector),
+                     segment.end
+                        .displacementFrom(Point.zero)
+                        .scalarProjectionOnto(vector),
+                  ],
+                  pad
+               )
+            )
+      }
+      for (let symbol of SymbolInstance.s) {
+         let symbolAxis = Axis.fromDirection(
+            Direction.positiveX.rotatedBy(symbol.rotation)
+         )
+         if (axesConsidered.includes(symbolAxis))
+            ranges.set(symbol, rangeAlong(vector, symbol))
+      }
+      function rangeAlong(dir: Vector, symbol: SymbolInstance): Range1D {
+         return new Range1D(
+            symbol
+               .corners()
+               .map((corner) =>
+                  corner.displacementFrom(Point.zero).scalarProjectionOnto(dir)
+               ),
+            pad
+         )
+      }
+      return ranges
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouse: Point = Point.zero
@@ -296,6 +356,8 @@
       end: Junction
       segmentIsNew: boolean
       endObject?: Attachable
+      drawAxisRanges?: Map<Pushable, Range1D>
+      orthoRanges?: Map<Pushable, Range1D>
    }
    type SlideInstruction = { movable: Movable; delay: number }
    // & (
@@ -310,7 +372,6 @@
       negInstructionsFull: SlideInstruction[]
       posInstructionsConn: SlideInstruction[]
       negInstructionsConn: SlideInstruction[]
-      distance: number
    } = null
    let warp: null | {
       movable: Movable
@@ -647,7 +708,6 @@
       Port.s = Port.s
    }
    function mouseMoved(previousMousePosition: Point) {
-      if (slide) slide.distance += mouse.distanceFrom(previousMousePosition)
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
@@ -680,10 +740,12 @@
             if (dragAxis) {
                let slideAxis: Axis
                if (target.object instanceof Segment) {
-                  slideAxis = nearestAxis(dragAxis, [
+                  let axes = new Set([
                      ...target.object.start.axes(),
                      ...target.object.end.axes(),
                   ])
+                  if (axes.size === 1) axes.add(target.object.axis.orthogonal())
+                  slideAxis = nearestAxis(dragAxis, [...axes])
                } else {
                   slideAxis = nearestAxis(dragAxis, target.object.axes())
                }
@@ -883,9 +945,16 @@
    }
    function beginDrawStrafing() {
       if (!draw) return
+      let drawAxis = draw.segment.axis
+      // Pre-compute the information required for snapping.
+      draw.drawAxisRanges = projectionOfCircuitOnto(drawAxis, standardGap)
+      draw.orthoRanges = projectionOfCircuitOnto(
+         drawAxis.orthogonal(),
+         standardGap
+      )
+      // Initialize sliding.
       let thingToMove = movableAt(draw.segment.start)
       let axes = thingToMove.axes()
-      let drawAxis = draw.segment.axis
       let slideAxis
       if (axes.length === 1 && axes[0] !== drawAxis) {
          slideAxis = axes[0]
@@ -956,23 +1025,94 @@
             return true
          }
          let acceptableVertices = Array.from(vertices()).filter(isAcceptable)
-         let closest = closestNearTo(mouse, acceptableVertices)
-         let drawAxis = closest
-            ? associatedDrawAxis(closest.object)
+         let closestVertex = closestNearTo(mouse, acceptableVertices)
+         let drawAxis = closestVertex
+            ? associatedDrawAxis(closestVertex.object)
             : defaultDrawAxis
          if (drawAxis) {
             ;(draw.segment.axis as Axis) = drawAxis
-            if (closest) {
-               draw.end.moveTo(closest.object)
-               draw.endObject = closest.object
+            if (closestVertex) {
+               // Snap to the closest vertex.
+               draw.end.moveTo(closestVertex.object)
+               draw.endObject = closestVertex.object
             } else {
+               draw.end.moveTo(mouse)
+               if (
+                  draw.mode === "strafing" &&
+                  draw.drawAxisRanges &&
+                  draw.orthoRanges &&
+                  slide
+               ) {
+                  // Try snapping by strafing towards nearby things.
+                  let orthoAxis = drawAxis.orthogonal()
+                  let vs = draw.segment.start.displacementFrom(Point.zero)
+                  let ve = draw.segment.end.displacementFrom(Point.zero)
+                  let drawRange = new Range1D([
+                     vs.scalarProjectionOnto(drawAxis),
+                     ve.scalarProjectionOnto(drawAxis),
+                  ])
+                  let orthoRange = new Range1D([
+                     ve.scalarProjectionOnto(orthoAxis),
+                  ])
+                  let drawStart = slide.originalPositions.read(
+                     draw.segment.start
+                  )
+                  // This function checks whether draw.segment can be displaced
+                  // toward the given Movable by the given displacement, without
+                  // causing the Movable itself to be moved (by updateSlide()).
+                  function canDisplaceTowardMovable(
+                     movable: Movable,
+                     displacement: number
+                  ) {
+                     // The following expression is copied from updateSlide().
+                     // It computes the slide that needs to be performed to
+                     // "pull" draw.segment.start into alignment with draw.end.
+                     let slideDistance = mouse
+                        .displacedBy(orthoAxis.scaledBy(displacement))
+                        .displacementFrom(drawStart)
+                        .inTermsOfBasis([slide!.axis, draw!.segment.axis])[0]
+                        .scalarProjectionOnto(slide!.axis)
+                     let instructions =
+                        slideDistance > 0
+                           ? slide!.posInstructionsFull
+                           : slide!.negInstructionsFull
+                     slideDistance = Math.abs(slideDistance)
+                     return !instructions.find(
+                        (i) => movable === i.movable && i.delay < slideDistance
+                     )
+                  }
+                  // Find the circuit element closest to draw.segment for which
+                  // snapping is possible.
+                  let minDisp: number = Infinity
+                  for (let [target, targetDraw] of draw.drawAxisRanges) {
+                     if (target === draw.segment) continue
+                     if (target === draw.end) continue
+                     if (!drawRange.intersects(targetDraw)) continue
+                     let targetOrtho = draw.orthoRanges.get(target) as Range1D
+                     let d = targetOrtho.displacementFromContact(orthoRange)
+                     let movs = isMovable(target)
+                        ? [target]
+                        : [movableAt(target.start), movableAt(target.end)]
+                     if (
+                        Math.abs(d) < Math.abs(minDisp) &&
+                        movs.every((mov) => canDisplaceTowardMovable(mov, d))
+                     )
+                        minDisp = d
+                  }
+                  // Perform the snap.
+                  if (Math.abs(minDisp) >= easeRadius) {
+                     minDisp = 0
+                  } else if (Math.abs(minDisp) >= snapRadius) {
+                     minDisp = Math.sign(minDisp) * easeFn(Math.abs(minDisp))
+                  }
+                  draw.end.moveBy(orthoAxis.scaledBy(minDisp))
+               }
                // Try snapping the endpoint to nearby segments.
-               let s = closestSegmentNearTo(mouse, drawAxis)
+               let s = closestSegmentNearTo(draw.end, drawAxis)
                if (s) {
                   draw.end.moveTo(s.closestPart)
                   draw.endObject = s.object
                } else {
-                  draw.end.moveTo(mouse)
                   draw.endObject = undefined
                }
             }
@@ -1065,59 +1205,17 @@
          shouldPushNonConnected: boolean
       ): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
-
-         // ------------- PART 1: Definitions and required data. --------------
-         type Pushable = Junction | Segment | SymbolInstance
-         function* pushables() {
-            for (let p of Junction.s) yield p
-            for (let p of Segment.s) yield p
-            for (let p of SymbolInstance.s) yield p
-         }
-         // "slideRanges" stores the extent of Pushables in the slide direction,
-         // whilst "orthRanges" stores their extent in the orthogonal direction.
-         let slideRanges = new Map<Pushable, Range1D>()
-         let orthRanges = new Map<Pushable, Range1D>()
-         for (let junction of Junction.s) {
-            let d = junction.displacementFrom(Point.zero)
-            let s = d.scalarProjectionOnto(slideDir)
-            let o = d.scalarProjectionOnto(orthogonalAxis)
-            slideRanges.set(junction, new Range1D(s, s))
-            orthRanges.set(junction, new Range1D(o, o))
-         }
-         for (let segment of Segment.s) {
-            if (segment.axis !== orthogonalAxis) continue
-            // We only need to consider orthogonal segments.
-            let dStart = segment.start.displacementFrom(Point.zero)
-            let dEnd = segment.end.displacementFrom(Point.zero)
-            let sStart = dStart.scalarProjectionOnto(slideDir)
-            let sEnd = dEnd.scalarProjectionOnto(slideDir)
-            let oStart = dStart.scalarProjectionOnto(orthogonalAxis)
-            let oEnd = dEnd.scalarProjectionOnto(orthogonalAxis)
-            slideRanges.set(segment, new Range1D(sStart, sEnd))
-            orthRanges.set(segment, new Range1D(oStart, oEnd))
-         }
-         for (let symbol of SymbolInstance.s) {
-            let symbolAxis = Axis.fromDirection(
-               Direction.positiveX.rotatedBy(symbol.rotation)
-            )
-            if (symbolAxis === slideAxis || symbolAxis === orthogonalAxis) {
-               slideRanges.set(symbol, rangeAlong(slideDir, symbol))
-               orthRanges.set(symbol, rangeAlong(orthogonalAxis, symbol))
-            }
-         }
-         function rangeAlong(dir: Vector, symbol: SymbolInstance): Range1D {
-            return new Range1D(
-               ...symbol
-                  .corners()
-                  .map((corner) =>
-                     corner
-                        .displacementFrom(Point.zero)
-                        .scalarProjectionOnto(dir)
-                  )
-            )
+         let slideRanges = projectionOfCircuitOnto(slideDir)
+         let orthoRanges = projectionOfCircuitOnto(orthogonalAxis)
+         if (draw) {
+            // The segment being drawn should be invisible to the slide op.
+            slideRanges.delete(draw.end)
+            orthoRanges.delete(draw.end)
+            slideRanges.delete(draw.segment)
+            orthoRanges.delete(draw.segment)
          }
 
-         // ------------------ PART 2: Initialize the heap. -------------------
+         // ------------------ PART 1: Initialize the heap. -------------------
          // Instructions need to be scheduled in order of priority. Thus, as
          // instructions are proposed, we insert them into a heap.
          let heap = new Heap<SlideInstruction>((a, b) => a.delay - b.delay)
@@ -1137,7 +1235,7 @@
             proposals.set(grabbed, i)
          }
 
-         // --------------- PART 3: Generate the instructions. ----------------
+         // --------------- PART 2: Generate the instructions. ----------------
          while (heap.size() > 0) {
             let nextInstruction = heap.pop() as SlideInstruction
             let { movable, delay } = nextInstruction
@@ -1146,10 +1244,8 @@
             function pushNonConnected(pusher: Pushable) {
                if (!slideRanges.has(pusher)) return
                let pusherSlide = slideRanges.get(pusher) as Range1D
-               let pusherOrthogonal = orthRanges.get(pusher) as Range1D
-               for (let target of pushables()) {
-                  if (!slideRanges.has(target)) continue
-                  let targetOrthogonal = orthRanges.get(target) as Range1D
+               let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
+               for (let [target, targetOrthogonal] of orthoRanges) {
                   if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
                   let targetSlide = slideRanges.get(target) as Range1D
                   let displacement = targetSlide.displacementFrom(pusherSlide)
@@ -1216,14 +1312,13 @@
          negInstructionsFull: generateInstructions(neg, true),
          posInstructionsConn: generateInstructions(pos, false),
          negInstructionsConn: generateInstructions(neg, false),
-         distance: 0,
       }
    }
    function updateSlide() {
       if (!slide) return
       // Revert the previous movement.
       for (let m of movables()) {
-         if (draw && m === draw.end) continue
+         if (m === draw?.end) continue
          m.moveTo(slide.originalPositions.read(m))
       }
       // Determine the direction and distance things should move.

@@ -44,8 +44,8 @@
             svg.getBoundingClientRect() // hack to fix Safari's calculations
             let { x, y, width, height } = svg.getBoundingClientRect()
             svgBox = Range2D.fromXY(
-               new Range1D(x, x + width),
-               new Range1D(y, y + height)
+               new Range1D([x, x + width]),
+               new Range1D([y, y + height])
             )
          }
          // Locate the collision box and ports of the symbol.
@@ -55,8 +55,8 @@
             if (element.id === "collisionBox") {
                let { x, y, width, height } = element.getBoundingClientRect()
                collisionBox = Range2D.fromXY(
-                  new Range1D(x, x + width),
-                  new Range1D(y, y + height)
+                  new Range1D([x, x + width]),
+                  new Range1D([y, y + height])
                )
             } else if (element.id.endsWith("Snap")) {
                let { x, y, width, height } = element.getBoundingClientRect()
