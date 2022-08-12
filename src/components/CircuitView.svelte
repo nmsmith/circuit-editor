@@ -662,8 +662,7 @@
       alt = event.getModifierState("Alt")
       cmd = event.getModifierState("Control") || event.getModifierState("Meta")
       if (draw?.mode !== selectedDrawMode()) {
-         updateDraw()
-         updateSlide()
+         updateDrawAndSlide()
       }
    }
    let waitedOneFrameLMB = false
@@ -712,8 +711,7 @@
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
-      updateDraw()
-      updateSlide()
+      updateDrawAndSlide()
       updateWarp()
       updateEraseSelect()
       updateRigidSelect()
@@ -947,12 +945,10 @@
    function beginDrawStrafing() {
       if (!draw) return
       let drawAxis = draw.segment.axis
+      let orthoAxis = drawAxis.orthogonal()
       // Pre-compute the information required for snapping.
       draw.drawAxisRanges = projectionOfCircuitOnto(drawAxis, standardGap)
-      draw.orthoRanges = projectionOfCircuitOnto(
-         drawAxis.orthogonal(),
-         standardGap
-      )
+      draw.orthoRanges = projectionOfCircuitOnto(orthoAxis, standardGap)
       // Initialize sliding.
       let thingToMove = movableAt(draw.segment.start)
       let axes = thingToMove.axes()
@@ -962,53 +958,48 @@
       } else if (axes.length === 2 && axes.includes(drawAxis)) {
          slideAxis = axes[0] === drawAxis ? axes[1] : axes[0]
       } else {
-         slideAxis = drawAxis.orthogonal()
+         slideAxis = orthoAxis
       }
       beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
-   function updateDraw() {
-      if (!draw) return
-
-      if (draw.mode !== selectedDrawMode()) {
+   function updateDrawAndSlide() {
+      if (draw && draw.mode !== selectedDrawMode()) {
          // Change the draw mode.
          endSlide() // If we were sliding, commit the operation.
          draw.mode = selectedDrawMode()
          if (draw.mode === "strafing") beginDrawStrafing()
+      } else if (slide) {
+         // Revert the slide operation; it will be redone from scratch.
+         for (let m of movables()) {
+            if (m === draw?.end) continue
+            m.moveTo(slide.originalPositions.read(m))
+         }
       }
-
-      let targetSegments = [...Segment.s].filter(
-         (seg) => ![...draw!.segment.start.edges()].find(([s]) => s === seg)
-      )
-      if (draw.mode === "snapped rotation") {
+      //--- PART 1: Do draw operations that can/must be done before sliding. ---
+      let snappedToVertex = false
+      let targetSegments = draw
+         ? [...Segment.s].filter(
+              (seg) =>
+                 ![...draw!.segment.start.edges()].find(([s]) => s === seg)
+           )
+         : []
+      if (draw && draw.mode === "snapped rotation") {
          let dragVector = mouse.displacementFrom(draw.segment.start)
          let dragAxis = Axis.fromVector(dragVector)
          if (dragAxis) {
             // Snap to the nearest standard axis.
             let drawAxis = nearestAxis(dragAxis, snapAxes)
             ;(draw.segment.axis as Axis) = drawAxis
-            // Try snapping the endpoint to nearby segments.
-            let end = draw.segment.start.displacedBy(
-               dragVector.projectionOnto(drawAxis)
+            draw.end.moveTo(
+               draw.segment.start.displacedBy(
+                  dragVector.projectionOnto(drawAxis)
+               )
             )
-            let s = closestSegmentNearTo(end, drawAxis, targetSegments)
-            if (s) {
-               draw.end.moveTo(s.closestPart)
-               draw.endObject = s.object
-            } else {
-               draw.end.moveTo(end)
-               draw.endObject = undefined
-            }
          }
-      } else {
+      } else if (draw) {
          let associatedDrawAxis: (vertex: Vertex) => Axis | undefined
          let defaultDrawAxis: Axis | undefined
          if (draw.mode === "strafing") {
-            // For temporal consistency, we have to reset draw.segment.start
-            // each time we update a strafe operation.
-            if (slide)
-               movableAt(draw.segment.start).moveTo(
-                  slide.originalPositions.read(draw.segment.start)
-               )
             associatedDrawAxis = () => draw!.segment.axis
             defaultDrawAxis = draw.segment.axis
          } else {
@@ -1019,20 +1010,20 @@
                mouse.displacementFrom(draw.segment.start)
             )
          }
-         function isAcceptable(vertex: Vertex) {
-            if (vertex === draw!.segment.start || vertex === draw!.end)
-               return false
-            let start = draw!.segment.start
-            let drawAxis = associatedDrawAxis(vertex)
+         function isAcceptable(v: Vertex) {
+            if (v === draw!.segment.start || v === draw!.end) return false
+            let drawAxis = associatedDrawAxis(v)
             if (!drawAxis) return false
-            for (let [{ axis }, other] of vertex.edges()) {
-               // Reject if the segment being drawn would overlap this seg.
-               if (
-                  axis === drawAxis &&
-                  other.distanceFrom(start) + 1 <
-                     vertex.distanceFrom(start) + other.distanceFrom(vertex)
-               )
-                  return false
+            let drawDir = v
+               .displacementFrom(draw!.segment.start)
+               .projectionOnto(drawAxis)
+               .direction()
+            if (!drawDir) return false
+            for (let [{ axis }, other] of v.edges()) {
+               // Reject if the segment being drawn would overlap this segment.
+               if (axis !== drawAxis) continue
+               let dir = v.directionFrom(other)
+               if (dir?.approxEquals(drawDir, 0.1)) return false
             }
             return true
          }
@@ -1047,88 +1038,178 @@
                // Snap to the closest vertex.
                draw.end.moveTo(closestVertex.object)
                draw.endObject = closestVertex.object
+               snappedToVertex = true
             } else {
                draw.end.moveTo(mouse)
-               if (
-                  draw.mode === "strafing" &&
-                  draw.drawAxisRanges &&
-                  draw.orthoRanges &&
-                  slide
-               ) {
-                  // Try snapping by strafing towards nearby things.
-                  let orthoAxis = drawAxis.orthogonal()
-                  let vs = draw.segment.start.displacementFrom(Point.zero)
-                  let ve = draw.segment.end.displacementFrom(Point.zero)
-                  let drawRange = new Range1D([
-                     vs.scalarProjectionOnto(drawAxis),
-                     ve.scalarProjectionOnto(drawAxis),
-                  ])
-                  let orthoRange = new Range1D([
-                     ve.scalarProjectionOnto(orthoAxis),
-                  ])
-                  // This function checks whether draw.segment can be displaced
-                  // toward the given Movable by the given displacement, without
-                  // causing the Movable itself to be moved (by updateSlide()).
-                  function canDisplaceTowardMovable(
-                     movable: Movable,
-                     displacement: number
-                  ) {
-                     // The following expression is copied from updateSlide().
-                     // It computes the slide that needs to be performed to
-                     // "pull" draw.segment.start into alignment with draw.end.
-                     let slideDistance = mouse
-                        .displacedBy(orthoAxis.scaledBy(displacement))
-                        .displacementFrom(draw!.segment.start)
-                        .inTermsOfBasis([slide!.axis, draw!.segment.axis])[0]
-                        .scalarProjectionOnto(slide!.axis)
-                     let instructions =
-                        slideDistance > 0
-                           ? slide!.posInstructionsFull
-                           : slide!.negInstructionsFull
-                     slideDistance = Math.abs(slideDistance)
-                     return !instructions.find(
-                        (i) => movable === i.movable && i.delay < slideDistance
-                     )
-                  }
-                  // Find the circuit element closest to draw.segment for which
-                  // snapping is possible.
-                  let minDisp: number = Infinity
-                  for (let [target, targetDraw] of draw.drawAxisRanges) {
-                     if (target === draw.segment) continue
-                     if (target === draw.end) continue
-                     if (!drawRange.intersects(targetDraw)) continue
-                     let targetOrtho = draw.orthoRanges.get(target) as Range1D
-                     let d = targetOrtho.displacementFromContact(orthoRange)
-                     let movs = isMovable(target)
-                        ? [target]
-                        : [movableAt(target.start), movableAt(target.end)]
-                     if (
-                        Math.abs(d) < Math.abs(minDisp) &&
-                        movs.every((mov) => canDisplaceTowardMovable(mov, d))
-                     )
-                        minDisp = d
-                  }
-                  // Perform the snap.
-                  if (Math.abs(minDisp) >= easeRadius) {
-                     minDisp = 0
-                  } else if (Math.abs(minDisp) >= snapRadius) {
-                     minDisp = Math.sign(minDisp) * easeFn(Math.abs(minDisp))
-                  }
-                  draw.end.moveBy(orthoAxis.scaledBy(minDisp))
-               }
-               // Try snapping the endpoint to nearby segments.
-               let s = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
-               if (s) {
-                  draw.end.moveTo(s.closestPart)
-                  draw.endObject = s.object
-               } else {
-                  draw.endObject = undefined
-               }
             }
          }
       }
+      if (
+         draw?.mode === "strafing" &&
+         !snappedToVertex &&
+         draw.drawAxisRanges &&
+         draw.orthoRanges &&
+         slide
+      ) {
+         // Try snapping by strafing towards nearby things.
+         let drawAxis = draw.segment.axis
+         let orthoAxis = drawAxis.orthogonal()
+         let vs = draw.segment.start.displacementFrom(Point.zero)
+         let ve = draw.segment.end.displacementFrom(Point.zero)
+         let drawRange = new Range1D([
+            vs.scalarProjectionOnto(drawAxis),
+            ve.scalarProjectionOnto(drawAxis),
+         ])
+         let orthoRange = new Range1D([ve.scalarProjectionOnto(orthoAxis)])
+         // This function checks whether draw.segment can be displaced
+         // toward the given Movable by the given displacement, without
+         // causing the Movable itself to be moved.
+         function canDisplaceTowardMovable(movable: Movable, disp: number) {
+            // The following expression computes the slide that needs to be
+            // performed to move draw.start into alignment with draw.end.
+            let slideDistance = mouse
+               .displacedBy(orthoAxis.scaledBy(disp))
+               .displacementFrom(draw!.segment.start)
+               .inTermsOfBasis([slide!.axis, draw!.segment.axis])[0]
+               .scalarProjectionOnto(slide!.axis)
+            let instructions =
+               slideDistance > 0
+                  ? slide!.posInstructionsFull
+                  : slide!.negInstructionsFull
+            slideDistance = Math.abs(slideDistance)
+            return !instructions.find(
+               (i) => movable === i.movable && i.delay < slideDistance
+            )
+         }
+         // For each axis, find the circuit element closest to draw.segment
+         // for which snapping is possible. (Snapping interacts with sliding;
+         // we must ignore snapping to things that will ultimately slide.)
+         let minDisp = Infinity
+         for (let [target, targetDraw] of draw.drawAxisRanges) {
+            if (target === draw.segment) continue
+            if (target === draw.end) continue
+            if (drawRange.intersects(targetDraw)) {
+               let targetOrtho = draw.orthoRanges.get(target) as Range1D
+               let d = targetOrtho.displacementFromContact(orthoRange)
+               let movs = isMovable(target)
+                  ? [target]
+                  : [movableAt(target.start), movableAt(target.end)]
+               if (
+                  Math.abs(d) < Math.abs(minDisp) &&
+                  movs.every((mov) => canDisplaceTowardMovable(mov, d))
+               )
+                  minDisp = d
+            }
+         }
+         // Perform the snap.
+         if (Math.abs(minDisp) >= easeRadius) {
+            minDisp = 0
+         } else if (Math.abs(minDisp) >= snapRadius) {
+            minDisp = Math.sign(minDisp) * easeFn(Math.abs(minDisp))
+         }
+         draw.end.moveBy(orthoAxis.scaledBy(minDisp))
+      }
+      // --------------------- PART 2: Perform the slide. ---------------------
+      if (slide) {
+         // Determine the direction and distance things should move.
+         let slideDistance: number
+         if (draw) {
+            // The required slideDistance has already been determined in PART 1:
+            // it is the distance that draw.start needs to move along slide.axis
+            // to ensure the orientation of draw.segment remained unchanged.
+            let [slideVector] = draw.end
+               .displacementFrom(draw.segment.start)
+               .inTermsOfBasis([slide.axis, draw.segment.axis])
+            slideDistance = slideVector.scalarProjectionOnto(slide.axis)
+         } else {
+            // The slideDistance is determined by the position of the mouse.
+            slideDistance = mouse
+               .displacementFrom(slide.partGrabbed)
+               .scalarProjectionOnto(slide.axis)
+         }
+         let direction, instructions
+         if (slideDistance > 0) {
+            direction = slide.axis.posDirection()
+            instructions = shift
+               ? slide.posInstructionsConn
+               : slide.posInstructionsFull
+         } else {
+            direction = slide.axis.negDirection()
+            instructions = shift
+               ? slide.negInstructionsConn
+               : slide.negInstructionsFull
+            slideDistance = -slideDistance
+         }
+         if (!draw) {
+            // If the current slideDistance is _close_ to the distance at which
+            // two objects touch, ease toward that distance.
+            let smallestDistance = Infinity
+            for (let instruction of instructions) {
+               let distance = slideDistance - instruction.delay
+               if (Math.abs(distance) < Math.abs(smallestDistance))
+                  smallestDistance = distance
+            }
+            if (Math.abs(smallestDistance) < snapRadius) {
+               slideDistance -= smallestDistance
+            } else if (Math.abs(smallestDistance) < easeRadius) {
+               slideDistance -=
+                  Math.sign(smallestDistance) *
+                  easeFn(Math.abs(smallestDistance))
+            }
+         }
+         // Perform the new movement.
+         for (let instruction of instructions) {
+            let distance = slideDistance - instruction.delay
+            if (distance <= 0) break
+            instruction.movable.moveBy(direction.scaledBy(distance))
+         }
+      }
+      // ----------------- PART 3: Snap along the draw axis. ------------------
+      // Now that sliding has been performed (if applicable), snap the *length*
+      // of draw.segment toward things of interest.
+      if (draw && !snappedToVertex) {
+         let drawAxis = draw.segment.axis
+         let orthoAxis = drawAxis.orthogonal()
+         let s = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
+         if (s) {
+            // Snap to the nearby segment.
+            draw.end.moveTo(s.closestPart)
+            draw.endObject = s.object
+         } else {
+            // Try snapping draw.end to a standard distance (standardGap) away
+            // from a nearby circuit element.
+            draw.endObject = undefined
+            // The circuit needs to be re-projected (every frame!) so that we
+            // can figure out what circuit elements are "in front of" draw.end.
+            let drawAxisRanges = projectionOfCircuitOnto(drawAxis, halfGap)
+            let orthoRanges = projectionOfCircuitOnto(orthoAxis, halfGap)
+            let drawEndRange = drawAxisRanges.get(draw.end) as Range1D
+            let orthoRange = orthoRanges.get(draw.end) as Range1D
+            // Find the closest thing that draw.end can snap toward.
+            let minDisp = Infinity
+            for (let [target, targetOrtho] of orthoRanges) {
+               if (target === draw.segment) continue
+               if (target === draw.end) continue
+               if (orthoRange.intersects(targetOrtho)) {
+                  let targetDraw = drawAxisRanges.get(target) as Range1D
+                  let d = targetDraw.displacementFromContact(drawEndRange)
+                  if (Math.abs(d) < Math.abs(minDisp)) minDisp = d
+               }
+            }
+            // Perform the snap.
+            if (Math.abs(minDisp) >= easeRadius) {
+               minDisp = 0
+            } else if (Math.abs(minDisp) >= snapRadius) {
+               minDisp = Math.sign(minDisp) * easeFn(Math.abs(minDisp))
+            }
+            draw.end.moveBy(drawAxis.scaledBy(minDisp))
+         }
+      }
+      // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s
       Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
    }
    function endDraw(allowedToDelete: boolean = true) {
       if (!draw) return
@@ -1322,69 +1403,6 @@
          posInstructionsConn: generateInstructions(pos, false),
          negInstructionsConn: generateInstructions(neg, false),
       }
-   }
-   function updateSlide() {
-      if (!slide) return
-      // Revert the previous movement.
-      for (let m of movables()) {
-         if (m === draw?.end) continue
-         m.moveTo(slide.originalPositions.read(m))
-      }
-      // Determine the direction and distance things should move.
-      let slideDistance: number
-      if (draw) {
-         // The slideDistance has already been determined by updateDraw().
-         // Move just enough to "straighten out" the line being drawn.
-         let [slideVector] = draw.end
-            .displacementFrom(draw.segment.start)
-            .inTermsOfBasis([slide.axis, draw.segment.axis])
-         slideDistance = slideVector.scalarProjectionOnto(slide.axis)
-      } else {
-         // The slideDistance will be determined here.
-         slideDistance = mouse
-            .displacementFrom(slide.partGrabbed)
-            .scalarProjectionOnto(slide.axis)
-      }
-      let direction, instructions
-      if (slideDistance > 0) {
-         direction = slide.axis.posDirection()
-         instructions = shift
-            ? slide.posInstructionsConn
-            : slide.posInstructionsFull
-      } else {
-         direction = slide.axis.negDirection()
-         instructions = shift
-            ? slide.negInstructionsConn
-            : slide.negInstructionsFull
-         slideDistance = -slideDistance
-      }
-      if (!draw) {
-         // If the current slideDistance is _close_ to the distance at which
-         // two objects touch, ease toward that distance.
-         let smallestDistance = Infinity
-         for (let instruction of instructions) {
-            let distance = slideDistance - instruction.delay
-            if (Math.abs(distance) < Math.abs(smallestDistance))
-               smallestDistance = distance
-         }
-         if (Math.abs(smallestDistance) < snapRadius) {
-            slideDistance -= smallestDistance
-         } else if (Math.abs(smallestDistance) < easeRadius) {
-            slideDistance -=
-               Math.sign(smallestDistance) * easeFn(Math.abs(smallestDistance))
-         }
-      }
-      // Perform the new movement.
-      for (let instruction of instructions) {
-         let distance = slideDistance - instruction.delay
-         if (distance <= 0) break
-         instruction.movable.moveBy(direction.scaledBy(distance))
-      }
-      // Tell Svelte all of these things could have changed.
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-      SymbolInstance.s = SymbolInstance.s
-      Port.s = Port.s
    }
    function endSlide() {
       slide = null
@@ -1734,9 +1752,11 @@
                start={glyph.start}
                end={glyph.end}
                flip={glyph.flip}
-               isRigid={(glyph.segment.isRigid &&
-                  !flexSelect?.items.has(glyph.segment)) ||
-                  rigidSelect?.items.has(glyph.segment)}
+               isRigid={Boolean(
+                  (glyph.segment.isRigid &&
+                     !flexSelect?.items.has(glyph.segment)) ||
+                     rigidSelect?.items.has(glyph.segment)
+               )}
             />
          {/if}
       {/each}

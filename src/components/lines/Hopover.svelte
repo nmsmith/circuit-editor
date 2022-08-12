@@ -4,7 +4,7 @@
    export let start: Point
    export let end: Point
    export let flip: boolean = false
-   export let isRigid: boolean = true
+   export let isRigid: boolean = false
    $: direction = end.directionFrom(start)
    $: v = direction ? direction.scaledBy(4) : Direction.positiveX.scaledBy(4)
 </script>
