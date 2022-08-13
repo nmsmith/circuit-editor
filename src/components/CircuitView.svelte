@@ -321,7 +321,7 @@
       | ({ state: "dragging" } & ButtonDownInfo<Target>)
    let button: {
       query: ButtonState<null>
-      warp: ButtonState<Movable>
+      warp: ButtonState<Grabbable>
       erase: ButtonState<null>
       rigid: ButtonState<null>
       tether: ButtonState<null>
@@ -375,8 +375,8 @@
       negInstructions: SlideInstruction[]
    } = null
    let warp: null | {
-      movable: Movable
-      offset: Vector
+      movables: Movable[]
+      offsets: Vector[]
    }
    let multiSelect: null | {
       mode: "new" | "add" | "remove"
@@ -597,7 +597,7 @@
             if (c) target = { object: c.object, part: c.closestPart }
             button.draw = { state: "pressing", downTime, downPosition, target }
          } else if (name === "warp") {
-            let c = closestMovable(downPosition)
+            let c = closestGrabbable(downPosition)
             if (c) target = { object: c.object, part: c.closestPart }
             button.warp = { state: "pressing", downTime, downPosition, target }
          } else if (name === "slide") {
@@ -1449,28 +1449,56 @@
       for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
       slide = null
    }
-   function beginWarp(movable: Movable, partGrabbed: Point) {
-      let movablePos = movable instanceof Junction ? movable : movable.position
-      warp = { movable, offset: movablePos.displacementFrom(partGrabbed) }
+   function beginWarp(grabbable: Grabbable, partGrabbed: Point) {
+      if (grabbable instanceof Junction) {
+         let junction = grabbable
+         warp = {
+            movables: [junction],
+            offsets: [junction.displacementFrom(partGrabbed)],
+         }
+      } else if (grabbable instanceof Segment) {
+         let seg = grabbable
+         warp = {
+            movables: [movableAt(seg.start), movableAt(seg.end)],
+            offsets: [
+               seg.start.displacementFrom(partGrabbed),
+               seg.end.displacementFrom(partGrabbed),
+            ],
+         }
+      } else {
+         let symbol = grabbable
+         warp = {
+            movables: [symbol],
+            offsets: [symbol.position.displacementFrom(partGrabbed)],
+         }
+      }
    }
    function updateWarp() {
       if (!warp) return
-      // Move the object to the mouse position.
-      warp.movable.moveTo(mouse.displacedBy(warp.offset))
+      // Start by moving everything as if it was following the mouse.
+      for (let [i, movable] of warp.movables.entries())
+         movable.moveTo(mouse.displacedBy(warp.offsets[i]))
 
-      // Determine whether displacing the object slightly will result in some
-      // of its incident edges having a "nice" axis. If so, displace the object.
+      // Gather the edges and axes of interest.
+      let edges = warp.movables.flatMap((movable) =>
+         [...movable.edges()].filter(
+            ([_, v]) => !warp!.movables.includes(movableAt(v))
+         )
+      )
       let neighbourAxes = new Set(
-         [...warp.movable.edges()].flatMap(([_, neighbour]) =>
+         edges.flatMap(([s, neighbour]) =>
             [...neighbour.edges()]
-               .filter(([s, v]) => movableAt(v) !== warp!.movable)
+               .filter(([_, v]) => !warp!.movables.includes(movableAt(v)))
                .map(([segment]) => segment.axis)
          )
       )
+      // We aim to displace ("snap") the Movables slightly such that their
+      // incident edges will have a "nice" axis.
       let niceAxes = [...snapAxes, ...neighbourAxes]
+
       // Begin by computing the minimum rejection from each axis.
       let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
-      for (let [segment, farVertex] of warp.movable.edges()) {
+      for (let [segment, farVertex] of edges) {
          let nearVertex =
             farVertex === segment.end ? segment.start : segment.end
          for (let axis of niceAxes) {
@@ -1525,10 +1553,10 @@
          )
       }
       // Execute the movement.
-      warp.movable.moveBy(displacement)
+      for (let movable of warp.movables) movable.moveBy(displacement)
 
       // Update the axis object associated with each incident edge.
-      for (let [segment] of warp.movable.edges()) {
+      for (let [segment] of edges) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
          segment.updateAxis(axis)
