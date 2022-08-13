@@ -983,6 +983,27 @@
                  ![...draw!.segment.start.edges()].find(([s]) => s === seg)
            )
          : []
+      // This function checks whether draw.segment can be displaced toward the
+      // given Movable by the given "extra" displacement (i.e. beyond the mouse
+      // position), without causing the Movable itself to be moved.
+      function canDisplaceTowardMovable(movable: Movable, disp: number) {
+         if (!draw || !slide) return true
+         // The following expression computes the slide that needs to be
+         // performed to move draw.start into alignment with draw.end.
+         let slideDistance = mouse
+            .displacedBy(draw.segment.axis.orthogonal().scaledBy(disp))
+            .displacementFrom(draw.segment.start)
+            .inTermsOfBasis([slide.axis, draw.segment.axis])[0]
+            .scalarProjectionOnto(slide.axis)
+         let instructions =
+            slideDistance > 0
+               ? slide.posInstructionsFull
+               : slide.negInstructionsFull
+         slideDistance = Math.abs(slideDistance)
+         return !instructions.find(
+            (i) => movable === i.movable && i.delay < slideDistance
+         )
+      }
       if (draw && draw.mode === "snapped rotation") {
          let dragVector = mouse.displacementFrom(draw.segment.start)
          let dragAxis = Axis.fromVector(dragVector)
@@ -1025,6 +1046,15 @@
                let dir = v.directionFrom(other)
                if (dir?.approxEquals(drawDir, 0.1)) return false
             }
+            if (slide) {
+               // Reject if snapping to the vertex is impossible, because the
+               // vertex would slide away from the mouse.
+               let orthoDisp = v
+                  .displacementFrom(mouse)
+                  .scalarProjectionOnto(drawAxis.orthogonal())
+               if (!canDisplaceTowardMovable(movableAt(v), orthoDisp))
+                  return false
+            }
             return true
          }
          let acceptableVertices = Array.from(vertices()).filter(isAcceptable)
@@ -1061,26 +1091,6 @@
             ve.scalarProjectionOnto(drawAxis),
          ])
          let orthoRange = new Range1D([ve.scalarProjectionOnto(orthoAxis)])
-         // This function checks whether draw.segment can be displaced
-         // toward the given Movable by the given displacement, without
-         // causing the Movable itself to be moved.
-         function canDisplaceTowardMovable(movable: Movable, disp: number) {
-            // The following expression computes the slide that needs to be
-            // performed to move draw.start into alignment with draw.end.
-            let slideDistance = mouse
-               .displacedBy(orthoAxis.scaledBy(disp))
-               .displacementFrom(draw!.segment.start)
-               .inTermsOfBasis([slide!.axis, draw!.segment.axis])[0]
-               .scalarProjectionOnto(slide!.axis)
-            let instructions =
-               slideDistance > 0
-                  ? slide!.posInstructionsFull
-                  : slide!.negInstructionsFull
-            slideDistance = Math.abs(slideDistance)
-            return !instructions.find(
-               (i) => movable === i.movable && i.delay < slideDistance
-            )
-         }
          // For each axis, find the circuit element closest to draw.segment
          // for which snapping is possible. (Snapping interacts with sliding;
          // we must ignore snapping to things that will ultimately slide.)
