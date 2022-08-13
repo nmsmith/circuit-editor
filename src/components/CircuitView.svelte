@@ -236,6 +236,7 @@
       )
    }
    function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
+      if (ofAxes.length === 0) return to
       let scores = ofAxes.map((axis) => Math.abs(to.dot(axis)))
       return ofAxes[scores.indexOf(Math.max(...scores))]
    }
@@ -370,10 +371,8 @@
       originalPositions: DefaultMap<Movable | Vertex, Point>
       partGrabbed: Point
       axis: Axis
-      posInstructionsFull: SlideInstruction[]
-      negInstructionsFull: SlideInstruction[]
-      posInstructionsConn: SlideInstruction[]
-      negInstructionsConn: SlideInstruction[]
+      posInstructions: SlideInstruction[]
+      negInstructions: SlideInstruction[]
    } = null
    let warp: null | {
       movable: Movable
@@ -750,7 +749,8 @@
                   slideAxis = nearestAxis(dragAxis, [...axes])
                } else {
                   let axes = target.object.axes()
-                  if (axes.length === 1) axes.push(axes[0].orthogonal())
+                  if (axes.length === 0) axes = primaryAxes
+                  else if (axes.length === 1) axes.push(axes[0].orthogonal())
                   slideAxis = nearestAxis(dragAxis, axes)
                }
                beginSlide(slideAxis, target.object, target.part)
@@ -1001,9 +1001,7 @@
             .inTermsOfBasis([slide.axis, draw.segment.axis])[0]
             .scalarProjectionOnto(slide.axis)
          let instructions =
-            slideDistance > 0
-               ? slide.posInstructionsFull
-               : slide.negInstructionsFull
+            slideDistance > 0 ? slide.posInstructions : slide.negInstructions
          slideDistance = Math.abs(slideDistance)
          return !instructions.find(
             (i) => movable === i.movable && i.delay < slideDistance
@@ -1145,22 +1143,12 @@
          let direction, dirInstructions, otherInstructions
          if (slideDistance > 0) {
             direction = slide.axis.posDirection()
-            if (shift) {
-               dirInstructions = slide.posInstructionsConn
-               otherInstructions = slide.negInstructionsConn
-            } else {
-               dirInstructions = slide.posInstructionsFull
-               otherInstructions = slide.negInstructionsFull
-            }
+            dirInstructions = slide.posInstructions
+            otherInstructions = slide.negInstructions
          } else {
             direction = slide.axis.negDirection()
-            if (shift) {
-               dirInstructions = slide.negInstructionsConn
-               otherInstructions = slide.posInstructionsConn
-            } else {
-               dirInstructions = slide.negInstructionsFull
-               otherInstructions = slide.posInstructionsFull
-            }
+            dirInstructions = slide.negInstructions
+            otherInstructions = slide.posInstructions
             slideDistance = -slideDistance
          }
          if (!draw) {
@@ -1200,11 +1188,11 @@
       if (draw && !snappedToVertex) {
          let drawAxis = draw.segment.axis
          let orthoAxis = drawAxis.orthogonal()
-         let s = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
-         if (s) {
+         let closest = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
+         if (closest) {
             // Snap to the nearby segment.
-            draw.end.moveTo(s.closestPart)
-            draw.endObject = s.object
+            draw.end.moveTo(closest.closestPart)
+            draw.endObject = closest.object
          } else {
             // Try snapping draw.end to a standard distance (standardGap) away
             // from a nearby circuit element.
@@ -1220,6 +1208,7 @@
             for (let [target, targetOrtho] of orthoRanges) {
                if (target === draw.segment) continue
                if (target === draw.end) continue
+               if (target instanceof Junction) continue
                if (orthoRange.intersects(targetOrtho)) {
                   let targetDraw = drawAxisRanges.get(target) as Range1D
                   let d = targetDraw.displacementFromContact(drawEndRange)
@@ -1288,6 +1277,7 @@
    }
    function abortDraw() {
       if (draw?.segmentIsNew) deleteItems([draw.end])
+      draw = null
    }
    function chainDraw(rigidifyCurrent: boolean) {
       if (!draw) return
@@ -1368,6 +1358,12 @@
                let pusherSlide = slideRanges.get(pusher) as Range1D
                let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
                for (let [target, targetOrthogonal] of orthoRanges) {
+                  if (
+                     pusher instanceof Junction &&
+                     target instanceof Junction &&
+                     [...target.edges()].every(([s]) => s.axis !== slideAxis)
+                  )
+                     continue // This interaction doesn't make much sense.
                   if (target instanceof Segment && target.axis === slideAxis) {
                      // To allow a segment parallel to the slideAxis to be
                      // squished, we should push the endpoints, not the segment.
@@ -1435,10 +1431,8 @@
          originalPositions,
          partGrabbed,
          axis: slideAxis,
-         posInstructionsFull: generateInstructions(pos, true),
-         negInstructionsFull: generateInstructions(neg, true),
-         posInstructionsConn: generateInstructions(pos, false),
-         negInstructionsConn: generateInstructions(neg, false),
+         posInstructions: generateInstructions(pos, !shift),
+         negInstructions: generateInstructions(neg, !shift),
       }
    }
    function endSlide() {
@@ -1541,6 +1535,9 @@
    function endWarp() {
       warp = null
    }
+   function abortWarp() {
+      endWarp() // TODO: The right way to abort is to "undo" the operation.
+   }
    function beginEraseSelect(start: Point) {
       eraseSelect = { start, items: new Set() }
    }
@@ -1600,13 +1597,17 @@
       flexSelect = null
    }
    function abortAndReleaseAll() {
+      // TODO: Instead of having an "abort" function for each operation, all
+      // aborts should be implemented the same way: by invoking "undo".
+      // (...and then setting every operation's state to "null")
       abortDraw()
       abortSlide()
+      abortWarp()
       abortEraseSelect()
       abortRigidSelect()
       abortFlexSelect()
       for (let b of Object.keys(button) as Array<keyof typeof button>)
-         buttonReleased(b)
+         button[b] = { state: null }
       lmbShouldBeDown = false
       rmbShouldBeDown = false
    }
