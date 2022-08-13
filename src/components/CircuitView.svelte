@@ -1460,13 +1460,20 @@
 
       // Determine whether displacing the object slightly will result in some
       // of its incident edges having a "nice" axis. If so, displace the object.
-
+      let neighbourAxes = new Set(
+         [...warp.movable.edges()].flatMap(([_, neighbour]) =>
+            [...neighbour.edges()]
+               .filter(([s, v]) => movableAt(v) !== warp!.movable)
+               .map(([segment]) => segment.axis)
+         )
+      )
+      let niceAxes = [...snapAxes, ...neighbourAxes]
       // Begin by computing the minimum rejection from each axis.
       let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
       for (let [segment, farVertex] of warp.movable.edges()) {
          let nearVertex =
             farVertex === segment.end ? segment.start : segment.end
-         for (let axis of snapAxes) {
+         for (let axis of niceAxes) {
             let rejection = new Line(farVertex, axis)
                .partClosestTo(nearVertex)
                .displacementFrom(nearVertex)
