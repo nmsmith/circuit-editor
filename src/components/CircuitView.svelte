@@ -92,8 +92,9 @@
    const sqMinSegmentLength = 15 * 15
    const sqSelectStartDistance = 8 * 8
    // Circuit-sizing constants
-   const standardGap = 30 // standard spacing between scene elements
+   const standardGap = 30 // standard spacing between circuit elements
    const halfGap = standardGap / 2
+   const slidePad = halfGap / 2 // dist at which close-passing elements collide
    const hopoverRadius = halfGap / 2
    // Snapping constants
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
@@ -360,11 +361,11 @@
       drawAxisRanges?: Map<Pushable, Range1D>
       orthoRanges?: Map<Pushable, Range1D>
    }
-   type SlideInstruction = { movable: Movable; delay: number }
-   // & (
-   //    | { type: "simple" }
-   //    | { type: "composite"; direction: Direction; distance: number }
-   // )
+   type SlideInstruction = {
+      movable: Movable
+      delay: number
+      isPush: boolean
+   }
    let slide: null | {
       originalPositions: DefaultMap<Movable | Vertex, Point>
       partGrabbed: Point
@@ -582,6 +583,7 @@
       buttonMap.LMB = name
    }
    function buttonPressed(name: keyof typeof button) {
+      if (name === "nothing") return
       let instantActionPossible = buttonMap.LMB === name
       // This function abstracts over mouse and keyboard events.
       if ((name === "rigid" || name === "flex") && button.draw.state) {
@@ -623,6 +625,7 @@
       }
    }
    function buttonReleased(name: keyof typeof button) {
+      if (name === "nothing") return
       let b = button[name]
       if (!b.state) return
       if (b.state === "pressing" && buttonMap.LMB !== name) {
@@ -746,7 +749,9 @@
                   if (axes.size === 1) axes.add(target.object.axis.orthogonal())
                   slideAxis = nearestAxis(dragAxis, [...axes])
                } else {
-                  slideAxis = nearestAxis(dragAxis, target.object.axes())
+                  let axes = target.object.axes()
+                  if (axes.length === 1) axes.push(axes[0].orthogonal())
+                  slideAxis = nearestAxis(dragAxis, axes)
                }
                beginSlide(slideAxis, target.object, target.part)
             }
@@ -1137,25 +1142,40 @@
                .displacementFrom(slide.partGrabbed)
                .scalarProjectionOnto(slide.axis)
          }
-         let direction, instructions
+         let direction, dirInstructions, otherInstructions
          if (slideDistance > 0) {
             direction = slide.axis.posDirection()
-            instructions = shift
-               ? slide.posInstructionsConn
-               : slide.posInstructionsFull
+            if (shift) {
+               dirInstructions = slide.posInstructionsConn
+               otherInstructions = slide.negInstructionsConn
+            } else {
+               dirInstructions = slide.posInstructionsFull
+               otherInstructions = slide.negInstructionsFull
+            }
          } else {
             direction = slide.axis.negDirection()
-            instructions = shift
-               ? slide.negInstructionsConn
-               : slide.negInstructionsFull
+            if (shift) {
+               dirInstructions = slide.negInstructionsConn
+               otherInstructions = slide.posInstructionsConn
+            } else {
+               dirInstructions = slide.negInstructionsFull
+               otherInstructions = slide.posInstructionsFull
+            }
             slideDistance = -slideDistance
          }
          if (!draw) {
             // If the current slideDistance is _close_ to the distance at which
             // two objects touch, ease toward that distance.
             let smallestDistance = Infinity
-            for (let instruction of instructions) {
+            for (let instruction of dirInstructions) {
+               if (!instruction.isPush) continue
                let distance = slideDistance - instruction.delay
+               if (Math.abs(distance) < Math.abs(smallestDistance))
+                  smallestDistance = distance
+            }
+            for (let instruction of otherInstructions) {
+               if (!instruction.isPush) continue
+               let distance = slideDistance + instruction.delay
                if (Math.abs(distance) < Math.abs(smallestDistance))
                   smallestDistance = distance
             }
@@ -1168,7 +1188,7 @@
             }
          }
          // Perform the new movement.
-         for (let instruction of instructions) {
+         for (let instruction of dirInstructions) {
             let distance = slideDistance - instruction.delay
             if (distance <= 0) break
             instruction.movable.moveBy(direction.scaledBy(distance))
@@ -1306,7 +1326,7 @@
       ): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
          let slideRanges = projectionOfCircuitOnto(slideDir)
-         let orthoRanges = projectionOfCircuitOnto(orthogonalAxis)
+         let orthoRanges = projectionOfCircuitOnto(orthogonalAxis, slidePad / 2)
          if (draw) {
             // The segment being drawn should be invisible to the slide op.
             slideRanges.delete(draw.end)
@@ -1323,14 +1343,16 @@
          let proposals = new Map<Movable, SlideInstruction>()
          // Add the initial proposals to the heap.
          if (grabbed instanceof Segment) {
-            let i1 = { movable: movableAt(grabbed.start), delay: 0 }
-            let i2 = { movable: movableAt(grabbed.end), delay: 0 }
+            let startMovable = movableAt(grabbed.start)
+            let endMovable = movableAt(grabbed.end)
+            let i1 = { movable: startMovable, delay: 0, isPush: false }
+            let i2 = { movable: endMovable, delay: 0, isPush: false }
             heap.push(i1)
             heap.push(i2)
-            proposals.set(movableAt(grabbed.start), i1)
-            proposals.set(movableAt(grabbed.end), i2)
+            proposals.set(startMovable, i1)
+            proposals.set(endMovable, i2)
          } else {
-            let i = { movable: grabbed, delay: 0 }
+            let i = { movable: grabbed, delay: 0, isPush: false }
             heap.push(i)
             proposals.set(grabbed, i)
          }
@@ -1338,7 +1360,7 @@
          // --------------- PART 2: Generate the instructions. ----------------
          while (heap.size() > 0) {
             let nextInstruction = heap.pop() as SlideInstruction
-            let { movable, delay } = nextInstruction
+            let { movable, delay, isPush } = nextInstruction
             instructions.push(nextInstruction) // Finalize this instruction.
 
             function pushNonConnected(pusher: Pushable) {
@@ -1357,10 +1379,10 @@
                   if (displacement <= 0) continue
                   let distance = Math.max(0, displacement - standardGap)
                   if (target instanceof Segment) {
-                     proposeTo(movableAt(target.start), delay + distance)
-                     proposeTo(movableAt(target.end), delay + distance)
+                     proposeTo(movableAt(target.start), delay + distance, true)
+                     proposeTo(movableAt(target.end), delay + distance, true)
                   } else {
-                     proposeTo(target, delay + distance)
+                     proposeTo(target, delay + distance, true)
                   }
                }
             }
@@ -1381,16 +1403,16 @@
                if (!segment.isRigid && adjDir.approxEquals(slideDir, 0.1)) {
                   // Allow the edge to contract to a length of standardGap.
                   let contraction = Math.max(0, segment.length() - standardGap)
-                  proposeTo(movableAt(adjVertex), delay + contraction)
+                  proposeTo(movableAt(adjVertex), delay + contraction, true)
                } else if (!segment.isRigid && segment.axis === slideAxis) {
                   // The segment can stretch indefinitely.
                   continue
                } else {
-                  proposeTo(movableAt(adjVertex), delay)
+                  proposeTo(movableAt(adjVertex), delay, isPush)
                }
             }
          }
-         function proposeTo(movable: Movable, delay: number) {
+         function proposeTo(movable: Movable, delay: number, isPush: boolean) {
             let existingProposal = proposals.get(movable)
             if (existingProposal) {
                if (existingProposal.delay > delay) {
@@ -1401,7 +1423,7 @@
                }
             } else {
                // Add an initial proposal to the heap.
-               let proposal = { movable: movable, delay }
+               let proposal = { movable: movable, delay, isPush }
                heap.push(proposal)
                proposals.set(movable, proposal)
             }
