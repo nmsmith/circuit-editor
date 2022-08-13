@@ -1013,7 +1013,7 @@
          if (dragAxis) {
             // Snap to the nearest standard axis.
             let drawAxis = nearestAxis(dragAxis, snapAxes)
-            ;(draw.segment.axis as Axis) = drawAxis
+            draw.segment.updateAxis(drawAxis)
             draw.end.moveTo(
                draw.segment.start.displacedBy(
                   dragVector.projectionOnto(drawAxis)
@@ -1066,7 +1066,7 @@
             ? associatedDrawAxis(closestVertex.object)
             : defaultDrawAxis
          if (drawAxis) {
-            ;(draw.segment.axis as Axis) = drawAxis
+            draw.segment.updateAxis(drawAxis)
             if (closestVertex) {
                // Snap to the closest vertex.
                draw.end.moveTo(closestVertex.object)
@@ -1531,7 +1531,7 @@
       for (let [segment] of warp.movable.edges()) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
-         ;(segment.axis as Axis) = axis
+         segment.updateAxis(axis)
       }
 
       Junction.s = Junction.s

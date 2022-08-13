@@ -157,6 +157,11 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       this.start.addEdge(this.edgeS)
       this.end.addEdge(this.edgeE)
    }
+   updateAxis(newAxis: Axis) {
+      forgetAxis(this.axis)
+      ;(this.axis as Axis) = newAxis
+      rememberAxis(this.axis)
+   }
    delete(): Set<Junction> {
       Segment.s.delete(this)
       forgetAxis(this.axis)

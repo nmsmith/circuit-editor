@@ -236,7 +236,7 @@ function mod(x: number, y: number) {
 export class Axis extends Vector {
    static readonly horizontal = new Axis(1, 0)
    static readonly vertical = new Axis(0, -1)
-   protected constructor(x: number, y: number) {
+   private constructor(x: number, y: number) {
       super(x, y)
    }
    static fromAngle(radians: number): Axis {
