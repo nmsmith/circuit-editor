@@ -1336,6 +1336,11 @@
                let pusherSlide = slideRanges.get(pusher) as Range1D
                let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
                for (let [target, targetOrthogonal] of orthoRanges) {
+                  if (target instanceof Segment && target.axis === slideAxis) {
+                     // To allow a segment parallel to the slideAxis to be
+                     // squished, we should push the endpoints, not the segment.
+                     continue
+                  }
                   if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
                   let targetSlide = slideRanges.get(target) as Range1D
                   let displacement = targetSlide.displacementFrom(pusherSlide)
