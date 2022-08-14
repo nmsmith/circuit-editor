@@ -244,11 +244,27 @@
       return Object.values(button).some((k) => k.state)
    }
    function selectedDrawMode(): DrawMode {
-      return alt ? (shift ? "free rotation" : "snapped rotation") : "strafing"
+      return shift
+         ? snapToAxes
+            ? "snapped rotation"
+            : "free rotation"
+         : "strafing"
+   }
+   function selectedSlideMode(): SlideMode {
+      return shift ? "push connected" : "push all"
+   }
+   function selectedWarpMode(): WarpMode {
+      return shift ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
       if (s.endsWith("Button")) return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
+   }
+   function copyPositions(): DefaultMap<Movable, Point> {
+      let positions = new DefaultMap<Movable, Point>(() => Point.zero)
+      for (let j of Junction.s) positions.set(j, j.clone())
+      for (let s of SymbolInstance.s) positions.set(s, s.position.clone())
+      return positions
    }
    // Returns the "shadow" each circuit element casts onto the given vector.
    // Only circuit elements parallel or orthogonal to the vector are considered.
@@ -352,6 +368,7 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let snapToAxes = true
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
       mode: DrawMode
@@ -367,16 +384,21 @@
       delay: number
       isPush: boolean
    }
+   type SlideMode = "push connected" | "push all"
    let slide: null | {
+      mode: SlideMode
       originalPositions: DefaultMap<Movable | Vertex, Point>
-      partGrabbed: Point
+      start: Point
       axis: Axis
       posInstructions: SlideInstruction[]
       negInstructions: SlideInstruction[]
    } = null
+   type WarpMode = "pan" | "rotate"
    let warp: null | {
+      mode: WarpMode
       movables: Movable[]
-      offsets: Vector[]
+      originalPositions: DefaultMap<Movable, Point>
+      start: Point
    }
    let multiSelect: null | {
       mode: "new" | "add" | "remove"
@@ -663,9 +685,12 @@
       shift = event.getModifierState("Shift")
       alt = event.getModifierState("Alt")
       cmd = event.getModifierState("Control") || event.getModifierState("Meta")
-      if (draw?.mode !== selectedDrawMode()) {
+      if (
+         (draw && draw.mode !== selectedDrawMode()) ||
+         (slide && slide.mode !== selectedSlideMode())
+      )
          updateDrawAndSlide()
-      }
+      if (warp && warp.mode !== selectedWarpMode()) updateWarp()
    }
    let waitedOneFrameLMB = false
    let waitedOneFrameRMB = false
@@ -1031,27 +1056,12 @@
       endDraw(false)
    }
    function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
-      let orthogonalAxis = slideAxis.orthogonal()
-      let partGrabbed = atPart.clone()
-      // Before movement commences, record the position of every Movable.
-      // We need to use the original positions as a reference, because we will
-      // be mutating them over the course of the movement.
-      let originalPositions = new DefaultMap<Movable | Vertex, Point>(
-         () => Point.zero
-      )
-      for (let junction of Junction.s) {
-         originalPositions.set(junction, junction.clone())
-      }
-      for (let symbol of SymbolInstance.s) {
-         originalPositions.set(symbol, symbol.position.clone())
-         for (let port of symbol.ports)
-            originalPositions.set(port, port.clone())
-      }
       function generateInstructions(
          slideDir: Direction,
          shouldPushNonConnected: boolean
       ): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
+         let orthogonalAxis = slideAxis.orthogonal()
          let slideRanges = projectionOfCircuitOnto(slideDir)
          let orthoRanges = projectionOfCircuitOnto(orthogonalAxis, slidePad / 2)
          if (draw) {
@@ -1163,13 +1173,21 @@
          }
          return instructions
       }
-      let [pos, neg] = [slideAxis.posDirection(), slideAxis.negDirection()]
+      let posInstructions, negInstructions
+      if (selectedSlideMode() === "push connected") {
+         posInstructions = generateInstructions(slideAxis.posDirection(), false)
+         negInstructions = generateInstructions(slideAxis.negDirection(), false)
+      } else {
+         posInstructions = generateInstructions(slideAxis.posDirection(), true)
+         negInstructions = generateInstructions(slideAxis.negDirection(), true)
+      }
       slide = {
-         originalPositions,
-         partGrabbed,
+         mode: selectedSlideMode(),
+         originalPositions: copyPositions(),
+         start: atPart.clone(),
          axis: slideAxis,
-         posInstructions: generateInstructions(pos, !shift),
-         negInstructions: generateInstructions(neg, !shift),
+         posInstructions,
+         negInstructions,
       }
    }
    function endSlide() {
@@ -1194,10 +1212,7 @@
          if (draw.mode === "strafing") beginDrawStrafing()
       } else if (slide) {
          // Revert the slide operation; it will be redone from scratch.
-         for (let m of movables()) {
-            if (m === draw?.end) continue
-            m.moveTo(slide.originalPositions.read(m))
-         }
+         for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
       }
       //--- PART 1: Do draw operations that can/must be done before sliding. ---
       let snappedToVertex = false
@@ -1356,7 +1371,7 @@
          } else {
             // The slideDistance is determined by the position of the mouse.
             slideDistance = mouse
-               .displacementFrom(slide.partGrabbed)
+               .displacementFrom(slide.start)
                .scalarProjectionOnto(slide.axis)
          }
          let direction, dirInstructions, otherInstructions
@@ -1450,34 +1465,21 @@
       Port.s = Port.s
    }
    function beginWarp(grabbable: Grabbable, partGrabbed: Point) {
-      if (grabbable instanceof Junction) {
-         let junction = grabbable
-         warp = {
-            movables: [junction],
-            offsets: [junction.displacementFrom(partGrabbed)],
-         }
-      } else if (grabbable instanceof Segment) {
-         let seg = grabbable
-         warp = {
-            movables: [movableAt(seg.start), movableAt(seg.end)],
-            offsets: [
-               seg.start.displacementFrom(partGrabbed),
-               seg.end.displacementFrom(partGrabbed),
-            ],
-         }
-      } else {
-         let symbol = grabbable
-         warp = {
-            movables: [symbol],
-            offsets: [symbol.position.displacementFrom(partGrabbed)],
-         }
+      warp = {
+         mode: selectedWarpMode(),
+         movables: isMovable(grabbable)
+            ? [grabbable]
+            : [movableAt(grabbable.start), movableAt(grabbable.end)],
+         originalPositions: copyPositions(),
+         start: partGrabbed,
       }
    }
    function updateWarp() {
       if (!warp) return
+      for (let m of warp.movables) m.moveTo(warp.originalPositions.read(m))
       // Start by moving everything as if it was following the mouse.
-      for (let [i, movable] of warp.movables.entries())
-         movable.moveTo(mouse.displacedBy(warp.offsets[i]))
+      let d = mouse.displacementFrom(warp.start)
+      for (let movable of warp.movables) movable.moveBy(d)
 
       // Gather the edges and axes of interest.
       let edges = warp.movables.flatMap((movable) =>
