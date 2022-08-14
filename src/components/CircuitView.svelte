@@ -967,6 +967,225 @@
       }
       beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
+   function endDraw(allowedToDelete: boolean = true) {
+      if (!draw) return
+      endSlide()
+      let segment = draw.segment
+      let endObject = draw.endObject
+      function isAcceptable() {
+         for (let [s, other] of segment.start.edges()) {
+            if (
+               s !== segment &&
+               s.axis === segment.axis &&
+               other.distanceFrom(segment.end) + 1 <
+                  segment.start.distanceFrom(segment.end) +
+                     other.distanceFrom(segment.start)
+            )
+               return false
+         }
+         return true
+      }
+      if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
+         if (endObject) {
+            if (endObject instanceof Segment) {
+               // Turn the intersected Segment into a T-junction.
+               endObject.splitAt(draw.end)
+            } else {
+               let extend =
+                  endObject instanceof Junction &&
+                  shouldExtendTheSegmentAt(endObject, segment.axis)
+               // Replace the drawn segment with one that ends at the Vertex.
+               segment.replaceWith(
+                  new Segment(segment.start, endObject, segment.axis)
+               )
+               if (extend)
+                  (endObject as Junction).convertToCrossing(crossingMap)
+            }
+         }
+      } else if (allowedToDelete) {
+         deleteItems([draw.end])
+      }
+      draw = null
+      // Tell Svelte all of these things could have changed.
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+   }
+   function abortDraw() {
+      if (draw?.segmentIsNew) deleteItems([draw.end])
+      draw = null
+   }
+   function chainDraw(rigidifyCurrent: boolean) {
+      if (!draw) return
+      draw.segment.isRigid = rigidifyCurrent
+      // Start a new draw operation at the current draw endpoint.
+      button.draw = {
+         state: "pressing",
+         downTime: performance.now(),
+         downPosition: mouse,
+         target: { object: draw.end, part: draw.end },
+         repeated: true,
+      }
+      draw.endObject = undefined // Don't connect to anything else.
+      endDraw(false)
+   }
+   function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
+      let orthogonalAxis = slideAxis.orthogonal()
+      let partGrabbed = atPart.clone()
+      // Before movement commences, record the position of every Movable.
+      // We need to use the original positions as a reference, because we will
+      // be mutating them over the course of the movement.
+      let originalPositions = new DefaultMap<Movable | Vertex, Point>(
+         () => Point.zero
+      )
+      for (let junction of Junction.s) {
+         originalPositions.set(junction, junction.clone())
+      }
+      for (let symbol of SymbolInstance.s) {
+         originalPositions.set(symbol, symbol.position.clone())
+         for (let port of symbol.ports)
+            originalPositions.set(port, port.clone())
+      }
+      function generateInstructions(
+         slideDir: Direction,
+         shouldPushNonConnected: boolean
+      ): SlideInstruction[] {
+         let instructions: SlideInstruction[] = [] // the final sequence
+         let slideRanges = projectionOfCircuitOnto(slideDir)
+         let orthoRanges = projectionOfCircuitOnto(orthogonalAxis, slidePad / 2)
+         if (draw) {
+            // The segment being drawn should be invisible to the slide op.
+            slideRanges.delete(draw.end)
+            orthoRanges.delete(draw.end)
+            slideRanges.delete(draw.segment)
+            orthoRanges.delete(draw.segment)
+         }
+
+         // ------------------ PART 1: Initialize the heap. -------------------
+         // Instructions need to be scheduled in order of priority. Thus, as
+         // instructions are proposed, we insert them into a heap.
+         let heap = new Heap<SlideInstruction>((a, b) => a.delay - b.delay)
+         // Proposals are also stored in a Map, so that we can update them.
+         let proposals = new Map<Movable, SlideInstruction>()
+         // Add the initial proposals to the heap.
+         if (grabbed instanceof Segment) {
+            let startMovable = movableAt(grabbed.start)
+            let endMovable = movableAt(grabbed.end)
+            let i1 = { movable: startMovable, delay: 0, isPush: false }
+            let i2 = { movable: endMovable, delay: 0, isPush: false }
+            heap.push(i1)
+            heap.push(i2)
+            proposals.set(startMovable, i1)
+            proposals.set(endMovable, i2)
+         } else {
+            let i = { movable: grabbed, delay: 0, isPush: false }
+            heap.push(i)
+            proposals.set(grabbed, i)
+         }
+
+         // --------------- PART 2: Generate the instructions. ----------------
+         while (heap.size() > 0) {
+            let nextInstruction = heap.pop() as SlideInstruction
+            let { movable, delay, isPush } = nextInstruction
+            instructions.push(nextInstruction) // Finalize this instruction.
+
+            function pushNonConnected(pusher: Pushable) {
+               if (!slideRanges.has(pusher)) return
+               let pusherSlide = slideRanges.get(pusher) as Range1D
+               let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
+               for (let [target, targetOrthogonal] of orthoRanges) {
+                  if (
+                     pusher instanceof Junction &&
+                     target instanceof Junction &&
+                     [...target.edges()].every(([s]) => s.axis !== slideAxis)
+                  )
+                     continue // This interaction doesn't make much sense.
+                  if (target instanceof Segment && target.axis === slideAxis) {
+                     // To allow a segment parallel to the slideAxis to be
+                     // squished, we should push the endpoints, not the segment.
+                     continue
+                  }
+                  if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
+                  let targetSlide = slideRanges.get(target) as Range1D
+                  let displacement = targetSlide.displacementFrom(pusherSlide)
+                  if (displacement <= 0) continue
+                  let distance = Math.max(0, displacement - standardGap)
+                  if (target instanceof Segment) {
+                     proposeTo(movableAt(target.start), delay + distance, true)
+                     proposeTo(movableAt(target.end), delay + distance, true)
+                  } else {
+                     proposeTo(target, delay + distance, true)
+                  }
+               }
+            }
+            if (shouldPushNonConnected) {
+               pushNonConnected(movable) // Movable pushes things in its path.
+            }
+            // Propagate the movement along the Movable's edges.
+            for (let [segment, adjVertex] of movable.edges()) {
+               if (segment === draw?.segment) continue // handled elsewhere
+               if (segment.axis === orthogonalAxis && shouldPushNonConnected) {
+                  pushNonConnected(segment) // Orthogonal segments push things!
+               }
+               // ---------- Logic for pushing connected Movables. ------------
+               let nearVertex =
+                  adjVertex === segment.end ? segment.start : segment.end
+               let adjDir = adjVertex.directionFrom(nearVertex)
+               if (!adjDir) continue
+               if (!segment.isRigid && adjDir.approxEquals(slideDir, 0.1)) {
+                  // Allow the edge to contract to a length of standardGap.
+                  let contraction = Math.max(0, segment.length() - standardGap)
+                  proposeTo(movableAt(adjVertex), delay + contraction, true)
+               } else if (!segment.isRigid && segment.axis === slideAxis) {
+                  // The segment can stretch indefinitely.
+                  continue
+               } else {
+                  proposeTo(movableAt(adjVertex), delay, isPush)
+               }
+            }
+         }
+         function proposeTo(movable: Movable, delay: number, isPush: boolean) {
+            let existingProposal = proposals.get(movable)
+            if (existingProposal) {
+               if (existingProposal.delay > delay) {
+                  // We've found something that will push the
+                  // Movable *sooner*. Decrease its delay.
+                  existingProposal.delay = delay
+                  heap.updateItem(existingProposal)
+               }
+            } else {
+               // Add an initial proposal to the heap.
+               let proposal = { movable: movable, delay, isPush }
+               heap.push(proposal)
+               proposals.set(movable, proposal)
+            }
+         }
+         return instructions
+      }
+      let [pos, neg] = [slideAxis.posDirection(), slideAxis.negDirection()]
+      slide = {
+         originalPositions,
+         partGrabbed,
+         axis: slideAxis,
+         posInstructions: generateInstructions(pos, !shift),
+         negInstructions: generateInstructions(neg, !shift),
+      }
+   }
+   function endSlide() {
+      slide = null
+   }
+   function abortSlide() {
+      if (!slide) return
+      // TODO: This approach doesn't work if Alt or Shift are used during the
+      // movement, since this resets slide.originalPositions. The "right" way to
+      // cancel the slide will be to invoke the UNDO operation, once it is
+      // implemented.
+
+      // Move all the circuit elements back to their original positions.
+      for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
+      slide = null
+   }
    function updateDrawAndSlide() {
       if (draw && draw.mode !== selectedDrawMode()) {
          // Change the draw mode.
@@ -1229,225 +1448,6 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
-   }
-   function endDraw(allowedToDelete: boolean = true) {
-      if (!draw) return
-      endSlide()
-      let segment = draw.segment
-      let endObject = draw.endObject
-      function isAcceptable() {
-         for (let [s, other] of segment.start.edges()) {
-            if (
-               s !== segment &&
-               s.axis === segment.axis &&
-               other.distanceFrom(segment.end) + 1 <
-                  segment.start.distanceFrom(segment.end) +
-                     other.distanceFrom(segment.start)
-            )
-               return false
-         }
-         return true
-      }
-      if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
-         if (endObject) {
-            if (endObject instanceof Segment) {
-               // Turn the intersected Segment into a T-junction.
-               endObject.splitAt(draw.end)
-            } else {
-               let extend =
-                  endObject instanceof Junction &&
-                  shouldExtendTheSegmentAt(endObject, segment.axis)
-               // Replace the drawn segment with one that ends at the Vertex.
-               segment.replaceWith(
-                  new Segment(segment.start, endObject, segment.axis)
-               )
-               if (extend)
-                  (endObject as Junction).convertToCrossing(crossingMap)
-            }
-         }
-      } else if (allowedToDelete) {
-         deleteItems([draw.end])
-      }
-      draw = null
-      // Tell Svelte all of these things could have changed.
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-      SymbolInstance.s = SymbolInstance.s
-      Port.s = Port.s
-   }
-   function abortDraw() {
-      if (draw?.segmentIsNew) deleteItems([draw.end])
-      draw = null
-   }
-   function chainDraw(rigidifyCurrent: boolean) {
-      if (!draw) return
-      draw.segment.isRigid = rigidifyCurrent
-      // Start a new draw operation at the current draw endpoint.
-      button.draw = {
-         state: "pressing",
-         downTime: performance.now(),
-         downPosition: mouse,
-         target: { object: draw.end, part: draw.end },
-         repeated: true,
-      }
-      draw.endObject = undefined // Don't connect to anything else.
-      endDraw(false)
-   }
-   function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
-      let orthogonalAxis = slideAxis.orthogonal()
-      let partGrabbed = atPart.clone()
-      // Before movement commences, record the position of every Movable.
-      // We need to use the original positions as a reference, because we will
-      // be mutating them over the course of the movement.
-      let originalPositions = new DefaultMap<Movable | Vertex, Point>(
-         () => Point.zero
-      )
-      for (let junction of Junction.s) {
-         originalPositions.set(junction, junction.clone())
-      }
-      for (let symbol of SymbolInstance.s) {
-         originalPositions.set(symbol, symbol.position.clone())
-         for (let port of symbol.ports)
-            originalPositions.set(port, port.clone())
-      }
-      function generateInstructions(
-         slideDir: Direction,
-         shouldPushNonConnected: boolean
-      ): SlideInstruction[] {
-         let instructions: SlideInstruction[] = [] // the final sequence
-         let slideRanges = projectionOfCircuitOnto(slideDir)
-         let orthoRanges = projectionOfCircuitOnto(orthogonalAxis, slidePad / 2)
-         if (draw) {
-            // The segment being drawn should be invisible to the slide op.
-            slideRanges.delete(draw.end)
-            orthoRanges.delete(draw.end)
-            slideRanges.delete(draw.segment)
-            orthoRanges.delete(draw.segment)
-         }
-
-         // ------------------ PART 1: Initialize the heap. -------------------
-         // Instructions need to be scheduled in order of priority. Thus, as
-         // instructions are proposed, we insert them into a heap.
-         let heap = new Heap<SlideInstruction>((a, b) => a.delay - b.delay)
-         // Proposals are also stored in a Map, so that we can update them.
-         let proposals = new Map<Movable, SlideInstruction>()
-         // Add the initial proposals to the heap.
-         if (grabbed instanceof Segment) {
-            let startMovable = movableAt(grabbed.start)
-            let endMovable = movableAt(grabbed.end)
-            let i1 = { movable: startMovable, delay: 0, isPush: false }
-            let i2 = { movable: endMovable, delay: 0, isPush: false }
-            heap.push(i1)
-            heap.push(i2)
-            proposals.set(startMovable, i1)
-            proposals.set(endMovable, i2)
-         } else {
-            let i = { movable: grabbed, delay: 0, isPush: false }
-            heap.push(i)
-            proposals.set(grabbed, i)
-         }
-
-         // --------------- PART 2: Generate the instructions. ----------------
-         while (heap.size() > 0) {
-            let nextInstruction = heap.pop() as SlideInstruction
-            let { movable, delay, isPush } = nextInstruction
-            instructions.push(nextInstruction) // Finalize this instruction.
-
-            function pushNonConnected(pusher: Pushable) {
-               if (!slideRanges.has(pusher)) return
-               let pusherSlide = slideRanges.get(pusher) as Range1D
-               let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
-               for (let [target, targetOrthogonal] of orthoRanges) {
-                  if (
-                     pusher instanceof Junction &&
-                     target instanceof Junction &&
-                     [...target.edges()].every(([s]) => s.axis !== slideAxis)
-                  )
-                     continue // This interaction doesn't make much sense.
-                  if (target instanceof Segment && target.axis === slideAxis) {
-                     // To allow a segment parallel to the slideAxis to be
-                     // squished, we should push the endpoints, not the segment.
-                     continue
-                  }
-                  if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
-                  let targetSlide = slideRanges.get(target) as Range1D
-                  let displacement = targetSlide.displacementFrom(pusherSlide)
-                  if (displacement <= 0) continue
-                  let distance = Math.max(0, displacement - standardGap)
-                  if (target instanceof Segment) {
-                     proposeTo(movableAt(target.start), delay + distance, true)
-                     proposeTo(movableAt(target.end), delay + distance, true)
-                  } else {
-                     proposeTo(target, delay + distance, true)
-                  }
-               }
-            }
-            if (shouldPushNonConnected) {
-               pushNonConnected(movable) // Movable pushes things in its path.
-            }
-            // Propagate the movement along the Movable's edges.
-            for (let [segment, adjVertex] of movable.edges()) {
-               if (segment === draw?.segment) continue // handled elsewhere
-               if (segment.axis === orthogonalAxis && shouldPushNonConnected) {
-                  pushNonConnected(segment) // Orthogonal segments push things!
-               }
-               // ---------- Logic for pushing connected Movables. ------------
-               let nearVertex =
-                  adjVertex === segment.end ? segment.start : segment.end
-               let adjDir = adjVertex.directionFrom(nearVertex)
-               if (!adjDir) continue
-               if (!segment.isRigid && adjDir.approxEquals(slideDir, 0.1)) {
-                  // Allow the edge to contract to a length of standardGap.
-                  let contraction = Math.max(0, segment.length() - standardGap)
-                  proposeTo(movableAt(adjVertex), delay + contraction, true)
-               } else if (!segment.isRigid && segment.axis === slideAxis) {
-                  // The segment can stretch indefinitely.
-                  continue
-               } else {
-                  proposeTo(movableAt(adjVertex), delay, isPush)
-               }
-            }
-         }
-         function proposeTo(movable: Movable, delay: number, isPush: boolean) {
-            let existingProposal = proposals.get(movable)
-            if (existingProposal) {
-               if (existingProposal.delay > delay) {
-                  // We've found something that will push the
-                  // Movable *sooner*. Decrease its delay.
-                  existingProposal.delay = delay
-                  heap.updateItem(existingProposal)
-               }
-            } else {
-               // Add an initial proposal to the heap.
-               let proposal = { movable: movable, delay, isPush }
-               heap.push(proposal)
-               proposals.set(movable, proposal)
-            }
-         }
-         return instructions
-      }
-      let [pos, neg] = [slideAxis.posDirection(), slideAxis.negDirection()]
-      slide = {
-         originalPositions,
-         partGrabbed,
-         axis: slideAxis,
-         posInstructions: generateInstructions(pos, !shift),
-         negInstructions: generateInstructions(neg, !shift),
-      }
-   }
-   function endSlide() {
-      slide = null
-   }
-   function abortSlide() {
-      if (!slide) return
-      // TODO: This approach doesn't work if Alt or Shift are used during the
-      // movement, since this resets slide.originalPositions. The "right" way to
-      // cancel the slide will be to invoke the UNDO operation, once it is
-      // implemented.
-
-      // Move all the circuit elements back to their original positions.
-      for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
-      slide = null
    }
    function beginWarp(grabbable: Grabbable, partGrabbed: Point) {
       if (grabbable instanceof Junction) {
