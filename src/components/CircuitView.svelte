@@ -386,6 +386,7 @@
    let slide: null | {
       mode: SlideMode
       originalPositions: DefaultMap<Movable | Vertex, Point>
+      grabbed: Grabbable
       start: Point
       axis: Axis
       posInstructions: SlideInstruction[]
@@ -1174,6 +1175,7 @@
       slide = {
          mode: selectedSlideMode(),
          originalPositions: copyPositions(),
+         grabbed,
          start: atPart.clone(),
          axis: slideAxis,
          posInstructions,
@@ -1201,8 +1203,14 @@
          draw.mode = selectedDrawMode()
          if (draw.mode === "strafing") beginDrawStrafing()
       } else if (slide) {
-         // Revert the slide operation; it will be redone from scratch.
-         for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
+         if (slide.mode !== selectedSlideMode()) {
+            let { axis, grabbed } = slide
+            endSlide()
+            beginSlide(axis, grabbed, mouse)
+         } else {
+            // Revert the slide operation; it will be redone from scratch.
+            for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
+         }
       }
       //--- PART 1: Do draw operations that can/must be done before sliding. ---
       let snappedToVertex = false
