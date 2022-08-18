@@ -231,9 +231,7 @@
       junction: Junction,
       drawAxis: Axis
    ): boolean {
-      return (
-         junction.edges().size === 1 && junction.axes()[0] === drawAxis && !alt
-      )
+      return junction.edges().size === 1 && junction.axes()[0] === drawAxis
    }
    function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
       if (ofAxes.length === 0) return to
@@ -866,21 +864,26 @@
       let attach = button.draw.target
       // Determine the axis the draw operation should begin along.
       let dragAxis = Axis.fromVector(dragVector) as Axis
-      let standardAxes =
-         drawMode === "strafing"
-            ? primaryAxes
-            : drawMode === "snapped rotation"
-            ? snapAxes
-            : [dragAxis]
+      let regularDrawAxis, specialDrawAxis
+      if (drawMode === "free rotation") {
+         regularDrawAxis = specialDrawAxis = dragAxis
+      } else {
+         let regularAxes = drawMode === "strafing" ? primaryAxes : snapAxes
+         let extraAxesToConsider =
+            attach?.object instanceof Segment
+               ? [attach.object.axis] // The axis of the segment.
+               : attach
+               ? [...attach.object.axes()] // The axes incident to the vertex.
+               : []
+         regularDrawAxis = nearestAxis(dragAxis, regularAxes)
+         specialDrawAxis = nearestAxis(dragAxis, [
+            ...regularAxes,
+            ...extraAxesToConsider,
+         ])
+      }
       if (attach?.object instanceof Segment) {
          let segment = attach.object
-         let drawAxis =
-            drawMode === "strafing"
-               ? nearestAxis(dragAxis, [...standardAxes, segment.axis])
-               : drawMode === "snapped rotation"
-               ? nearestAxis(dragAxis, standardAxes)
-               : dragAxis
-         if (drawMode !== "free rotation" && drawAxis === segment.axis) {
+         if (specialDrawAxis === segment.axis) {
             // Cut the segment, and allow the user to move one side of it.
             let direction = segment.start.displacementFrom(attach.part)
             let [newStart, other] =
@@ -889,58 +892,44 @@
                   : [segment.end, segment.start]
             let jMove = new Junction(attach.part)
             let jOther = new Junction(attach.part)
-            let moveSegment = new Segment(newStart, jMove, drawAxis)
-            let otherSegment = new Segment(other, jOther, drawAxis)
+            let moveSegment = new Segment(newStart, jMove, segment.axis)
+            let otherSegment = new Segment(other, jOther, segment.axis)
             segment.replaceWith(moveSegment, otherSegment)
             continueDraw(moveSegment, jMove)
          } else {
             // Create a T-junction.
             let junction = new Junction(attach.part)
             segment.splitAt(junction)
-            newDraw(junction, drawAxis)
+            newDraw(junction, regularDrawAxis)
          }
       } else if (attach) {
          let vertex = attach.object
          let continuedDraw = false
-         if (drawMode !== "free rotation") {
-            let considerAxis =
-               drawMode === "strafing"
-                  ? // Consider vertex axes, in case the user wants to
-                    // extend/unplug a segment.
-                    nearestAxis(dragAxis, [...standardAxes, ...vertex.axes()])
-                  : nearestAxis(dragAxis, standardAxes)
-            if (
-               vertex instanceof Junction &&
-               shouldExtendTheSegmentAt(vertex, considerAxis)
-            ) {
-               // Extend the segment.
-               continueDraw([...vertex.edges()][0][0], vertex)
+         if (
+            vertex instanceof Junction &&
+            shouldExtendTheSegmentAt(vertex, specialDrawAxis)
+         ) {
+            // Extend the segment.
+            continueDraw([...vertex.edges()][0][0], vertex)
+            continuedDraw = true
+         } else {
+            for (let [segment, other] of vertex.edges()) {
+               if (segment.axis !== specialDrawAxis) continue
+               if (other.displacementFrom(vertex).dot(dragVector) <= 0) continue
+               // Unplug this segment from the vertex.
+               let junction = new Junction(vertex)
+               let newSegment = new Segment(other, junction, segment.axis)
+               segment.replaceWith(newSegment)
+               if (vertex instanceof Junction && vertex.edges().size === 2)
+                  vertex.convertToCrossing(crossingMap)
+               // Allow the user to move the unplugged segment around.
+               continueDraw(newSegment, junction)
                continuedDraw = true
-            } else {
-               for (let [segment, other] of vertex.edges()) {
-                  if (segment.axis !== considerAxis) continue
-                  if (other.displacementFrom(vertex).dot(dragVector) <= 0)
-                     continue
-                  // Unplug this segment from the vertex.
-                  let junction = new Junction(vertex)
-                  let newSegment = new Segment(other, junction, considerAxis)
-                  segment.replaceWith(newSegment)
-                  if (vertex instanceof Junction && vertex.edges().size === 2)
-                     vertex.convertToCrossing(crossingMap)
-                  // Allow the user to move the unplugged segment around.
-                  continueDraw(newSegment, junction)
-                  continuedDraw = true
-                  break
-               }
+               break
             }
          }
-         if (!continuedDraw)
-            newDraw(vertex, nearestAxis(dragAxis, standardAxes))
-      } else
-         newDraw(
-            new Junction(button.draw.downPosition),
-            nearestAxis(dragAxis, standardAxes)
-         )
+         if (!continuedDraw) newDraw(vertex, regularDrawAxis)
+      } else newDraw(new Junction(button.draw.downPosition), regularDrawAxis)
    }
    function newDraw(start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
@@ -1143,11 +1132,12 @@
                   adjVertex === segment.end ? segment.start : segment.end
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
-               if (!segment.isRigid && adjDir.approxEquals(slideDir, 0.1)) {
+               let canStretch = segment.axis === slideAxis && !segment.isRigid
+               if (canStretch && adjDir.approxEquals(slideDir, 0.1)) {
                   // Allow the edge to contract to a length of standardGap.
                   let contraction = Math.max(0, segment.length() - standardGap)
                   proposeTo(movableAt(adjVertex), delay + contraction, true)
-               } else if (!segment.isRigid && segment.axis === slideAxis) {
+               } else if (canStretch) {
                   // The segment can stretch indefinitely.
                   continue
                } else {
@@ -1195,9 +1185,9 @@
    }
    function abortSlide() {
       if (!slide) return
-      // TODO: This approach doesn't work if Alt or Shift are used during the
-      // movement, since this resets slide.originalPositions. The "right" way to
-      // cancel the slide will be to invoke the UNDO operation, once it is
+      // TODO: This approach doesn't work if Shift is pressed during the
+      // movement, since this resets slide.originalPositions. The "right" way
+      // to cancel the slide will be to invoke the UNDO operation, once it is
       // implemented.
 
       // Move all the circuit elements back to their original positions.
@@ -1241,37 +1231,53 @@
             (i) => movable === i.movable && i.delay < slideDistance
          )
       }
-      if (draw && draw.mode === "snapped rotation") {
-         let dragVector = mouse.displacementFrom(draw.segment.start)
-         let dragAxis = Axis.fromVector(dragVector)
-         if (dragAxis) {
-            // Snap to the nearest standard axis.
-            let drawAxis = nearestAxis(dragAxis, snapAxes)
-            draw.segment.updateAxis(drawAxis)
-            draw.end.moveTo(
-               draw.segment.start.displacedBy(
-                  dragVector.projectionOnto(drawAxis)
-               )
-            )
-         }
-      } else if (draw) {
-         let associatedDrawAxis: (vertex: Vertex) => Axis | undefined
-         let defaultDrawAxis: Axis | undefined
+      if (draw) {
+         let associatedDrawAxis: (vertex: Vertex) => Axis
+         let defaultDrawEnd: Point
+         let defaultDrawAxis: Axis
          if (draw.mode === "strafing") {
             associatedDrawAxis = () => draw!.segment.axis
+            defaultDrawEnd = mouse
             defaultDrawAxis = draw.segment.axis
          } else {
-            // draw.mode === "free rotation"
             associatedDrawAxis = (vertex: Vertex) =>
-               Axis.fromVector(vertex.displacementFrom(draw!.segment.start))
-            defaultDrawAxis = Axis.fromVector(
-               mouse.displacementFrom(draw.segment.start)
-            )
+               Axis.fromVector(vertex.displacementFrom(draw!.segment.start)) ||
+               draw!.segment.axis
+            // By default, draw to the mouse position.
+            defaultDrawEnd = mouse
+            defaultDrawAxis =
+               Axis.fromVector(mouse.displacementFrom(draw.segment.start)) ||
+               draw.segment.axis
+            // But if possible, snap to a nice axis.
+            if (draw.mode === "snapped rotation") {
+               let adjacentAxes = [...movableAt(draw.segment.start).edges()]
+                  .filter(([seg]) => seg !== draw!.segment)
+                  .map(([seg]) => seg.axis)
+               let niceAxes = new Set([...snapAxes, ...adjacentAxes])
+               let closestAxis: Axis | undefined
+               let sqDistance: number = Infinity
+               for (let axis of niceAxes) {
+                  let sqRejection = new Line(draw.segment.start, axis)
+                     .partClosestTo(mouse)
+                     .sqDistanceFrom(mouse)
+                  if (sqRejection < sqDistance) {
+                     closestAxis = axis
+                     sqDistance = sqRejection
+                  }
+               }
+               if (sqDistance < sqSnapRadius) {
+                  closestAxis = closestAxis as Axis
+                  defaultDrawEnd = new Line(
+                     draw.segment.start,
+                     closestAxis
+                  ).partClosestTo(mouse)
+                  defaultDrawAxis = closestAxis
+               }
+            }
          }
          function isAcceptable(v: Vertex) {
             if (v === draw!.segment.start || v === draw!.end) return false
             let drawAxis = associatedDrawAxis(v)
-            if (!drawAxis) return false
             let drawDir = v
                .displacementFrom(draw!.segment.start)
                .projectionOnto(drawAxis)
@@ -1296,19 +1302,15 @@
          }
          let acceptableVertices = Array.from(vertices()).filter(isAcceptable)
          let closestVertex = closestNearTo(mouse, acceptableVertices)
-         let drawAxis = closestVertex
-            ? associatedDrawAxis(closestVertex.object)
-            : defaultDrawAxis
-         if (drawAxis) {
-            draw.segment.updateAxis(drawAxis)
-            if (closestVertex) {
-               // Snap to the closest vertex.
-               draw.end.moveTo(closestVertex.object)
-               draw.endObject = closestVertex.object
-               snappedToVertex = true
-            } else {
-               draw.end.moveTo(mouse)
-            }
+         if (closestVertex) {
+            // Snap to the closest vertex.
+            draw.end.moveTo(closestVertex.object)
+            draw.segment.updateAxis(associatedDrawAxis(closestVertex.object))
+            draw.endObject = closestVertex.object
+            snappedToVertex = true
+         } else {
+            draw.end.moveTo(defaultDrawEnd)
+            draw.segment.updateAxis(defaultDrawAxis)
          }
       }
       if (
