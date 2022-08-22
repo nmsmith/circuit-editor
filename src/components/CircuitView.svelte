@@ -3,6 +3,7 @@
    import {
       Vertex,
       isVertex,
+      Edge,
       Junction,
       Port,
       Segment,
@@ -108,8 +109,8 @@
    const snapAxes = [
       Axis.horizontal,
       Axis.vertical,
-      Axis.fromAngle(0.125 * tau), // 45 degrees
-      Axis.fromAngle(0.375 * tau), // 135 degrees
+      Axis.fromRadians(0.125 * tau), // 45 degrees
+      Axis.fromRadians(0.375 * tau), // 135 degrees
    ]
    snapAxes.forEach(rememberAxis)
    // The toggle order of the glyphs that appear at crossings.
@@ -134,20 +135,25 @@
    function movableAt(vertex: Vertex): Movable {
       return vertex instanceof Junction ? vertex : vertex.symbol
    }
-   function* vertices(): Generator<Vertex> {
+   function movablesOf(grabbable: Grabbable): Set<Movable> {
+      return isMovable(grabbable)
+         ? new Set([grabbable])
+         : new Set([movableAt(grabbable.start), movableAt(grabbable.end)])
+   }
+   function* allVertices(): Generator<Vertex> {
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
    }
-   function* crossings(): Generator<Crossing> {
+   function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
          for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
       }
    }
-   function* movables(): Generator<Movable> {
+   function* allMovables(): Generator<Movable> {
       for (let m of Junction.s) yield m
       for (let m of SymbolInstance.s) yield m
    }
-   function* pushables(): Generator<Pushable> {
+   function* allPushables(): Generator<Pushable> {
       for (let p of Junction.s) yield p
       for (let p of Segment.s) yield p
       for (let p of SymbolInstance.s) yield p
@@ -181,12 +187,17 @@
       }
    }
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
-      return closestNearTo(point, vertices()) || closestNearTo(point, Segment.s)
+      return (
+         closestNearTo(point, allVertices()) || closestNearTo(point, Segment.s)
+      )
    }
    function closestToggleable(point: Point): ClosenessResult<Toggleable> {
       return (
-         closestNearTo<Vertex | Crossing>(point, vertices(), crossings()) ||
-         closestNearTo(point, Segment.s)
+         closestNearTo<Vertex | Crossing>(
+            point,
+            allVertices(),
+            allCrossings()
+         ) || closestNearTo(point, Segment.s)
       )
    }
    function closestAttachableOrToggleable(
@@ -195,8 +206,11 @@
       // This additional function is necessary because the individual functions
       // don't compose.
       return (
-         closestNearTo<Vertex | Crossing>(point, vertices(), crossings()) ||
-         closestNearTo(point, Segment.s)
+         closestNearTo<Vertex | Crossing>(
+            point,
+            allVertices(),
+            allCrossings()
+         ) || closestNearTo(point, Segment.s)
       )
    }
    function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
@@ -264,6 +278,14 @@
       for (let s of SymbolInstance.s) positions.set(s, s.position.clone())
       return positions
    }
+   function copySymbolDirections(): DefaultMap<SymbolInstance, Direction> {
+      let directions = new DefaultMap<SymbolInstance, Direction>(
+         () => Direction.positiveX
+      )
+      for (let symbol of SymbolInstance.s)
+         directions.set(symbol, symbol.direction)
+      return directions
+   }
    // Returns the "shadow" each circuit element casts onto the given vector.
    // Only circuit elements parallel or orthogonal to the vector are considered.
    function projectionOfCircuitOnto(
@@ -300,9 +322,7 @@
             )
       }
       for (let symbol of SymbolInstance.s) {
-         let symbolAxis = Axis.fromDirection(
-            Direction.positiveX.rotatedBy(symbol.rotation)
-         )
+         let symbolAxis = Axis.fromDirection(symbol.direction)
          if (axesConsidered.includes(symbolAxis))
             ranges.set(symbol, rangeAlong(vector, symbol))
       }
@@ -395,8 +415,12 @@
    type WarpMode = "pan" | "rotate"
    let warp: null | {
       mode: WarpMode
-      movables: Movable[]
+      movables: Set<Movable>
+      centroid: Point
+      keyRotations: Set<Rotation>
+      incidentEdges: Set<Edge>
       originalPositions: DefaultMap<Movable, Point>
+      originalDirections: DefaultMap<SymbolInstance, Direction>
       start: Point
    }
    let multiSelect: null | {
@@ -567,7 +591,7 @@
          segmentsToDraw.set(segment, sections)
       }
       // Determine the other glyphs that need to be drawn at vertices.
-      for (let v of vertices()) {
+      for (let v of allVertices()) {
          if (v.glyph === "plug") {
             glyphsToDraw.add({ type: "plug", vertex: v, style: styleOf(v) })
          } else if (v instanceof Junction) {
@@ -753,7 +777,10 @@
       if (button.warp.state === "pressing") {
          let dragVector = mouse.displacementFrom(button.warp.downPosition)
          if (button.warp.target && dragVector.sqLength() >= halfGap * halfGap) {
-            beginWarp(button.warp.target.object, button.warp.target.part)
+            beginWarp(
+               movablesOf(button.warp.target.object),
+               button.warp.target.part
+            )
             button.warp = { ...button.warp, state: "dragging" }
          }
       }
@@ -815,7 +842,7 @@
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouse.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      beginWarp(symbol, mouse)
+      beginWarp(new Set([symbol]), mouse)
       button.warp = {
          state: "dragging",
          downTime: performance.now(),
@@ -1193,7 +1220,7 @@
       // implemented.
 
       // Move all the circuit elements back to their original positions.
-      for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
+      for (let m of allMovables()) m.moveTo(slide.originalPositions.read(m))
       slide = null
    }
    function updateDrawAndSlide() {
@@ -1209,7 +1236,8 @@
             beginSlide(axis, grabbed, mouse)
          } else {
             // Revert the slide operation; it will be redone from scratch.
-            for (let m of movables()) m.moveTo(slide.originalPositions.read(m))
+            for (let m of allMovables())
+               m.moveTo(slide.originalPositions.read(m))
          }
       }
       //--- PART 1: Do draw operations that can/must be done before sliding. ---
@@ -1308,7 +1336,7 @@
             }
             return true
          }
-         let acceptableVertices = Array.from(vertices()).filter(isAcceptable)
+         let acceptableVertices = Array.from(allVertices()).filter(isAcceptable)
          let closestVertex = closestNearTo(mouse, acceptableVertices)
          if (closestVertex) {
             // Snap to the closest vertex.
@@ -1474,33 +1502,84 @@
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
    }
-   function beginWarp(grabbable: Grabbable, partGrabbed: Point) {
+   function beginWarp(movables: Set<Movable>, partGrabbed: Point) {
+      // Compute the point about which rotation should occur.
+      let d = zeroVector
+      for (let m of movables) {
+         let p = m instanceof SymbolInstance ? m.center() : m
+         d = d.add(p.displacementFrom(Point.zero))
+      }
+      let centroid = Point.zero.displacedBy(d.scaledBy(1 / movables.size))
+      // Determine which rotations will align the axes of the selected items
+      // with the snapAxes.
+      let selectedAxes = new Set<Axis>()
+      for (let movable of movables) {
+         // Consider the axes of segments that lie between selected items.
+         for (let [segment, farVertex] of movable.edges()) {
+            if (movables.has(movableAt(farVertex)))
+               selectedAxes.add(segment.axis)
+         }
+         // Consider the intrinsic axis of Symbols.
+         if (movable instanceof SymbolInstance)
+            selectedAxes.add(Axis.fromDirection(movable.direction))
+      }
+      let keyRotations = new Set<Rotation>()
+      for (let axis of selectedAxes) {
+         for (let snap of snapAxes) {
+            let dir = snap.posDirection()
+            keyRotations.add(dir.rotationFrom(axis.posDirection()))
+            keyRotations.add(dir.rotationFrom(axis.negDirection()))
+         }
+      }
+      // Gather the incident edges; these are the edges that will be "warped".
+      let incidentEdges = new Set(
+         [...movables].flatMap((movable) =>
+            [...movable.edges()].filter(([_, v]) => !movables.has(movableAt(v)))
+         )
+      )
       warp = {
          mode: selectedWarpMode(),
-         movables: isMovable(grabbable)
-            ? [grabbable]
-            : [movableAt(grabbable.start), movableAt(grabbable.end)],
+         movables,
+         centroid,
+         keyRotations,
+         incidentEdges,
          originalPositions: copyPositions(),
+         originalDirections: copySymbolDirections(),
          start: partGrabbed,
       }
    }
    function updateWarp() {
       if (!warp) return
-      for (let m of warp.movables) m.moveTo(warp.originalPositions.read(m))
+      if (warp.mode !== selectedWarpMode()) {
+         let { movables } = warp
+         endWarp()
+         beginWarp(movables, mouse)
+      } else {
+         // Revert the operation; it will be redone from scratch.
+         for (let m of warp.movables) {
+            m.moveTo(warp.originalPositions.read(m))
+            if (m instanceof SymbolInstance) {
+               ;(m.direction as Direction) = warp.originalDirections.read(m)
+            }
+         }
+      }
+      if (warp.mode === "pan") {
+         updatePan()
+      } else {
+         updateRotate()
+      }
+   }
+   function updatePan() {
+      if (!warp) return
       // Start by moving everything as if it was following the mouse.
       let d = mouse.displacementFrom(warp.start)
       for (let movable of warp.movables) movable.moveBy(d)
 
-      // Gather the edges and axes of interest.
-      let edges = warp.movables.flatMap((movable) =>
-         [...movable.edges()].filter(
-            ([_, v]) => !warp!.movables.includes(movableAt(v))
-         )
-      )
+      // Gather the axes of interest.
       let neighbourAxes = new Set(
-         edges.flatMap(([s, neighbour]) =>
+         [...warp.incidentEdges].flatMap(([s, neighbour]) =>
             [...neighbour.edges()]
-               .filter(([_, v]) => !warp!.movables.includes(movableAt(v)))
+               .filter(([_, v]) => !warp!.movables.has(movableAt(v)))
                .map(([segment]) => segment.axis)
          )
       )
@@ -1510,7 +1589,7 @@
 
       // Begin by computing the minimum rejection from each axis.
       let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
-      for (let [segment, farVertex] of edges) {
+      for (let [segment, farVertex] of warp.incidentEdges) {
          let nearVertex =
             farVertex === segment.end ? segment.start : segment.end
          for (let axis of niceAxes) {
@@ -1567,8 +1646,50 @@
       // Execute the movement.
       for (let movable of warp.movables) movable.moveBy(displacement)
 
-      // Update the axis object associated with each incident edge.
-      for (let [segment] of edges) {
+      // Finally, update the axis object associated with each incident edge.
+      for (let [segment] of warp.incidentEdges) {
+         let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
+         if (!axis) continue
+         segment.updateAxis(axis)
+      }
+
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+   }
+   function updateRotate() {
+      if (!warp) return
+      // First, find the magnitude of the rotation to be performed.
+      let startDir = warp.start.directionFrom(warp.centroid)
+      let mouseDir = mouse.directionFrom(warp.centroid)
+      if (!startDir || !mouseDir) return
+      let mouseRotation = mouseDir.rotationFrom(startDir)
+
+      // Then, if the rotation is close to a keyRotation, ease to it.
+      let closest: Rotation = Rotation.fromDegrees(180)
+      for (let key of warp.keyRotations) {
+         let r = key.sub(mouseRotation)
+         if (Math.abs(r.toRadians()) < Math.abs(closest.toRadians()))
+            closest = r
+      }
+      let radius = mouse.distanceFrom(warp.centroid)
+      let arcLength = radius * Math.abs(closest.toRadians())
+      let easedRotation
+      if (arcLength < snapRadius) {
+         easedRotation = mouseRotation.add(closest)
+      } else if (arcLength < easeRadius) {
+         let scale = easeFn(arcLength) / arcLength
+         easedRotation = mouseRotation.add(closest.scaledBy(scale))
+      } else {
+         easedRotation = mouseRotation
+      }
+
+      // Then, apply the rotation.
+      for (let m of warp.movables) m.rotateAround(warp.centroid, easedRotation)
+
+      // Finally, update the axis object associated with each incident edge.
+      for (let [segment] of warp.incidentEdges) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
          segment.updateAxis(axis)

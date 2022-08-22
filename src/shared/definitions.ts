@@ -50,6 +50,9 @@ export class Junction extends Point implements Deletable {
    moveBy(displacement: Vector) {
       this.moveTo(this.displacedBy(displacement))
    }
+   rotateAround(point: Point, rotation: Rotation) {
+      this.moveTo(this.rotatedAround(point, rotation))
+   }
    edges(): Set<Edge> {
       return this.edges_
    }
@@ -222,11 +225,12 @@ export class SymbolInstance extends Rectangle implements Deletable {
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
       super(position, rotation, kind.collisionBox)
       this.kind = kind
-      this.svg = kind.svgTemplate.cloneNode(true) as SVGElement
+      this.svg = document.createElementNS("http://www.w3.org/2000/svg", "g")
       this.idSuffix = ":" + SymbolInstance.nextUUID++
       this.ports = kind.portLocations.map(
          (p) => new Port(this, this.fromRectCoordinates(p))
       )
+      let image = kind.svgTemplate.cloneNode(true) as SVGElement
       // Namespace the IDs (since IDs must be unique amongst all instances).
       for (let element of this.svg.querySelectorAll("*")) {
          if (element.hasAttribute("id")) {
@@ -242,6 +246,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
                element.setAttributeNS(xlink, "href", xRef + this.idSuffix)
          }
       }
+      this.svg.appendChild(image)
       SymbolInstance.s.add(this)
       document.getElementById("symbol layer")?.appendChild(this.svg)
    }
@@ -274,10 +279,13 @@ export class SymbolInstance extends Rectangle implements Deletable {
       return a
    }
    moveTo(point: Point) {
-      ;(this.position.x as number) = point.x
-      ;(this.position.y as number) = point.y
-      this.svg.setAttribute("x", point.x.toString())
-      this.svg.setAttribute("y", point.y.toString())
+      ;(this.position as Point) = point
+      this.svg.setAttribute(
+         "transform",
+         `translate(${point.x} ${
+            point.y
+         }) rotate(${this.rotation().toDegrees()})`
+      )
       for (let [i, port] of this.ports.entries()) {
          let p = this.fromRectCoordinates(this.kind.portLocations[i])
          ;(port.x as number) = p.x
@@ -287,8 +295,10 @@ export class SymbolInstance extends Rectangle implements Deletable {
    moveBy(displacement: Vector) {
       this.moveTo(this.position.displacedBy(displacement))
    }
-   direction(): Direction {
-      return Direction.positiveX.rotatedBy(this.rotation)
+   rotateAround(point: Point, rotation: Rotation) {
+      ;(this.direction as Direction) = this.direction.rotatedBy(rotation)
+      console.log(this.direction)
+      this.moveTo(this.position.rotatedAround(point, rotation))
    }
    svgCorners(): Point[] {
       let { x, y } = this.kind.svgBox

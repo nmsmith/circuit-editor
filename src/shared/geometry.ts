@@ -1,5 +1,6 @@
 import { DefaultMap } from "./utilities"
 
+const tau = 2 * Math.PI
 // This global variable keeps track of the Axes used by the program. The goal
 // is to simulate value equality, which JavaScript doesn't have.
 const axes = new DefaultMap<Axis, number>(() => 0)
@@ -21,7 +22,11 @@ function findAxis(subject: Axis | undefined): Axis | undefined
 function findAxis(subject: Axis | undefined): Axis | undefined {
    if (!subject) return undefined
    for (let axis of axes.keys()) {
-      if (subject.approxEquals(axis, axisErrorTolerance)) return axis
+      if (
+         subject.approxEquals(axis, axisErrorTolerance) ||
+         subject.approxEquals(axis.scaledBy(-1), axisErrorTolerance)
+      )
+         return axis
    }
    return subject
 }
@@ -149,8 +154,11 @@ export class Point extends Object2D {
    displacedBy(v: Vector): Point {
       return new Point(this.x + v.x, this.y + v.y)
    }
-   interpolatedToward(point: Point, percent: number) {
+   interpolatedToward(point: Point, percent: number): Point {
       return this.displacedBy(point.displacementFrom(this).scaledBy(percent))
+   }
+   rotatedAround(p: Point, r: Rotation): Point {
+      return p.displacedBy(this.displacementFrom(p).rotatedBy(r))
    }
    clone(): Point {
       return new Point(this.x, this.y)
@@ -173,20 +181,26 @@ export class Point extends Object2D {
 export class Rotation {
    readonly x: number
    readonly y: number
-   static readonly zero = this.fromAngle(0)
+   static readonly zero = this.fromRadians(0)
 
    protected constructor(x: number, y: number) {
       this.x = x
       this.y = y
    }
-   static fromAngle(radians: number): Rotation {
+   static fromRadians(radians: number): Rotation {
       return new Rotation(Math.cos(radians), Math.sin(radians))
    }
-   toAngle(): number {
+   static fromDegrees(degrees: number): Rotation {
+      return Rotation.fromRadians((degrees / 360) * tau)
+   }
+   toRadians(): number {
       return Math.atan2(this.y, this.x)
    }
+   toDegrees(): number {
+      return (this.toRadians() / tau) * 360
+   }
    scaledBy(factor: number): Rotation {
-      return Rotation.fromAngle(factor * this.toAngle())
+      return Rotation.fromRadians(factor * this.toRadians())
    }
    add(rotation: Rotation): Rotation {
       let cos = this.x * rotation.x - this.y * rotation.y
@@ -239,7 +253,7 @@ export class Axis extends Vector {
    private constructor(x: number, y: number) {
       super(x, y)
    }
-   static fromAngle(radians: number): Axis {
+   static fromRadians(radians: number): Axis {
       // Ensure the angle is in [-90°, 90°).
       const quarterTurn = Math.PI / 2
       radians = mod(radians + quarterTurn, Math.PI) - quarterTurn
@@ -466,6 +480,9 @@ export class Range1D {
       let d2 = this.low - range.high
       return Math.abs(d1) <= Math.abs(d2) ? d1 : d2
    }
+   center(): number {
+      return (this.low + this.high) / 2
+   }
 }
 
 export class Range2D {
@@ -521,28 +538,37 @@ export class Range2D {
          new Point(this.x.low, this.y.high),
       ]
    }
+   center(): Point {
+      return new Point(this.x.center(), this.y.center())
+   }
 }
 
 export class Rectangle extends Object2D {
    readonly position: Point
-   readonly rotation: Rotation
-   readonly range: Range2D
+   readonly direction: Direction
+   protected readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
       super()
       this.position = position
-      this.rotation = rotation
+      this.direction = Rectangle.defaultDirection().rotatedBy(rotation)
       this.range = range
+   }
+   protected static defaultDirection(): Direction {
+      return Direction.positiveX
+   }
+   protected rotation(): Rotation {
+      return this.direction.rotationFrom(Rectangle.defaultDirection())
    }
    toRectCoordinates(point: Point): Point {
       return Point.zero.displacedBy(
          point
             .displacementFrom(this.position)
-            .rotatedBy(this.rotation.scaledBy(-1))
+            .rotatedBy(this.rotation().scaledBy(-1))
       )
    }
    fromRectCoordinates(point: Point): Point {
       return this.position.displacedBy(
-         point.displacementFrom(Point.zero).rotatedBy(this.rotation)
+         point.displacementFrom(Point.zero).rotatedBy(this.rotation())
       )
    }
    partClosestTo(point: Point): Point {
@@ -556,6 +582,9 @@ export class Rectangle extends Object2D {
       let p = this.toRectCoordinates(point)
       let { x, y } = this.range
       return x.low <= p.x && p.x <= x.high && y.low <= p.y && p.y <= y.high
+   }
+   center(): Point {
+      return this.fromRectCoordinates(this.range.center())
    }
    corners(): Point[] {
       return this.range.corners().map((p) => this.fromRectCoordinates(p))
