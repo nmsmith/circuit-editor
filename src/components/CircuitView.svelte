@@ -1301,13 +1301,24 @@
                      sqDistance = sqRejection
                   }
                }
-               if (sqDistance < sqSnapRadius) {
-                  closestAxis = closestAxis as Axis
-                  defaultDrawEnd = new Line(
+               if (closestAxis) {
+                  let closestPart = new Line(
                      draw.segment.start,
                      closestAxis
                   ).partClosestTo(mouse)
-                  defaultDrawAxis = closestAxis
+                  if (sqDistance < sqSnapRadius) {
+                     defaultDrawEnd = closestPart
+                     defaultDrawAxis = closestAxis
+                  } else if (sqDistance < sqEaseRadius) {
+                     let d = closestPart.directionFrom(mouse) as Direction
+                     defaultDrawEnd = mouse.displacedBy(
+                        d.scaledBy(easeFn(Math.sqrt(sqDistance)))
+                     )
+                     defaultDrawAxis =
+                        Axis.fromVector(
+                           defaultDrawEnd.displacementFrom(draw.segment.start)
+                        ) || draw.segment.axis
+                  }
                }
             }
          }

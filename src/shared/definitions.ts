@@ -297,7 +297,6 @@ export class SymbolInstance extends Rectangle implements Deletable {
    }
    rotateAround(point: Point, rotation: Rotation) {
       ;(this.direction as Direction) = this.direction.rotatedBy(rotation)
-      console.log(this.direction)
       this.moveTo(this.position.rotatedAround(point, rotation))
    }
    svgCorners(): Point[] {
