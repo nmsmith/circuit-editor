@@ -847,6 +847,7 @@
          state: "dragging",
          downTime: performance.now(),
          downPosition: mouse,
+         target: { object: symbol, part: mouse },
       }
       if (draggingUsingLMB) {
          // Set some flags so that when the LMB is released, the move operation
