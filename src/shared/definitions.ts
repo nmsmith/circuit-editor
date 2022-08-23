@@ -87,6 +87,8 @@ export class Junction extends Point implements Deletable {
          pairs.add([pair[0], pair[1]])
       }
       // Merge each pair of segments into a single segment.
+      // NOTE: We need to make sure that all of the properties that are
+      // preserved at segment.replaceWith() are addressed here too.
       let crossing = []
       for (let segs of pairs) {
          let mergedSegment = new Segment(
@@ -95,6 +97,8 @@ export class Junction extends Point implements Deletable {
             segs[0].axis
          )
          crossing.push(mergedSegment)
+         // Merge the state of the old segments into the new one.
+         mergedSegment.isRigid = segs[0].isRigid && segs[1].isRigid
          // Merge the crossing types of the old segments into the new one.
          let seg0Crossings = currentCrossings.read(segs[0])
          for (let s of Segment.s) {
@@ -178,8 +182,12 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    // Replace this segment with another (or several), transferring all of its
    // properties. Thereafter, all references to the segment should be discarded.
    replaceWith(...newSegments: Segment[]) {
+      // NOTE: Whatever properties are preserved here, should also be preserved
+      // at Junction.convertToCrossing().
       for (let newSegment of newSegments) {
-         // Transfer the crossing types.
+         // Copy the state of this segment.
+         newSegment.isRigid = this.isRigid
+         // Copy the crossing types associated with this segment.
          for (let s of Segment.s) {
             s.crossingTypes.set(newSegment, s.crossingTypes.read(this))
             newSegment.crossingTypes.set(s, this.crossingTypes.read(s))
