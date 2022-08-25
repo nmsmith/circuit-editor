@@ -29,28 +29,25 @@
       closestSegmentTo,
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
-   import { mouseInCoordinateSystemOf, DefaultMap } from "~/shared/utilities"
+   import { DefaultMap } from "~/shared/utilities"
    import FluidLine from "~/components/lines/FluidLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
    import JunctionNode from "~/components/lines/JunctionNode.svelte"
    import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
-   import Button from "./Button.svelte"
+   import Button from "~/components/Button.svelte"
    import Heap from "heap"
 
-   // ---------------------- Props (for input & output) -----------------------
-   // Callbacks that must be bound by the parent component.
-   // export let onSymbolLeave: (
-   //    kind: SymbolKind,
-   //    grabOffset: Vector,
-   //    event: MouseEvent
-   // ) => void
-   // Callbacks shared with the parent component.
-   export const onSymbolEnter = spawnSymbol
-
    // ------------------------------ Constants --------------------------------
-   let canvas: SVGElement // the root element of this component
+   const symbolFiles = [
+      // These symbols are temporarily baked into the app.
+      "/symbols/animate/pump.svg",
+      "/symbols/animate/valve.svg",
+      "/symbols/illustrator/limit switch.svg",
+      "/symbols/illustrator/prox sensor.svg",
+   ]
+   let canvas: SVGElement | undefined // the root element of this component
    type Button = keyof typeof button
    export const buttonMap: {
       LMB: Button
@@ -81,7 +78,6 @@
    }
    const row1Buttons: Button[] = ["query", "warp", "erase", "rigid", "tether"]
    const row2Buttons: Button[] = ["aButton", "slide", "draw", "flex", "gButton"]
-   export const buttonForSidebarDragging: Button = "warp"
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
@@ -338,9 +334,25 @@
       }
       return ranges
    }
+   function absolutePosition(p: Point) {
+      return `position: absolute; left: ${p.x}px; top: ${p.y}px`
+   }
 
    // ---------------------- State of input peripherals -----------------------
-   let mouse: Point = Point.zero
+   let mouseInClient: Point = Point.zero
+   let mouseOnCanvas: Point
+   $: /* Compute the position of the mouse in canvas coordinates. */ {
+      if (canvas) {
+         let rect = canvas.getBoundingClientRect()
+         mouseOnCanvas = new Point(
+            mouseInClient.x - rect.left,
+            mouseInClient.y - rect.top
+         )
+      } else {
+         mouseOnCanvas = mouseInClient
+      }
+   }
+   let mouseEvents = new Map<EventTarget | null, MouseEvent>()
    let [shift, alt, cmd] = [false, false, false]
    type ButtonDownInfo<Target> = {
       downTime: number
@@ -386,6 +398,8 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let symbolKinds: SymbolKind[] = []
+   let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
    let snapToAxes = true
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
@@ -443,8 +457,6 @@
    let flexSelect: SelectOperation<Segment>
 
    // ---------------------------- Derived state ------------------------------
-   $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
-   $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
       crossingMap = new DefaultMap(() => new Map())
@@ -470,7 +482,7 @@
       if (slide) {
          cursor = "grabbing"
       } else if (button.slide.state) {
-         if (closestGrabbable(mouse)) {
+         if (closestGrabbable(mouseOnCanvas)) {
             cursor = button.slide.state === "pressing" ? "grabbing" : "grab"
          } else {
             cursor = "default"
@@ -487,7 +499,7 @@
       if (draw?.endObject instanceof Segment) {
          hoverLight.add(draw.endObject)
       } else if (!aButtonIsHeld()) {
-         let thing = closestAttachableOrToggleable(mouse)
+         let thing = closestAttachableOrToggleable(mouseOnCanvas)
          if (thing) {
             if (thing.object instanceof Crossing) {
                hoverLight.add(thing.closestPart)
@@ -635,7 +647,7 @@
       } else {
          abortAndReleaseAll()
          let downTime = performance.now()
-         let downPosition = mouse
+         let downPosition = mouseOnCanvas
          let target
          if (name === "draw") {
             let c = closestAttachable(downPosition)
@@ -645,19 +657,30 @@
             let c = closestGrabbable(downPosition)
             if (c) target = { object: c.object, part: c.closestPart }
             button.warp = { state: "pressing", downTime, downPosition, target }
+            // Logic for dragging symbols from sidebar (if applicable):
+            let symbolUnderMouse = document.elementFromPoint(
+               mouseInClient.x,
+               mouseInClient.y
+            )
+            let symbolMouseEvent = mouseEvents.get(symbolUnderMouse)
+            if (symbolUnderMouse && symbolMouseEvent) {
+               symbolUnderMouse.dispatchEvent(
+                  new MouseEvent("mousedown", symbolMouseEvent)
+               )
+            }
          } else if (name === "slide") {
             let c = closestGrabbable(downPosition)
             if (c) target = { object: c.object, part: c.closestPart }
             button.slide = { state: "pressing", downTime, downPosition, target }
          } else if (name === "rigid" && instantActionPossible) {
-            let segment = closestNearTo(mouse, Segment.s)?.object
+            let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
                Segment.s = Segment.s
             }
             button.rigid = { state: "pressing", downTime, downPosition }
          } else if (name === "flex" && instantActionPossible) {
-            let segment = closestNearTo(mouse, Segment.s)?.object
+            let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid) {
                segment.isRigid = false
                Segment.s = Segment.s
@@ -679,6 +702,7 @@
          switch (name) {
             case "warp":
                endWarp()
+               grabbedSymbol = null
                break
             case "draw": {
                if (b.state === "pressing" && !b.repeated) {
@@ -724,7 +748,7 @@
       return (event.buttons & 0b010) !== 0
    }
    function drawButtonTapped() {
-      let toggle = closestToggleable(mouse)
+      let toggle = closestToggleable(mouseOnCanvas)
       if (!toggle) return
       if (isVertex(toggle.object)) {
          if (toggle.object.glyph === "default") {
@@ -757,7 +781,7 @@
       Segment.s = Segment.s
       Port.s = Port.s
    }
-   function mouseMoved(previousMousePosition: Point) {
+   function mouseMoved() {
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
@@ -768,14 +792,18 @@
       updateFlexSelect()
       // Check for the initiation of drag-based operations.
       if (button.draw.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.draw.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.draw.downPosition
+         )
          if (dragVector.sqLength() >= halfGap * halfGap) {
             beginDraw(dragVector)
             button.draw = { ...button.draw, state: "dragging" }
          }
       }
       if (button.warp.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.warp.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.warp.downPosition
+         )
          if (button.warp.target && dragVector.sqLength() >= halfGap * halfGap) {
             beginWarp(
                movablesOf(button.warp.target.object),
@@ -786,7 +814,9 @@
       }
       if (button.slide.state === "pressing") {
          let target = button.slide.target
-         let dragVector = mouse.displacementFrom(button.slide.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.slide.downPosition
+         )
          if (target && dragVector.sqLength() >= halfGap * halfGap) {
             let dragAxis = Axis.fromVector(dragVector)
             if (dragAxis) {
@@ -810,25 +840,72 @@
          }
       }
       if (button.erase.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.erase.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.erase.downPosition
+         )
          if (dragVector.sqLength() >= sqSelectStartDistance) {
             beginEraseSelect(button.erase.downPosition)
             button.erase = { ...button.erase, state: "dragging" }
          }
       }
       if (button.rigid.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.rigid.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.rigid.downPosition
+         )
          if (dragVector.sqLength() >= sqSelectStartDistance) {
             beginRigidSelect(button.rigid.downPosition)
             button.rigid = { ...button.rigid, state: "dragging" }
          }
       }
       if (button.flex.state === "pressing") {
-         let dragVector = mouse.displacementFrom(button.flex.downPosition)
+         let dragVector = mouseOnCanvas.displacementFrom(
+            button.flex.downPosition
+         )
          if (dragVector.sqLength() >= sqSelectStartDistance) {
             beginFlexSelect(button.flex.downPosition)
             button.flex = { ...button.flex, state: "dragging" }
          }
+      }
+   }
+   // Pre-process the SVG (already in the DOM) of the schematic symbol whose
+   // file path is given.
+   function registerSymbolKind(filePath: string) {
+      let object = document.getElementById(filePath) as HTMLObjectElement
+      let svgDocument = object.contentDocument
+      if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
+         let svg = svgDocument.firstChild as SVGElement
+         // Compute the bounding box of the whole SVG.
+         let svgBox
+         {
+            svg.getBoundingClientRect() // hack to fix Safari's calculations
+            let { x, y, width, height } = svg.getBoundingClientRect()
+            svgBox = Range2D.fromXY(
+               new Range1D([x, x + width]),
+               new Range1D([y, y + height])
+            )
+         }
+         // Locate the collision box and ports of the symbol.
+         let collisionBox
+         let portLocations = []
+         for (let element of svg.querySelectorAll("[id]")) {
+            if (element.id === "collisionBox") {
+               let { x, y, width, height } = element.getBoundingClientRect()
+               collisionBox = Range2D.fromXY(
+                  new Range1D([x, x + width]),
+                  new Range1D([y, y + height])
+               )
+            } else if (element.id.endsWith("Snap")) {
+               let { x, y, width, height } = element.getBoundingClientRect()
+               portLocations.push(new Point(x + width / 2, y + height / 2))
+            }
+         }
+         // If the symbol has no defined collision box, use the SVG's box.
+         if (!collisionBox) collisionBox = svgBox
+         // Add the symbol to the app's list of symbols.
+         symbolKinds = [
+            ...symbolKinds,
+            { filePath, svgTemplate: svg, svgBox, collisionBox, portLocations },
+         ]
       }
    }
    function spawnSymbol(
@@ -837,17 +914,15 @@
       e: MouseEvent,
       draggingUsingLMB: boolean
    ) {
-      // Update the mouse position.
-      mouse = mouseInCoordinateSystemOf(canvas, e)
       // Spawn a symbol on the canvas, and initiate a move action.
-      let spawnPosition = mouse.displacedBy(grabOffset)
+      let spawnPosition = mouseOnCanvas.displacedBy(grabOffset)
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
-      beginWarp(new Set([symbol]), mouse)
+      beginWarp(new Set([symbol]), mouseOnCanvas)
       button.warp = {
          state: "dragging",
          downTime: performance.now(),
-         downPosition: mouse,
-         target: { object: symbol, part: mouse },
+         downPosition: mouseOnCanvas,
+         target: { object: symbol, part: mouseOnCanvas },
       }
       if (draggingUsingLMB) {
          // Set some flags so that when the LMB is released, the move operation
@@ -1066,7 +1141,7 @@
       button.draw = {
          state: "pressing",
          downTime: performance.now(),
-         downPosition: mouse,
+         downPosition: mouseOnCanvas,
          target: { object: draw.end, part: draw.end },
          repeated: true,
       }
@@ -1234,7 +1309,7 @@
          if (slide.mode !== selectedSlideMode()) {
             let { axis, grabbed } = slide
             endSlide()
-            beginSlide(axis, grabbed, mouse)
+            beginSlide(axis, grabbed, mouseOnCanvas)
          } else {
             // Revert the slide operation; it will be redone from scratch.
             for (let m of allMovables())
@@ -1256,7 +1331,7 @@
          if (!draw || !slide) return true
          // The following expression computes the slide that needs to be
          // performed to move draw.start into alignment with draw.end.
-         let slideDistance = mouse
+         let slideDistance = mouseOnCanvas
             .displacedBy(draw.segment.axis.orthogonal().scaledBy(disp))
             .displacementFrom(draw.segment.start)
             .inTermsOfBasis([slide.axis, draw.segment.axis])[0]
@@ -1274,17 +1349,18 @@
          let defaultDrawAxis: Axis
          if (draw.mode === "strafing") {
             associatedDrawAxis = () => draw!.segment.axis
-            defaultDrawEnd = mouse
+            defaultDrawEnd = mouseOnCanvas
             defaultDrawAxis = draw.segment.axis
          } else {
             associatedDrawAxis = (vertex: Vertex) =>
                Axis.fromVector(vertex.displacementFrom(draw!.segment.start)) ||
                draw!.segment.axis
             // By default, draw to the mouse position.
-            defaultDrawEnd = mouse
+            defaultDrawEnd = mouseOnCanvas
             defaultDrawAxis =
-               Axis.fromVector(mouse.displacementFrom(draw.segment.start)) ||
-               draw.segment.axis
+               Axis.fromVector(
+                  mouseOnCanvas.displacementFrom(draw.segment.start)
+               ) || draw.segment.axis
             // But if possible, snap to a nice axis.
             if (draw.mode === "snapped rotation") {
                let adjacentAxes = [...movableAt(draw.segment.start).edges()]
@@ -1295,8 +1371,8 @@
                let sqDistance: number = Infinity
                for (let axis of niceAxes) {
                   let sqRejection = new Line(draw.segment.start, axis)
-                     .partClosestTo(mouse)
-                     .sqDistanceFrom(mouse)
+                     .partClosestTo(mouseOnCanvas)
+                     .sqDistanceFrom(mouseOnCanvas)
                   if (sqRejection < sqDistance) {
                      closestAxis = axis
                      sqDistance = sqRejection
@@ -1306,13 +1382,15 @@
                   let closestPart = new Line(
                      draw.segment.start,
                      closestAxis
-                  ).partClosestTo(mouse)
+                  ).partClosestTo(mouseOnCanvas)
                   if (sqDistance < sqSnapRadius) {
                      defaultDrawEnd = closestPart
                      defaultDrawAxis = closestAxis
                   } else if (sqDistance < sqEaseRadius) {
-                     let d = closestPart.directionFrom(mouse) as Direction
-                     defaultDrawEnd = mouse.displacedBy(
+                     let d = closestPart.directionFrom(
+                        mouseOnCanvas
+                     ) as Direction
+                     defaultDrawEnd = mouseOnCanvas.displacedBy(
                         d.scaledBy(easeFn(Math.sqrt(sqDistance)))
                      )
                      defaultDrawAxis =
@@ -1341,7 +1419,7 @@
                // Reject if snapping to the vertex is impossible, because the
                // vertex would slide away from the mouse.
                let orthoDisp = v
-                  .displacementFrom(mouse)
+                  .displacementFrom(mouseOnCanvas)
                   .scalarProjectionOnto(drawAxis.orthogonal())
                if (!canDisplaceTowardMovable(movableAt(v), orthoDisp))
                   return false
@@ -1349,7 +1427,7 @@
             return true
          }
          let acceptableVertices = Array.from(allVertices()).filter(isAcceptable)
-         let closestVertex = closestNearTo(mouse, acceptableVertices)
+         let closestVertex = closestNearTo(mouseOnCanvas, acceptableVertices)
          if (closestVertex) {
             // Snap to the closest vertex.
             draw.end.moveTo(closestVertex.object)
@@ -1420,7 +1498,7 @@
             slideDistance = slideVector.scalarProjectionOnto(slide.axis)
          } else {
             // The slideDistance is determined by the position of the mouse.
-            slideDistance = mouse
+            slideDistance = mouseOnCanvas
                .displacementFrom(slide.start)
                .scalarProjectionOnto(slide.axis)
          }
@@ -1565,7 +1643,7 @@
       if (warp.mode !== selectedWarpMode()) {
          let { movables } = warp
          endWarp()
-         beginWarp(movables, mouse)
+         beginWarp(movables, mouseOnCanvas)
       } else {
          // Revert the operation; it will be redone from scratch.
          for (let m of warp.movables) {
@@ -1584,7 +1662,7 @@
    function updatePan() {
       if (!warp) return
       // Start by moving everything as if it was following the mouse.
-      let d = mouse.displacementFrom(warp.start)
+      let d = mouseOnCanvas.displacementFrom(warp.start)
       for (let movable of warp.movables) movable.moveBy(d)
 
       // Gather the axes of interest.
@@ -1674,7 +1752,7 @@
       if (!warp) return
       // First, find the magnitude of the rotation to be performed.
       let startDir = warp.start.directionFrom(warp.centroid)
-      let mouseDir = mouse.directionFrom(warp.centroid)
+      let mouseDir = mouseOnCanvas.directionFrom(warp.centroid)
       if (!startDir || !mouseDir) return
       let mouseRotation = mouseDir.rotationFrom(startDir)
 
@@ -1685,7 +1763,7 @@
          if (Math.abs(r.toRadians()) < Math.abs(closest.toRadians()))
             closest = r
       }
-      let radius = mouse.distanceFrom(warp.centroid)
+      let radius = mouseOnCanvas.distanceFrom(warp.centroid)
       let arcLength = radius * Math.abs(closest.toRadians())
       let easedRotation
       if (arcLength < snapRadius) {
@@ -1730,7 +1808,7 @@
    function updateEraseSelect() {
       if (!eraseSelect) return
       eraseSelect.items = new Set()
-      let range = Range2D.fromCorners(eraseSelect.start, mouse)
+      let range = Range2D.fromCorners(eraseSelect.start, mouseOnCanvas)
       for (let segment of Segment.s)
          if (range.intersects(segment)) eraseSelect.items.add(segment)
       for (let symbol of SymbolInstance.s)
@@ -1739,14 +1817,14 @@
    function updateRigidSelect() {
       if (!rigidSelect) return
       rigidSelect.items = new Set()
-      let range = Range2D.fromCorners(rigidSelect.start, mouse)
+      let range = Range2D.fromCorners(rigidSelect.start, mouseOnCanvas)
       for (let segment of Segment.s)
          if (range.intersects(segment)) rigidSelect.items.add(segment)
    }
    function updateFlexSelect() {
       if (!flexSelect) return
       flexSelect.items = new Set()
-      let range = Range2D.fromCorners(flexSelect.start, mouse)
+      let range = Range2D.fromCorners(flexSelect.start, mouseOnCanvas)
       for (let segment of Segment.s)
          if (range.intersects(segment)) flexSelect.items.add(segment)
    }
@@ -1837,23 +1915,20 @@
    }}
 />
 
-<svg
-   bind:this={canvas}
-   style="cursor: {cursor}"
-   on:mousedown={(event) => {
-      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (leftMouseIsDown(event) && !lmbShouldBeDown) {
-         buttonPressed(buttonMap.LMB)
-         lmbShouldBeDown = true
-      }
-      if (rightMouseIsDown(event) && !rmbShouldBeDown) {
-         buttonPressed(buttonMap.RMB)
-         rmbShouldBeDown = true
-      }
+<div
+   id="app"
+   on:contextmenu={(event) => {
+      // Disable the context menu.
+      event.preventDefault()
+      return false
    }}
-   on:mousemove={(event) => {
-      let previousMousePosition = mouse
-      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
+   on:mouseenter|capture={(event) => {
+      mouseInClient = new Point(event.clientX, event.clientY)
+      if (!leftMouseIsDown(event) && lmbShouldBeDown) abortAndReleaseAll()
+      if (!rightMouseIsDown(event) && rmbShouldBeDown) abortAndReleaseAll()
+   }}
+   on:mousemove|capture={(event) => {
+      mouseInClient = new Point(event.clientX, event.clientY)
       if (!leftMouseIsDown(event) && lmbShouldBeDown) {
          if (waitedOneFrameLMB) abortAndReleaseAll()
          else waitedOneFrameLMB = true
@@ -1866,10 +1941,13 @@
       } else {
          waitedOneFrameRMB = false
       }
-      mouseMoved(previousMousePosition)
+      mouseMoved()
    }}
-   on:mouseup={(event) => {
-      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
+   on:mousedown|capture={(event) => {
+      mouseInClient = new Point(event.clientX, event.clientY)
+   }}
+   on:mouseup|capture={(event) => {
+      mouseInClient = new Point(event.clientX, event.clientY)
       if (!leftMouseIsDown(event) && lmbShouldBeDown) {
          buttonReleased(lmbShouldSimulate || buttonMap.LMB)
          lmbShouldBeDown = false
@@ -1881,178 +1959,325 @@
          lmbShouldSimulate = null
       }
    }}
-   on:mouseenter={(event) => {
-      mouse = mouseInCoordinateSystemOf(event.currentTarget, event)
-      if (!leftMouseIsDown(event) && lmbShouldBeDown) abortAndReleaseAll()
-      if (!rightMouseIsDown(event) && rmbShouldBeDown) abortAndReleaseAll()
+   on:mouseleave|capture={(event) => {
+      mouseInClient = new Point(event.clientX, event.clientY)
    }}
 >
-   <!-- Symbol highlight layer -->
-   <g>
-      {#each [...SymbolInstance.s] as symbol}
-         {@const c = symbol.svgCorners()}
-         {#if styleOf(symbol)}
-            <polygon
-               style="stroke-width: 8px"
-               class="symbolHighlight fill stroke {styleOf(symbol)}"
-               points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
-                  .y} {c[3].x},{c[3].y}"
-            />
-         {/if}
-      {/each}
-   </g>
-   <!-- Segment highlight layer 1 -->
-   <g>
-      {#each [...segmentsToDraw] as [segment, sections]}
-         {#if hoverLight.has(segment)}
+   <svg
+      bind:this={canvas}
+      style="cursor: {cursor}"
+      on:mousedown={(event) => {
+         if (leftMouseIsDown(event) && !lmbShouldBeDown) {
+            buttonPressed(buttonMap.LMB)
+            lmbShouldBeDown = true
+         }
+         if (rightMouseIsDown(event) && !rmbShouldBeDown) {
+            buttonPressed(buttonMap.RMB)
+            rmbShouldBeDown = true
+         }
+      }}
+   >
+      <!-- Symbol highlight layer -->
+      <g>
+         {#each [...SymbolInstance.s] as symbol}
+            {@const c = symbol.svgCorners()}
+            {#if styleOf(symbol)}
+               <polygon
+                  style="stroke-width: 8px"
+                  class="symbolHighlight fill stroke {styleOf(symbol)}"
+                  points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
+                     .y} {c[3].x},{c[3].y}"
+               />
+            {/if}
+         {/each}
+      </g>
+      <!-- Segment highlight layer 1 -->
+      <g>
+         {#each [...segmentsToDraw] as [segment, sections]}
+            {#if hoverLight.has(segment)}
+               {#each sections as section}
+                  <FluidLine renderStyle="hover" segment={section} />
+               {/each}
+            {/if}
+         {/each}
+      </g>
+      <!-- Segment highlight layer 2 -->
+      <g>
+         {#each [...segmentsToDraw] as [segment, sections]}
+            {#if grabLight.has(segment)}
+               {#each sections as section}
+                  <FluidLine renderStyle="grab" segment={section} />
+               {/each}
+            {/if}
+         {/each}
+      </g>
+      <!-- Segment layer -->
+      <g>
+         {#each [...segmentsToDraw] as [segment, sections]}
             {#each sections as section}
-               <FluidLine renderStyle="hover" segment={section} />
+               {#if !eraseSelect?.items.has(segment)}
+                  <FluidLine
+                     segment={section}
+                     isRigid={Boolean(
+                        (segment.isRigid && !flexSelect?.items.has(segment)) ||
+                           rigidSelect?.items.has(segment)
+                     )}
+                  />
+               {/if}
             {/each}
-         {/if}
-      {/each}
-   </g>
-   <!-- Segment highlight layer 2 -->
-   <g>
-      {#each [...segmentsToDraw] as [segment, sections]}
-         {#if grabLight.has(segment)}
-            {#each sections as section}
-               <FluidLine renderStyle="grab" segment={section} />
-            {/each}
-         {/if}
-      {/each}
-   </g>
-   <!-- Segment layer -->
-   <g>
-      {#each [...segmentsToDraw] as [segment, sections]}
-         {#each sections as section}
-            {#if !eraseSelect?.items.has(segment)}
-               <FluidLine
-                  segment={section}
+         {/each}
+      </g>
+      <!-- Lower glyph highlight layer -->
+      <g>
+         {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+            {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+               <PointMarker renderStyle={glyph.style} position={glyph.point} />
+            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+               <Plug renderStyle={glyph.style} position={glyph.vertex} />
+            {:else if glyph.type === "junction node"}
+               <JunctionNode
+                  renderStyle={glyph.style}
+                  position={glyph.junction}
+               />
+            {:else if glyph.type === "hopover"}
+               <Hopover
+                  renderStyle={glyph.style}
+                  start={glyph.start}
+                  end={glyph.end}
+                  flip={glyph.flip}
+               />
+            {/if}
+         {/each}
+      </g>
+      <!-- Lower glyph layer -->
+      <g>
+         {#each [...glyphsToDraw] as glyph}
+            {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+               <PointMarker position={glyph.point} />
+            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+               <Plug position={glyph.vertex} />
+            {:else if glyph.type === "junction node"}
+               <JunctionNode position={glyph.junction} />
+            {:else if glyph.type === "hopover"}
+               <Hopover
+                  start={glyph.start}
+                  end={glyph.end}
+                  flip={glyph.flip}
                   isRigid={Boolean(
-                     (segment.isRigid && !flexSelect?.items.has(segment)) ||
-                        rigidSelect?.items.has(segment)
+                     (glyph.segment.isRigid &&
+                        !flexSelect?.items.has(glyph.segment)) ||
+                        rigidSelect?.items.has(glyph.segment)
                   )}
                />
             {/if}
          {/each}
-      {/each}
-   </g>
-   <!-- Lower glyph highlight layer -->
-   <g>
-      {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-         {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
-            <PointMarker renderStyle={glyph.style} position={glyph.point} />
-         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-            <Plug renderStyle={glyph.style} position={glyph.vertex} />
-         {:else if glyph.type === "junction node"}
-            <JunctionNode renderStyle={glyph.style} position={glyph.junction} />
-         {:else if glyph.type === "hopover"}
-            <Hopover
-               renderStyle={glyph.style}
-               start={glyph.start}
-               end={glyph.end}
-               flip={glyph.flip}
-            />
+      </g>
+      <!-- Symbol layer -->
+      <g id="symbol layer" />
+      <!-- Upper glyph highlight layer -->
+      <g>
+         {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+            {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+               <PointMarker renderStyle={glyph.style} position={glyph.point} />
+            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+               <Plug renderStyle={glyph.style} position={glyph.vertex} />
+            {/if}
+         {/each}
+      </g>
+      <!-- Upper glyph layer -->
+      <g>
+         {#each [...glyphsToDraw] as glyph}
+            {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+               <PointMarker position={glyph.point} />
+            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+               <Plug position={glyph.vertex} />
+            {/if}
+         {/each}
+      </g>
+      <!-- HUD layer -->
+      <g>
+         <!-- Selection boxes -->
+         <!-- {#if multiSelect}
+      <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
+         {#if eraseSelect}
+            <RectSelectBox start={eraseSelect.start} end={mouseOnCanvas} />
          {/if}
-      {/each}
-   </g>
-   <!-- Lower glyph layer -->
-   <g>
-      {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
-            <PointMarker position={glyph.point} />
-         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-            <Plug position={glyph.vertex} />
-         {:else if glyph.type === "junction node"}
-            <JunctionNode position={glyph.junction} />
-         {:else if glyph.type === "hopover"}
-            <Hopover
-               start={glyph.start}
-               end={glyph.end}
-               flip={glyph.flip}
-               isRigid={Boolean(
-                  (glyph.segment.isRigid &&
-                     !flexSelect?.items.has(glyph.segment)) ||
-                     rigidSelect?.items.has(glyph.segment)
-               )}
-            />
+         {#if rigidSelect}
+            <RectSelectBox start={rigidSelect.start} end={mouseOnCanvas} />
          {/if}
-      {/each}
-   </g>
-   <!-- Symbol layer -->
-   <g id="symbol layer" />
-   <!-- Upper glyph highlight layer -->
-   <g>
-      {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-         {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
-            <PointMarker renderStyle={glyph.style} position={glyph.point} />
-         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-            <Plug renderStyle={glyph.style} position={glyph.vertex} />
+         {#if flexSelect}
+            <RectSelectBox start={flexSelect.start} end={mouseOnCanvas} />
          {/if}
-      {/each}
-   </g>
-   <!-- Upper glyph layer -->
-   <g>
-      {#each [...glyphsToDraw] as glyph}
-         {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
-            <PointMarker position={glyph.point} />
-         {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-            <Plug position={glyph.vertex} />
-         {/if}
-      {/each}
-   </g>
-   <!-- HUD layer -->
-   <g>
-      <!-- Selection boxes -->
-      <!-- {#if multiSelect}
-         <RectSelectBox start={multiSelect.start} end={mouse} />
-      {/if} -->
-      {#if eraseSelect}
-         <RectSelectBox start={eraseSelect.start} end={mouse} />
-      {/if}
-      {#if rigidSelect}
-         <RectSelectBox start={rigidSelect.start} end={mouse} />
-      {/if}
-      {#if flexSelect}
-         <RectSelectBox start={flexSelect.start} end={mouse} />
-      {/if}
-   </g>
-</svg>
+      </g>
+   </svg>
 
-<div id="tool-bar">
-   {#each row1Buttons as b}
-      <Button
-         label={labelOfButton(b)}
-         isMouseButton={buttonMap.LMB === b}
-         isPressed={button[b].state !== null}
-         on:mousedown={() => {
-            buttonSelected(b)
+   <div class="sidebar">
+      <div
+         class="symbolPane"
+         on:mouseup={() => {
+            grabbedSymbol = null
          }}
+         on:mouseleave={(event) => {
+            if (grabbedSymbol) {
+               spawnSymbol(
+                  grabbedSymbol.kind,
+                  grabbedSymbol.grabOffset,
+                  event,
+                  leftMouseIsDown(event)
+               )
+               grabbedSymbol = null
+            }
+         }}
+      >
+         <div class="paneTitle">Symbols</div>
+         {#each symbolKinds as kind}
+            <img
+               src={kind.filePath}
+               alt=""
+               style="visibility: {kind.filePath ===
+               grabbedSymbol?.kind.filePath
+                  ? 'hidden'
+                  : 'visible'}"
+               on:mousemove={(event) => {
+                  // Store the "mousemove" event so that it can later be used to
+                  // simulate a "mousedown" event with the right metadata!
+                  if (event.target) mouseEvents.set(event.target, event)
+               }}
+               on:mousedown={(event) => {
+                  grabbedSymbol = {
+                     kind,
+                     grabOffset: new Vector(-event.offsetX, -event.offsetY),
+                  }
+               }}
+            />
+         {/each}
+      </div>
+      <div class="toolbox">
+         {#each row1Buttons as b}
+            <Button
+               label={labelOfButton(b)}
+               isMouseButton={buttonMap.LMB === b}
+               isPressed={button[b].state !== null}
+               on:mousedown={() => {
+                  buttonSelected(b)
+               }}
+            />
+         {/each}
+         {#each row2Buttons as b}
+            <Button
+               label={labelOfButton(b)}
+               isMouseButton={buttonMap.LMB === b}
+               isPressed={button[b].state !== null}
+               on:mousedown={() => {
+                  buttonSelected(b)
+               }}
+            />
+         {/each}
+      </div>
+   </div>
+   {#if grabbedSymbol}
+      <img
+         class="grabbedSymbolImage"
+         src={grabbedSymbol.kind.filePath}
+         alt=""
+         style={absolutePosition(
+            mouseOnCanvas.displacedBy(grabbedSymbol.grabOffset)
+         )}
       />
-   {/each}
-   {#each row2Buttons as b}
-      <Button
-         label={labelOfButton(b)}
-         isMouseButton={buttonMap.LMB === b}
-         isPressed={button[b].state !== null}
-         on:mousedown={() => {
-            buttonSelected(b)
-         }}
+   {/if}
+</div>
+
+<div id="resources" style="visibility: hidden">
+   <!-- Load each kind of symbol as an invisible <object>, and pre-process it
+   as necessary. We will clone an <object>'s DOM content when the corresponding
+   symbol needs to be instantiated on the main drawing canvas. -->
+   <!-- N.B: display:none doesn't work: it prevents the objects from loading.-->
+   {#each symbolFiles as filePath}
+      <object
+         id={filePath}
+         type="image/svg+xml"
+         data={filePath}
+         title=""
+         on:load={() => registerSymbolKind(filePath)}
       />
    {/each}
 </div>
-/
 
 <style>
-   svg {
-      width: 100%;
+   :global(html, body, #app) {
       height: 100%;
-      background-color: rgb(193, 195, 199);
+      margin: 0;
+      overflow: hidden;
    }
-   #tool-bar {
+   :global(.fluid.line) {
+      stroke-linejoin: round;
+      stroke-linecap: round;
+   }
+   :global(.fluid.stroke) {
+      stroke: blue;
+      fill: none;
+   }
+   :global(.fluid.fill) {
+      fill: blue;
+   }
+   :global(.relaxed.stroke) {
+      stroke: rgb(0, 140, 75);
+      fill: none;
+   }
+   :global(.relaxed.fill) {
+      fill: rgb(0, 140, 75);
+   }
+   :global(.hover.stroke) {
+      stroke: rgb(0, 234, 255);
+      fill: none;
+   }
+   :global(.hover.fill) {
+      fill: rgb(0, 234, 255);
+   }
+   :global(.grab.stroke) {
+      stroke: white;
+      fill: none;
+   }
+   :global(.grab.fill) {
+      fill: white;
+   }
+   :global(.debug.stroke) {
+      stroke: #e58a00;
+      fill: none;
+   }
+   :global(.debug.fill) {
+      fill: #e58a00;
+   }
+   .paneTitle {
+      font: bold 24px sans-serif;
+      margin-bottom: 12px;
+      cursor: default;
+   }
+   .sidebar {
       position: absolute;
-      bottom: 0;
+      top: 0;
       left: 0;
+      width: 260px;
+      height: 100%;
+      background-color: rgb(231, 234, 237);
+      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+   }
+   .symbolPane {
+      flex-grow: 1;
+      overflow: scroll;
+      padding: 8px;
+      user-select: none;
+      -webkit-user-select: none;
+   }
+   .symbolPane > img {
+      margin: 4px;
+   }
+   .grabbedSymbolImage {
+      pointer-events: none;
+   }
+   .toolbox {
       display: grid;
       grid-template-rows: 50px 50px;
       grid-template-columns: repeat(5, 50px);
@@ -2061,5 +2286,10 @@
       border-style: solid;
       border-color: black;
       border-width: 3px;
+   }
+   svg {
+      width: 100%;
+      height: 100%;
+      background-color: rgb(193, 195, 199);
    }
 </style>
