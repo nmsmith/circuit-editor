@@ -52,6 +52,7 @@
    export const buttonMap: {
       LMB: Button
       RMB: Button
+      Space: Button
       KeyQ: Button
       KeyW: Button
       KeyE: Button
@@ -65,6 +66,7 @@
    } = {
       LMB: "draw",
       RMB: "nothing",
+      Space: "pan",
       KeyQ: "query",
       KeyW: "warp",
       KeyE: "erase",
@@ -78,6 +80,7 @@
    }
    const row1Buttons: Button[] = ["query", "warp", "erase", "rigid", "tether"]
    const row2Buttons: Button[] = ["aButton", "slide", "draw", "flex", "gButton"]
+   const visibleButtons = [row1Buttons, ...row2Buttons]
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
@@ -337,21 +340,17 @@
    function absolutePosition(p: Point) {
       return `position: absolute; left: ${p.x}px; top: ${p.y}px`
    }
+   $: windowCoordsToCanvasCoords = (p: Point): Point => {
+      let offset = p.displacementFrom(canvasCenter).scaledBy(cameraZoom)
+      return cameraPosition.displacedBy(offset)
+   }
+   $: canvasCoordsToWindowCoords = (p: Point): Point => {
+      let offset = p.displacementFrom(cameraPosition).scaledBy(1 / cameraZoom)
+      return canvasCenter.displacedBy(offset)
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
-   let mouseOnCanvas: Point
-   $: /* Compute the position of the mouse in canvas coordinates. */ {
-      if (canvas) {
-         let rect = canvas.getBoundingClientRect()
-         mouseOnCanvas = new Point(
-            mouseInClient.x - rect.left,
-            mouseInClient.y - rect.top
-         )
-      } else {
-         mouseOnCanvas = mouseInClient
-      }
-   }
    let mouseEvents = new Map<EventTarget | null, MouseEvent>()
    let [shift, alt, cmd] = [false, false, false]
    type ButtonDownInfo<Target> = {
@@ -366,6 +365,7 @@
       | ({ state: "pressing" } & ButtonDownInfo<Target>)
       | ({ state: "dragging" } & ButtonDownInfo<Target>)
    let button: {
+      pan: ButtonState<null>
       query: ButtonState<null>
       warp: ButtonState<Grabbable>
       erase: ButtonState<null>
@@ -378,6 +378,7 @@
       gButton: ButtonState<null>
       nothing: ButtonState<null> // A dummy button.
    } = {
+      pan: { state: null },
       query: { state: null },
       warp: { state: null },
       erase: { state: null },
@@ -398,6 +399,8 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let cameraPosition: Point = Point.zero // Position on the canvas.
+   let cameraZoom: number = 1
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
    let snapToAxes = true
@@ -457,6 +460,31 @@
    let flexSelect: SelectOperation<Segment>
 
    // ---------------------------- Derived state ------------------------------
+   $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
+   $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
+   $: canvasCenter = new Point(canvasWidth / 2, canvasHeight / 2)
+   let mouseOnCanvas: Point
+   $: /* Compute the position of the mouse in canvas coordinates. */ {
+      if (canvas) {
+         let canvasRect = canvas.getBoundingClientRect()
+         let positionInCanvasWindow = new Point(
+            mouseInClient.x - canvasRect.left,
+            mouseInClient.y - canvasRect.top
+         )
+         mouseOnCanvas = windowCoordsToCanvasCoords(positionInCanvasWindow)
+      } else {
+         mouseOnCanvas = Point.zero
+      }
+   }
+   let svgTranslate: Vector
+   $: {
+      let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
+      svgTranslate = new Vector(-windowTopLeft.x, -windowTopLeft.y)
+      if (button.pan.state) {
+         let d = mouseOnCanvas.displacementFrom(button.pan.downPosition)
+         svgTranslate = svgTranslate.add(d)
+      }
+   }
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
       crossingMap = new DefaultMap(() => new Map())
@@ -695,11 +723,20 @@
       if (name === "nothing") return
       let b = button[name]
       if (!b.state) return
-      if (b.state === "pressing" && buttonMap.LMB !== name) {
-         // The button was tapped.
+      if (
+         b.state === "pressing" &&
+         buttonMap.LMB !== name &&
+         visibleButtons.includes(name)
+      ) {
+         // Select the tool associated with this button.
          buttonSelected(name)
       } else {
          switch (name) {
+            case "pan":
+               cameraPosition = cameraPosition.displacedBy(
+                  b.downPosition.displacementFrom(mouseOnCanvas)
+               )
+               break
             case "warp":
                endWarp()
                grabbedSymbol = null
@@ -1977,137 +2014,149 @@
          }
       }}
    >
-      <!-- Symbol highlight layer -->
-      <g>
-         {#each [...SymbolInstance.s] as symbol}
-            {@const c = symbol.svgCorners()}
-            {#if styleOf(symbol)}
-               <polygon
-                  style="stroke-width: 8px"
-                  class="symbolHighlight fill stroke {styleOf(symbol)}"
-                  points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
-                     .y} {c[3].x},{c[3].y}"
-               />
-            {/if}
-         {/each}
-      </g>
-      <!-- Segment highlight layer 1 -->
-      <g>
-         {#each [...segmentsToDraw] as [segment, sections]}
-            {#if hoverLight.has(segment)}
+      <!--- Camera transform --->
+      <g
+         transform="translate({svgTranslate.x} {svgTranslate.y}) scale({cameraZoom})"
+      >
+         <!-- Symbol highlight layer -->
+         <g>
+            {#each [...SymbolInstance.s] as symbol}
+               {@const c = symbol.svgCorners()}
+               {#if styleOf(symbol)}
+                  <polygon
+                     style="stroke-width: 8px"
+                     class="symbolHighlight fill stroke {styleOf(symbol)}"
+                     points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
+                        .y} {c[3].x},{c[3].y}"
+                  />
+               {/if}
+            {/each}
+         </g>
+         <!-- Segment highlight layer 1 -->
+         <g>
+            {#each [...segmentsToDraw] as [segment, sections]}
+               {#if hoverLight.has(segment)}
+                  {#each sections as section}
+                     <FluidLine renderStyle="hover" segment={section} />
+                  {/each}
+               {/if}
+            {/each}
+         </g>
+         <!-- Segment highlight layer 2 -->
+         <g>
+            {#each [...segmentsToDraw] as [segment, sections]}
+               {#if grabLight.has(segment)}
+                  {#each sections as section}
+                     <FluidLine renderStyle="grab" segment={section} />
+                  {/each}
+               {/if}
+            {/each}
+         </g>
+         <!-- Segment layer -->
+         <g>
+            {#each [...segmentsToDraw] as [segment, sections]}
                {#each sections as section}
-                  <FluidLine renderStyle="hover" segment={section} />
+                  {#if !eraseSelect?.items.has(segment)}
+                     <FluidLine
+                        segment={section}
+                        isRigid={Boolean(
+                           (segment.isRigid &&
+                              !flexSelect?.items.has(segment)) ||
+                              rigidSelect?.items.has(segment)
+                        )}
+                     />
+                  {/if}
                {/each}
-            {/if}
-         {/each}
-      </g>
-      <!-- Segment highlight layer 2 -->
-      <g>
-         {#each [...segmentsToDraw] as [segment, sections]}
-            {#if grabLight.has(segment)}
-               {#each sections as section}
-                  <FluidLine renderStyle="grab" segment={section} />
-               {/each}
-            {/if}
-         {/each}
-      </g>
-      <!-- Segment layer -->
-      <g>
-         {#each [...segmentsToDraw] as [segment, sections]}
-            {#each sections as section}
-               {#if !eraseSelect?.items.has(segment)}
-                  <FluidLine
-                     segment={section}
+            {/each}
+         </g>
+         <!-- Lower glyph highlight layer -->
+         <g>
+            {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+               {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+                  <PointMarker
+                     renderStyle={glyph.style}
+                     position={glyph.point}
+                  />
+               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+                  <Plug renderStyle={glyph.style} position={glyph.vertex} />
+               {:else if glyph.type === "junction node"}
+                  <JunctionNode
+                     renderStyle={glyph.style}
+                     position={glyph.junction}
+                  />
+               {:else if glyph.type === "hopover"}
+                  <Hopover
+                     renderStyle={glyph.style}
+                     start={glyph.start}
+                     end={glyph.end}
+                     flip={glyph.flip}
+                  />
+               {/if}
+            {/each}
+         </g>
+         <!-- Lower glyph layer -->
+         <g>
+            {#each [...glyphsToDraw] as glyph}
+               {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+                  <PointMarker position={glyph.point} />
+               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
+                  <Plug position={glyph.vertex} />
+               {:else if glyph.type === "junction node"}
+                  <JunctionNode position={glyph.junction} />
+               {:else if glyph.type === "hopover"}
+                  <Hopover
+                     start={glyph.start}
+                     end={glyph.end}
+                     flip={glyph.flip}
                      isRigid={Boolean(
-                        (segment.isRigid && !flexSelect?.items.has(segment)) ||
-                           rigidSelect?.items.has(segment)
+                        (glyph.segment.isRigid &&
+                           !flexSelect?.items.has(glyph.segment)) ||
+                           rigidSelect?.items.has(glyph.segment)
                      )}
                   />
                {/if}
             {/each}
-         {/each}
-      </g>
-      <!-- Lower glyph highlight layer -->
-      <g>
-         {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-            {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
-               <PointMarker renderStyle={glyph.style} position={glyph.point} />
-            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-               <Plug renderStyle={glyph.style} position={glyph.vertex} />
-            {:else if glyph.type === "junction node"}
-               <JunctionNode
-                  renderStyle={glyph.style}
-                  position={glyph.junction}
-               />
-            {:else if glyph.type === "hopover"}
-               <Hopover
-                  renderStyle={glyph.style}
-                  start={glyph.start}
-                  end={glyph.end}
-                  flip={glyph.flip}
-               />
-            {/if}
-         {/each}
-      </g>
-      <!-- Lower glyph layer -->
-      <g>
-         {#each [...glyphsToDraw] as glyph}
-            {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
-               <PointMarker position={glyph.point} />
-            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-               <Plug position={glyph.vertex} />
-            {:else if glyph.type === "junction node"}
-               <JunctionNode position={glyph.junction} />
-            {:else if glyph.type === "hopover"}
-               <Hopover
-                  start={glyph.start}
-                  end={glyph.end}
-                  flip={glyph.flip}
-                  isRigid={Boolean(
-                     (glyph.segment.isRigid &&
-                        !flexSelect?.items.has(glyph.segment)) ||
-                        rigidSelect?.items.has(glyph.segment)
-                  )}
-               />
-            {/if}
-         {/each}
-      </g>
-      <!-- Symbol layer -->
-      <g id="symbol layer" />
-      <!-- Upper glyph highlight layer -->
-      <g>
-         {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-            {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
-               <PointMarker renderStyle={glyph.style} position={glyph.point} />
-            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-               <Plug renderStyle={glyph.style} position={glyph.vertex} />
-            {/if}
-         {/each}
-      </g>
-      <!-- Upper glyph layer -->
-      <g>
-         {#each [...glyphsToDraw] as glyph}
-            {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
-               <PointMarker position={glyph.point} />
-            {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-               <Plug position={glyph.vertex} />
-            {/if}
-         {/each}
-      </g>
-      <!-- HUD layer -->
-      <g>
-         <!-- Selection boxes -->
-         <!-- {#if multiSelect}
+         </g>
+         <!-- Symbol layer -->
+         <g id="symbol layer" />
+         <!-- Upper glyph highlight layer -->
+         <g>
+            {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
+               {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+                  <PointMarker
+                     renderStyle={glyph.style}
+                     position={glyph.point}
+                  />
+               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+                  <Plug renderStyle={glyph.style} position={glyph.vertex} />
+               {/if}
+            {/each}
+         </g>
+         <!-- Upper glyph layer -->
+         <g>
+            {#each [...glyphsToDraw] as glyph}
+               {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+                  <PointMarker position={glyph.point} />
+               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
+                  <Plug position={glyph.vertex} />
+               {/if}
+            {/each}
+         </g>
+         <!-- HUD layer -->
+         <g>
+            <!-- Selection boxes -->
+            <!-- {#if multiSelect}
       <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
-         {#if eraseSelect}
-            <RectSelectBox start={eraseSelect.start} end={mouseOnCanvas} />
-         {/if}
-         {#if rigidSelect}
-            <RectSelectBox start={rigidSelect.start} end={mouseOnCanvas} />
-         {/if}
-         {#if flexSelect}
-            <RectSelectBox start={flexSelect.start} end={mouseOnCanvas} />
-         {/if}
+            {#if eraseSelect}
+               <RectSelectBox start={eraseSelect.start} end={mouseOnCanvas} />
+            {/if}
+            {#if rigidSelect}
+               <RectSelectBox start={rigidSelect.start} end={mouseOnCanvas} />
+            {/if}
+            {#if flexSelect}
+               <RectSelectBox start={flexSelect.start} end={mouseOnCanvas} />
+            {/if}
+         </g>
       </g>
    </svg>
 
@@ -2181,7 +2230,7 @@
          src={grabbedSymbol.kind.filePath}
          alt=""
          style={absolutePosition(
-            mouseOnCanvas.displacedBy(grabbedSymbol.grabOffset)
+            mouseInClient.displacedBy(grabbedSymbol.grabOffset)
          )}
       />
    {/if}
