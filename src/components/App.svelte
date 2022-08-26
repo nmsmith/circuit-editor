@@ -65,7 +65,7 @@
       KeyG: Button
    } = {
       LMB: "draw",
-      RMB: "nothing",
+      RMB: "pan",
       Space: "pan",
       KeyQ: "query",
       KeyW: "warp",
@@ -84,6 +84,12 @@
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
+   // Input constants
+   const panSpeed = 1.5 // when panning with trackpad
+   const pinchZoomSpeed = 0.02
+   const wheelZoomSpeed = 0.14
+   const minZoom = 0.1
+   const maxZoom = 20
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -341,12 +347,21 @@
       return `position: absolute; left: ${p.x}px; top: ${p.y}px`
    }
    $: windowCoordsToCanvasCoords = (p: Point): Point => {
-      let offset = p.displacementFrom(canvasCenter).scaledBy(cameraZoom)
+      let offset = p.displacementFrom(canvasCenter).scaledBy(1 / cameraZoom)
       return cameraPosition.displacedBy(offset)
    }
    $: canvasCoordsToWindowCoords = (p: Point): Point => {
-      let offset = p.displacementFrom(cameraPosition).scaledBy(1 / cameraZoom)
+      let offset = p.displacementFrom(cameraPosition).scaledBy(cameraZoom)
       return canvasCenter.displacedBy(offset)
+   }
+   function isMouseWheel(event: WheelEvent): boolean {
+      // NOTE: This is a "trick" that only works in Chrome. There is no cross-
+      // browser way to distinguish mouse scrolling from trackpad scrolling.
+      let dy: number = (event as any).wheelDeltaY
+      return event.deltaX === 0 && dy !== 0 && dy % 120 === 0 && !event.ctrlKey
+   }
+   function mouseWheelIncrements(event: WheelEvent): number {
+      return (event as any).wheelDeltaY / 120
    }
 
    // ---------------------- State of input peripherals -----------------------
@@ -1999,6 +2014,12 @@
    on:mouseleave|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
    }}
+   on:wheel|capture|nonpassive={(event) => {
+      // Turn off the browser's built-in pinch-zoom behaviour.
+      if (event.ctrlKey) event.preventDefault()
+      // Prevent left and right swipes from triggering page forward/back.
+      if (event.deltaX !== 0) event.preventDefault()
+   }}
 >
    <svg
       bind:this={canvas}
@@ -2013,10 +2034,29 @@
             rmbShouldBeDown = true
          }
       }}
+      on:wheel={(event) => {
+         event.preventDefault()
+         if (isMouseWheel(event)) {
+            cameraZoom *= 2 ** (mouseWheelIncrements(event) * wheelZoomSpeed)
+            cameraZoom = Math.max(minZoom, Math.min(cameraZoom, maxZoom))
+            if (cameraZoom > 0.99 && cameraZoom < 1.01) cameraZoom = 1
+         } else {
+            if (event.ctrlKey) {
+               // Pinch zoom emits a fake "ctrl" modifier.
+               cameraZoom *= 2 ** (-event.deltaY * pinchZoomSpeed)
+               cameraZoom = Math.max(minZoom, Math.min(cameraZoom, maxZoom))
+            } else {
+               let movement = new Vector(event.deltaX, event.deltaY).scaledBy(
+                  panSpeed / cameraZoom
+               )
+               cameraPosition = cameraPosition.displacedBy(movement)
+            }
+         }
+      }}
    >
       <!--- Camera transform --->
       <g
-         transform="translate({svgTranslate.x} {svgTranslate.y}) scale({cameraZoom})"
+         transform="scale({cameraZoom}) translate({svgTranslate.x} {svgTranslate.y})"
       >
          <!-- Symbol highlight layer -->
          <g>
