@@ -94,20 +94,20 @@
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
    const infinityVector = new Vector(Infinity, Infinity)
-   // Configurable constants
-   const sqMinSegmentLength = 15 * 15
-   const sqSelectStartDistance = 8 * 8
-   // Circuit-sizing constants
+   // Circuit-sizing constants (zoom-independent)
+   const sqMinSegmentLength = 15 ** 2
    const standardGap = 30 // standard spacing between circuit elements
    const halfGap = standardGap / 2
    const slidePad = halfGap / 2 // dist at which close-passing elements collide
    const hopoverRadius = halfGap / 2
-   // Snapping constants
+   // Zoom-dependent constants
+   const sqShortDragDelay = 8 ** 2
+   const sqLongDragDelay = 16 ** 2
    const easeRadius = 30 // dist btw mouse & snap point at which easing begins
    const snapRadius = 12 // dist btw mouse & snap point at which snapping occurs
    const snapJump = 5 // the distance things move at the moment they snap
-   const sqEaseRadius = easeRadius * easeRadius
-   const sqSnapRadius = snapRadius * snapRadius
+   const sqEaseRadius = easeRadius ** 2
+   const sqSnapRadius = snapRadius ** 2
    const sqInteractRadius = sqSnapRadius
    // The major axes that drawing occurs along.
    const primaryAxes = [Axis.horizontal, Axis.vertical]
@@ -380,17 +380,18 @@
    let mouseInClient: Point = Point.zero
    let mouseEvents = new Map<EventTarget | null, MouseEvent>()
    let [shift, alt, cmd] = [false, false, false]
+   type TargetInfo<T> = { object: T; part: Point }
    type ButtonDownInfo<Target> = {
       downTime: number
-      downPosition: Point
-      target?: { object: Target; part: Point }
+      clientDownPosition: Point
+      canvasDownPosition: Point
+      target?: TargetInfo<Target>
       repeated?: boolean
    }
    type ButtonState<Target> =
       | { state: null } // 'null' is more convenient than the string "up".
       // Pressing, but not yet moved enough to constitute a drag.
-      | ({ state: "pressing" } & ButtonDownInfo<Target>)
-      | ({ state: "dragging" } & ButtonDownInfo<Target>)
+      | ({ state: "pressing" | "dragging" } & ButtonDownInfo<Target>)
    let button: {
       pan: ButtonState<null>
       query: ButtonState<null>
@@ -508,7 +509,7 @@
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
       svgTranslate = new Vector(-windowTopLeft.x, -windowTopLeft.y)
       if (button.pan.state) {
-         let d = mouseOnCanvas.displacementFrom(button.pan.downPosition)
+         let d = mouseOnCanvas.displacementFrom(button.pan.canvasDownPosition)
          svgTranslate = svgTranslate.add(d)
       }
    }
@@ -701,17 +702,21 @@
          chainDraw(name === "rigid")
       } else {
          abortAndReleaseAll()
-         let downTime = performance.now()
-         let downPosition = mouseOnCanvas
+         let stateTemplate = {
+            state: "pressing" as const,
+            downTime: performance.now(),
+            clientDownPosition: mouseInClient,
+            canvasDownPosition: mouseOnCanvas,
+         }
          let target
          if (name === "draw") {
-            let c = closestAttachable(downPosition)
+            let c = closestAttachable(mouseOnCanvas)
             if (c) target = { object: c.object, part: c.closestPart }
-            button.draw = { state: "pressing", downTime, downPosition, target }
+            button.draw = { ...stateTemplate, target }
          } else if (name === "warp") {
-            let c = closestGrabbable(downPosition)
+            let c = closestGrabbable(mouseOnCanvas)
             if (c) target = { object: c.object, part: c.closestPart }
-            button.warp = { state: "pressing", downTime, downPosition, target }
+            button.warp = { ...stateTemplate, target }
             // Logic for dragging symbols from sidebar (if applicable):
             let symbolUnderMouse = document.elementFromPoint(
                mouseInClient.x,
@@ -724,25 +729,25 @@
                )
             }
          } else if (name === "slide") {
-            let c = closestGrabbable(downPosition)
+            let c = closestGrabbable(mouseOnCanvas)
             if (c) target = { object: c.object, part: c.closestPart }
-            button.slide = { state: "pressing", downTime, downPosition, target }
+            button.slide = { ...stateTemplate, target }
          } else if (name === "rigid" && instantActionPossible) {
             let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
                Segment.s = Segment.s
             }
-            button.rigid = { state: "pressing", downTime, downPosition }
+            button.rigid = stateTemplate
          } else if (name === "flex" && instantActionPossible) {
             let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid) {
                segment.isRigid = false
                Segment.s = Segment.s
             }
-            button.flex = { state: "pressing", downTime, downPosition }
+            button.flex = stateTemplate
          } else {
-            button[name] = { state: "pressing", downTime, downPosition }
+            button[name] = stateTemplate
          }
       }
    }
@@ -761,7 +766,7 @@
          switch (name) {
             case "pan":
                cameraPosition = cameraPosition.displacedBy(
-                  b.downPosition.displacementFrom(mouseOnCanvas)
+                  b.canvasDownPosition.displacementFrom(mouseOnCanvas)
                )
                break
             case "warp":
@@ -855,81 +860,54 @@
       updateRigidSelect()
       updateFlexSelect()
       // Check for the initiation of drag-based operations.
-      if (button.draw.state === "pressing") {
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.draw.downPosition
-         )
-         if (dragVector.sqLength() >= halfGap * halfGap) {
-            beginDraw(dragVector)
-            button.draw = { ...button.draw, state: "dragging" }
+      function checkDrag<T>(
+         b: ButtonState<T>,
+         dragType: "short" | "long",
+         callback: (dragVector: Vector, info: ButtonDownInfo<T>) => void
+      ) {
+         if (b.state !== "pressing") return
+         let dragVector = mouseInClient.displacementFrom(b.clientDownPosition)
+         if (
+            dragVector.sqLength() >=
+            (dragType === "short" ? sqShortDragDelay : sqLongDragDelay)
+         ) {
+            callback(dragVector, b)
+            b.state = "dragging"
          }
       }
-      if (button.warp.state === "pressing") {
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.warp.downPosition
-         )
-         if (button.warp.target && dragVector.sqLength() >= halfGap * halfGap) {
-            beginWarp(
-               movablesOf(button.warp.target.object),
-               button.warp.target.part
-            )
-            button.warp = { ...button.warp, state: "dragging" }
-         }
-      }
-      if (button.slide.state === "pressing") {
-         let target = button.slide.target
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.slide.downPosition
-         )
-         if (target && dragVector.sqLength() >= halfGap * halfGap) {
-            let dragAxis = Axis.fromVector(dragVector)
-            if (dragAxis) {
-               let slideAxis: Axis
-               if (target.object instanceof Segment) {
-                  let axes = new Set([
-                     ...target.object.start.axes(),
-                     ...target.object.end.axes(),
-                  ])
-                  if (axes.size === 1) axes.add(target.object.axis.orthogonal())
-                  slideAxis = nearestAxis(dragAxis, [...axes])
-               } else {
-                  let axes = target.object.axes()
-                  if (axes.length === 0) axes = primaryAxes
-                  else if (axes.length === 1) axes.push(axes[0].orthogonal())
-                  slideAxis = nearestAxis(dragAxis, axes)
-               }
-               beginSlide(slideAxis, target.object, target.part)
+      checkDrag(button.draw, "long", beginDraw)
+      checkDrag(button.warp, "short", (_, { target }) => {
+         if (target) beginWarp(movablesOf(target.object), target.part)
+      })
+      checkDrag(button.slide, "long", (dragVector, { target }) => {
+         let dragAxis = Axis.fromVector(dragVector)
+         if (dragAxis && target) {
+            let slideAxis: Axis
+            if (target.object instanceof Segment) {
+               let axes = new Set([
+                  ...target.object.start.axes(),
+                  ...target.object.end.axes(),
+               ])
+               if (axes.size === 1) axes.add(target.object.axis.orthogonal())
+               slideAxis = nearestAxis(dragAxis, [...axes])
+            } else {
+               let axes = target.object.axes()
+               if (axes.length === 0) axes = primaryAxes
+               else if (axes.length === 1) axes.push(axes[0].orthogonal())
+               slideAxis = nearestAxis(dragAxis, axes)
             }
-            button.slide = { ...button.slide, state: "dragging" }
+            beginSlide(slideAxis, target.object, target.part)
          }
-      }
-      if (button.erase.state === "pressing") {
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.erase.downPosition
-         )
-         if (dragVector.sqLength() >= sqSelectStartDistance) {
-            beginEraseSelect(button.erase.downPosition)
-            button.erase = { ...button.erase, state: "dragging" }
-         }
-      }
-      if (button.rigid.state === "pressing") {
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.rigid.downPosition
-         )
-         if (dragVector.sqLength() >= sqSelectStartDistance) {
-            beginRigidSelect(button.rigid.downPosition)
-            button.rigid = { ...button.rigid, state: "dragging" }
-         }
-      }
-      if (button.flex.state === "pressing") {
-         let dragVector = mouseOnCanvas.displacementFrom(
-            button.flex.downPosition
-         )
-         if (dragVector.sqLength() >= sqSelectStartDistance) {
-            beginFlexSelect(button.flex.downPosition)
-            button.flex = { ...button.flex, state: "dragging" }
-         }
-      }
+      })
+      checkDrag(button.erase, "short", (_, i) =>
+         beginEraseSelect(i.canvasDownPosition)
+      )
+      checkDrag(button.rigid, "short", (_, i) =>
+         beginRigidSelect(i.canvasDownPosition)
+      )
+      checkDrag(button.flex, "short", (_, i) =>
+         beginFlexSelect(i.canvasDownPosition)
+      )
    }
    // Pre-process the SVG (already in the DOM) of the schematic symbol whose
    // file path is given.
@@ -985,7 +963,8 @@
       button.warp = {
          state: "dragging",
          downTime: performance.now(),
-         downPosition: mouseOnCanvas,
+         clientDownPosition: mouseInClient,
+         canvasDownPosition: mouseOnCanvas,
          target: { object: symbol, part: mouseOnCanvas },
       }
       if (draggingUsingLMB) {
@@ -1023,7 +1002,7 @@
          newDraw(button.draw.target.object, drawAxis)
          return
       } else if (
-         closestAttachableOrToggleable(button.draw.downPosition)
+         closestAttachableOrToggleable(button.draw.canvasDownPosition)
             ?.object instanceof Crossing
       ) {
          return // Don't allow draw operations to start at crossings.
@@ -1097,7 +1076,8 @@
             }
          }
          if (!continuedDraw) newDraw(vertex, regularDrawAxis)
-      } else newDraw(new Junction(button.draw.downPosition), regularDrawAxis)
+      } else
+         newDraw(new Junction(button.draw.canvasDownPosition), regularDrawAxis)
    }
    function newDraw(start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
@@ -1205,7 +1185,8 @@
       button.draw = {
          state: "pressing",
          downTime: performance.now(),
-         downPosition: mouseOnCanvas,
+         clientDownPosition: mouseInClient,
+         canvasDownPosition: mouseOnCanvas,
          target: { object: draw.end, part: draw.end },
          repeated: true,
       }
