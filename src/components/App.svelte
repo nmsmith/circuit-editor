@@ -2176,16 +2176,27 @@
          <!-- HUD layer -->
          <g>
             <!-- Selection boxes -->
-            <!-- {#if multiSelect}
-      <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
+            <!-- {#if multiSelect} <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
             {#if eraseSelect}
-               <RectSelectBox start={eraseSelect.start} end={mouseOnCanvas} />
+               <RectSelectBox
+                  start={eraseSelect.start}
+                  end={mouseOnCanvas}
+                  scale={cameraZoom}
+               />
             {/if}
             {#if rigidSelect}
-               <RectSelectBox start={rigidSelect.start} end={mouseOnCanvas} />
+               <RectSelectBox
+                  start={rigidSelect.start}
+                  end={mouseOnCanvas}
+                  scale={cameraZoom}
+               />
             {/if}
             {#if flexSelect}
-               <RectSelectBox start={flexSelect.start} end={mouseOnCanvas} />
+               <RectSelectBox
+                  start={flexSelect.start}
+                  end={mouseOnCanvas}
+                  scale={cameraZoom}
+               />
             {/if}
          </g>
       </g>
