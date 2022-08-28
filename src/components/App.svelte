@@ -363,6 +363,18 @@
    function mouseWheelIncrements(event: WheelEvent): number {
       return (event as any).wheelDeltaY / 120
    }
+   function executeZoom(magnitude: number) {
+      let newZoom = cameraZoom * 2 ** magnitude
+      newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom))
+      let zoomFactor = newZoom / cameraZoom
+      // Zoom towards the mouse position.
+      cameraZoom = newZoom
+      cameraPosition = cameraPosition.displacedBy(
+         mouseOnCanvas
+            .displacementFrom(cameraPosition)
+            .scaledBy((zoomFactor - 1) / zoomFactor)
+      )
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
@@ -2037,14 +2049,12 @@
       on:wheel={(event) => {
          event.preventDefault()
          if (isMouseWheel(event)) {
-            cameraZoom *= 2 ** (mouseWheelIncrements(event) * wheelZoomSpeed)
-            cameraZoom = Math.max(minZoom, Math.min(cameraZoom, maxZoom))
+            executeZoom(mouseWheelIncrements(event) * wheelZoomSpeed)
             if (cameraZoom > 0.99 && cameraZoom < 1.01) cameraZoom = 1
          } else {
             if (event.ctrlKey) {
                // Pinch zoom emits a fake "ctrl" modifier.
-               cameraZoom *= 2 ** (-event.deltaY * pinchZoomSpeed)
-               cameraZoom = Math.max(minZoom, Math.min(cameraZoom, maxZoom))
+               executeZoom(-event.deltaY * pinchZoomSpeed)
             } else {
                let movement = new Vector(event.deltaX, event.deltaY).scaledBy(
                   panSpeed / cameraZoom
