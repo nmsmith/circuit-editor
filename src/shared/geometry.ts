@@ -151,6 +151,9 @@ export class Point extends Object2D {
    directionFrom(p: Point): Direction | undefined {
       return Direction.fromVector(this.displacementFrom(p))
    }
+   axisFrom(p: Point): Axis | undefined {
+      return Axis.fromVector(this.displacementFrom(p))
+   }
    displacedBy(v: Vector): Point {
       return new Point(this.x + v.x, this.y + v.y)
    }
@@ -592,10 +595,10 @@ export class Rectangle extends Object2D {
    sides(): LineSegment[] {
       let [p1, p2, p3, p4] = this.corners()
       return [
-         new LineSegment(p1, p2, Axis.horizontal),
-         new LineSegment(p2, p3, Axis.vertical),
-         new LineSegment(p3, p4, Axis.horizontal),
-         new LineSegment(p4, p1, Axis.vertical),
+         new LineSegment(p1, p2, p1.axisFrom(p2) || Axis.horizontal),
+         new LineSegment(p2, p3, p2.axisFrom(p3) || Axis.vertical),
+         new LineSegment(p3, p4, p3.axisFrom(p4) || Axis.horizontal),
+         new LineSegment(p4, p1, p4.axisFrom(p1) || Axis.vertical),
       ]
    }
 }
