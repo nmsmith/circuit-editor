@@ -369,7 +369,7 @@
       let zoomFactor = newZoom / cameraZoom
       // Zoom towards the mouse position.
       cameraZoom = newZoom
-      cameraPosition = cameraPosition.displacedBy(
+      committedCameraPosition = committedCameraPosition.displacedBy(
          mouseOnCanvas
             .displacementFrom(cameraPosition)
             .scaledBy((zoomFactor - 1) / zoomFactor)
@@ -427,7 +427,7 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
-   let cameraPosition: Point = Point.zero // Position on the canvas.
+   let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
@@ -504,14 +504,21 @@
          mouseOnCanvas = Point.zero
       }
    }
+   let cameraPosition: Point
+   $: {
+      if (button.pan.state) {
+         let d = button.pan.clientDownPosition
+            .displacementFrom(mouseInClient)
+            .scaledBy(1 / cameraZoom)
+         cameraPosition = committedCameraPosition.displacedBy(d)
+      } else {
+         cameraPosition = committedCameraPosition
+      }
+   }
    let svgTranslate: Vector
    $: {
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
       svgTranslate = new Vector(-windowTopLeft.x, -windowTopLeft.y)
-      if (button.pan.state) {
-         let d = mouseOnCanvas.displacementFrom(button.pan.canvasDownPosition)
-         svgTranslate = svgTranslate.add(d)
-      }
    }
    let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
@@ -701,7 +708,13 @@
       if ((name === "rigid" || name === "flex") && button.draw.state) {
          chainDraw(name === "rigid")
       } else {
-         abortAndReleaseAll()
+         // Only panning can be performed concurrently with other operations.
+         if (name !== "pan") {
+            for (let b of Object.keys(button) as Array<keyof typeof button>) {
+               if (b === "pan") continue
+               buttonAborted(b)
+            }
+         }
          let stateTemplate = {
             state: "pressing" as const,
             downTime: performance.now(),
@@ -765,9 +778,7 @@
       } else {
          switch (name) {
             case "pan":
-               cameraPosition = cameraPosition.displacedBy(
-                  b.canvasDownPosition.displacementFrom(mouseOnCanvas)
-               )
+               endPan()
                break
             case "warp":
                endWarp()
@@ -794,6 +805,37 @@
                endFlexSelect()
                break
          }
+      }
+      button[name] = { state: null }
+   }
+   function buttonAborted(name: keyof typeof button) {
+      if (!button[name].state) return
+      // TODO: Instead of having an "abort" function for each operation, all
+      // aborts should be implemented the same way: by invoking "undo".
+      // (...and then setting the operation's state to "null")
+      switch (name) {
+         case "pan":
+            endPan() // Never abort this.
+            break
+         case "warp":
+            abortWarp()
+            grabbedSymbol = null
+            break
+         case "draw":
+            abortDraw()
+            break
+         case "erase":
+            abortEraseSelect()
+            break
+         case "rigid":
+            abortRigidSelect()
+            break
+         case "slide":
+            abortSlide()
+            break
+         case "flex":
+            abortFlexSelect()
+            break
       }
       button[name] = { state: null }
    }
@@ -875,6 +917,7 @@
             b.state = "dragging"
          }
       }
+      checkDrag(button.pan, "short", () => {})
       checkDrag(button.draw, "long", beginDraw)
       checkDrag(button.warp, "short", (_, { target }) => {
          if (target) beginWarp(movablesOf(target.object), target.part)
@@ -976,6 +1019,9 @@
    }
 
    // ---------------------------- Derived events -----------------------------
+   function endPan() {
+      committedCameraPosition = cameraPosition
+   }
    function beginDraw(dragVector: Vector) {
       if (!button.draw.state) return
       let drawMode = selectedDrawMode()
@@ -1899,20 +1945,9 @@
    function abortFlexSelect() {
       flexSelect = null
    }
-   function abortAndReleaseAll() {
-      // TODO: Instead of having an "abort" function for each operation, all
-      // aborts should be implemented the same way: by invoking "undo".
-      // (...and then setting every operation's state to "null")
-      abortDraw()
-      abortSlide()
-      abortWarp()
-      abortEraseSelect()
-      abortRigidSelect()
-      abortFlexSelect()
+   function abortAllButtons() {
       for (let b of Object.keys(button) as Array<keyof typeof button>)
-         button[b] = { state: null }
-      lmbShouldBeDown = false
-      rmbShouldBeDown = false
+         buttonAborted(b)
    }
    function deleteItems(items: Iterable<Grabbable>) {
       let junctionsToConvert = new Set<Junction>()
@@ -1956,7 +1991,7 @@
       shift = false
       alt = false
       cmd = false
-      abortAndReleaseAll()
+      abortAllButtons()
    }}
 />
 
@@ -1967,22 +2002,21 @@
       event.preventDefault()
       return false
    }}
-   on:mouseenter|capture={(event) => {
-      mouseInClient = new Point(event.clientX, event.clientY)
-      if (!leftMouseIsDown(event) && lmbShouldBeDown) abortAndReleaseAll()
-      if (!rightMouseIsDown(event) && rmbShouldBeDown) abortAndReleaseAll()
-   }}
    on:mousemove|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
       if (!leftMouseIsDown(event) && lmbShouldBeDown) {
-         if (waitedOneFrameLMB) abortAndReleaseAll()
-         else waitedOneFrameLMB = true
+         if (waitedOneFrameLMB) {
+            buttonAborted(buttonMap.LMB)
+            lmbShouldBeDown = false
+         } else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
       if (!rightMouseIsDown(event) && rmbShouldBeDown) {
-         if (waitedOneFrameRMB) abortAndReleaseAll()
-         else waitedOneFrameRMB = true
+         if (waitedOneFrameRMB) {
+            buttonAborted(buttonMap.RMB)
+            rmbShouldBeDown = false
+         } else waitedOneFrameRMB = true
       } else {
          waitedOneFrameRMB = false
       }
@@ -2003,9 +2037,6 @@
          rmbShouldBeDown = false
          lmbShouldSimulate = null
       }
-   }}
-   on:mouseleave|capture={(event) => {
-      mouseInClient = new Point(event.clientX, event.clientY)
    }}
    on:wheel|capture|nonpassive={(event) => {
       // Turn off the browser's built-in pinch-zoom behaviour.
@@ -2040,7 +2071,11 @@
                let movement = new Vector(event.deltaX, event.deltaY).scaledBy(
                   panSpeed / cameraZoom
                )
-               cameraPosition = cameraPosition.displacedBy(movement)
+               committedCameraPosition =
+                  committedCameraPosition.displacedBy(movement)
+               // Moving the camera moves the position of the mouse on the
+               // canvas, so we need to trigger the corresponding event.
+               mouseMoved()
             }
          }
       }}
