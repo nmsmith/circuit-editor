@@ -80,7 +80,7 @@
    }
    const row1Buttons: Button[] = ["query", "warp", "erase", "rigid", "tether"]
    const row2Buttons: Button[] = ["aButton", "slide", "draw", "flex", "gButton"]
-   const visibleButtons = [row1Buttons, ...row2Buttons]
+   const visibleButtons = [...row1Buttons, ...row2Buttons]
    function buttonOf(key: string): Button | undefined {
       return buttonMap[key as keyof typeof buttonMap]
    }
@@ -491,30 +491,34 @@
    $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
    $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
    $: canvasCenter = new Point(canvasWidth / 2, canvasHeight / 2)
-   let mouseOnCanvas: Point
-   $: /* Compute the position of the mouse in canvas coordinates. */ {
+   $: computeCameraPosition = (): Point => {
+      // This function is an indirection (a hack) for allowing `cameraPosition`
+      // to be updated reactively AND manually.
+      if (button.pan.state) {
+         let d = button.pan.clientDownPosition
+            .displacementFrom(mouseInClient)
+            .scaledBy(1 / cameraZoom)
+         return committedCameraPosition.displacedBy(d)
+      } else {
+         return committedCameraPosition
+      }
+   }
+   $: cameraPosition = computeCameraPosition()
+   $: computeMouseOnCanvas = (): Point => {
+      // This function is an indirection (a hack) for allowing `mouseOnCanvas`
+      // to be updated reactively AND manually.
       if (canvas) {
          let canvasRect = canvas.getBoundingClientRect()
          let positionInCanvasWindow = new Point(
             mouseInClient.x - canvasRect.left,
             mouseInClient.y - canvasRect.top
          )
-         mouseOnCanvas = windowCoordsToCanvasCoords(positionInCanvasWindow)
+         return windowCoordsToCanvasCoords(positionInCanvasWindow)
       } else {
-         mouseOnCanvas = Point.zero
+         return Point.zero
       }
    }
-   let cameraPosition: Point
-   $: {
-      if (button.pan.state) {
-         let d = button.pan.clientDownPosition
-            .displacementFrom(mouseInClient)
-            .scaledBy(1 / cameraZoom)
-         cameraPosition = committedCameraPosition.displacedBy(d)
-      } else {
-         cameraPosition = committedCameraPosition
-      }
-   }
+   $: mouseOnCanvas = computeMouseOnCanvas()
    let svgTranslate: Vector
    $: {
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
@@ -559,15 +563,17 @@
    let hoverLight: Set<Highlightable>
    $: /* Highlight objects near the mouse cursor. */ {
       hoverLight = new Set()
-      if (draw?.endObject instanceof Segment) {
-         hoverLight.add(draw.endObject)
-      } else if (!aButtonIsHeld()) {
-         let thing = closestAttachableOrToggleable(mouseOnCanvas)
-         if (thing) {
-            if (thing.object instanceof Crossing) {
-               hoverLight.add(thing.closestPart)
-            } else {
-               hoverLight.add(thing.object)
+      if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
+         if (draw?.endObject instanceof Segment) {
+            hoverLight.add(draw.endObject)
+         } else if (!aButtonIsHeld()) {
+            let thing = closestAttachableOrToggleable(mouseOnCanvas)
+            if (thing) {
+               if (thing.object instanceof Crossing) {
+                  hoverLight.add(thing.closestPart)
+               } else {
+                  hoverLight.add(thing.object)
+               }
             }
          }
       }
@@ -893,6 +899,8 @@
       Port.s = Port.s
    }
    function mouseMoved() {
+      cameraPosition = computeCameraPosition()
+      mouseOnCanvas = computeMouseOnCanvas() // hack: immediately update the var
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
@@ -908,7 +916,9 @@
          callback: (dragVector: Vector, info: ButtonDownInfo<T>) => void
       ) {
          if (b.state !== "pressing") return
-         let dragVector = mouseInClient.displacementFrom(b.clientDownPosition)
+         let dragVector = mouseOnCanvas
+            .displacementFrom(b.canvasDownPosition)
+            .scaledBy(cameraZoom)
          if (
             dragVector.sqLength() >=
             (dragType === "short" ? sqShortDragDelay : sqLongDragDelay)
