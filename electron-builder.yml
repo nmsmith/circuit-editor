@@ -1,0 +1,2 @@
+directories: { output: "dist-electron" }
+files: ["src/electron.cjs", "dist-web/**/*"]

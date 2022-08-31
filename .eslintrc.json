@@ -16,6 +16,7 @@
          "processor": "svelte3/svelte3"
       }
    ],
+   "ignorePatterns": ["electron.cjs"],
    "rules": {
       "no-shadow": "error",
       "prefer-const": "off",

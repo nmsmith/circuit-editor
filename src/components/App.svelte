@@ -42,10 +42,10 @@
    // ------------------------------ Constants --------------------------------
    const symbolFiles = [
       // These symbols are temporarily baked into the app.
-      "/symbols/animate/pump.svg",
-      "/symbols/animate/valve.svg",
-      "/symbols/illustrator/limit switch.svg",
-      "/symbols/illustrator/prox sensor.svg",
+      "symbols/animate/pump.svg",
+      "symbols/animate/valve.svg",
+      "symbols/illustrator/limit switch.svg",
+      "symbols/illustrator/prox sensor.svg",
    ]
    let canvas: SVGElement | undefined // the root element of this component
    type Button = keyof typeof button

@@ -1,0 +1,34 @@
+{
+   "version": "0.2.0",
+   "compounds": [
+      {
+         "name": "Debug Electron app",
+         "configurations": ["Electron", "Renderer"],
+         "stopAll": true
+      }
+   ],
+   "configurations": [
+      {
+         "name": "Debug web app",
+         "type": "chrome",
+         "request": "launch",
+         "url": "http://localhost:5173",
+         "webRoot": "${workspaceFolder}"
+      },
+      {
+         "presentation": { "hidden": true },
+         "name": "Electron",
+         "type": "node",
+         "request": "attach",
+         "cwd": "${workspaceFolder}"
+      },
+      {
+         "presentation": { "hidden": true },
+         "name": "Renderer",
+         "type": "chrome",
+         "request": "attach",
+         "port": 9222,
+         "webRoot": "${workspaceFolder}"
+      }
+   ]
+}
