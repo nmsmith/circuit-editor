@@ -40,12 +40,11 @@
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
-   const symbolFiles = [
-      // These symbols are temporarily baked into the app.
-      "symbols/animate/pump.svg",
-      "symbols/animate/valve.svg",
-      "symbols/illustrator/limit switch.svg",
-      "symbols/illustrator/prox sensor.svg",
+   const symbolFilesForBrowserTesting: string[] = [
+      "limit switch (web).svg",
+      "prox sensor (web).svg",
+      "pump (web).svg",
+      "valve (web).svg",
    ]
    let canvas: SVGElement | undefined // the root element of this component
    type Button = keyof typeof button
@@ -375,6 +374,13 @@
             .scaledBy((zoomFactor - 1) / zoomFactor)
       )
    }
+   function filePathOfSymbol(fileName: string) {
+      if (usingElectron) {
+         return `file://${projectDirectory}/symbols/${fileName}`
+      } else {
+         return `symbols/${fileName}`
+      }
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
@@ -427,6 +433,17 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let projectDirectory: null | string = null
+   let symbolFiles: string[] = []
+   // If we're not using Electron, use dummy symbols.
+   let usingElectron: boolean
+   try {
+      fileSystem
+      usingElectron = true
+   } catch {
+      usingElectron = false
+      symbolFiles = symbolFilesForBrowserTesting
+   }
    let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
    let symbolKinds: SymbolKind[] = []
@@ -964,8 +981,8 @@
    }
    // Pre-process the SVG (already in the DOM) of the schematic symbol whose
    // file path is given.
-   function registerSymbolKind(filePath: string) {
-      let object = document.getElementById(filePath) as HTMLObjectElement
+   function registerSymbolKind(fileName: string) {
+      let object = document.getElementById(fileName) as HTMLObjectElement
       let svgDocument = object.contentDocument
       if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
          let svg = svgDocument.firstChild as SVGElement
@@ -999,7 +1016,7 @@
          // Add the symbol to the app's list of symbols.
          symbolKinds = [
             ...symbolKinds,
-            { filePath, svgTemplate: svg, svgBox, collisionBox, portLocations },
+            { fileName, svgTemplate: svg, svgBox, collisionBox, portLocations },
          ]
       }
    }
@@ -2248,6 +2265,33 @@
    </svg>
 
    <div class="sidebar">
+      <button
+         on:click={async () => {
+            let response = await fileSystem.openDirectory()
+            if (response) {
+               projectDirectory = response
+               symbolFiles = []
+               symbolKinds = []
+               let newFiles = await fileSystem.getFileNames(
+                  `${projectDirectory}/symbols`
+               )
+               if (newFiles) {
+                  symbolFiles = newFiles.filter((s) => s.endsWith(".svg"))
+               } else {
+                  console.error(
+                     `Failed to read contents of the 'symbol' folder in the following directory: ${projectDirectory}`
+                  )
+               }
+            } else {
+               console.error("Failed to open directory.")
+            }
+         }}>Choose project directory</button
+      >
+      {#if projectDirectory}
+         <p>{projectDirectory}</p>
+      {:else}
+         <p>No directory chosen.</p>
+      {/if}
       <div
          class="symbolPane"
          on:mouseup={() => {
@@ -2268,10 +2312,10 @@
          <div class="paneTitle">Symbols</div>
          {#each symbolKinds as kind}
             <img
-               src={kind.filePath}
+               src={filePathOfSymbol(kind.fileName)}
                alt=""
-               style="visibility: {kind.filePath ===
-               grabbedSymbol?.kind.filePath
+               style="visibility: {kind.fileName ===
+               grabbedSymbol?.kind.fileName
                   ? 'hidden'
                   : 'visible'}"
                on:mousemove={(event) => {
@@ -2314,7 +2358,7 @@
    {#if grabbedSymbol}
       <img
          class="grabbedSymbolImage"
-         src={grabbedSymbol.kind.filePath}
+         src={filePathOfSymbol(grabbedSymbol.kind.fileName)}
          alt=""
          style={absolutePosition(
             mouseInClient.displacedBy(grabbedSymbol.grabOffset)
@@ -2328,13 +2372,13 @@
    as necessary. We will clone an <object>'s DOM content when the corresponding
    symbol needs to be instantiated on the main drawing canvas. -->
    <!-- N.B: display:none doesn't work: it prevents the objects from loading.-->
-   {#each symbolFiles as filePath}
+   {#each symbolFiles as fileName}
       <object
-         id={filePath}
+         id={fileName}
          type="image/svg+xml"
-         data={filePath}
+         data={filePathOfSymbol(fileName)}
          title=""
-         on:load={() => registerSymbolKind(filePath)}
+         on:load={() => registerSymbolKind(fileName)}
       />
    {/each}
 </div>

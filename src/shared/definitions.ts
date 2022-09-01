@@ -215,7 +215,7 @@ export function convertToJunction(crossing: Crossing) {
 }
 
 export type SymbolKind = {
-   readonly filePath: string
+   readonly fileName: string
    readonly svgTemplate: SVGElement
    readonly svgBox: Range2D
    readonly collisionBox: Range2D

@@ -1,6 +1,6 @@
 
 <svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" preserveAspectRatio="none" x="0px" y="0px" width="271px" height="76px" viewBox="0 0 271 76">
-<rect id="collisionBox" x="0" y="7.5" width="270" height="60" visibility="hidden"/>
+<rect id="collisionBox" fill="#00000000" x="0" y="7.5" width="270" height="60"/>
 <defs>
 <g id="pilotOn_0_Layer0_0_FILL">
 <path fill="#FF0000" stroke="none" d="
