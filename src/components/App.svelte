@@ -384,7 +384,6 @@
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
-   let mouseEvents = new Map<EventTarget | null, MouseEvent>()
    let [shift, alt, cmd] = [false, false, false]
    type TargetInfo<T> = { object: T; part: Point }
    type ButtonDownInfo<Target> = {
@@ -758,12 +757,14 @@
                mouseInClient.x,
                mouseInClient.y
             )
-            let symbolMouseEvent = mouseEvents.get(symbolUnderMouse)
-            if (symbolUnderMouse && symbolMouseEvent) {
+            if (symbolUnderMouse)
                symbolUnderMouse.dispatchEvent(
-                  new MouseEvent("mousedown", symbolMouseEvent)
+                  new MouseEvent("mousedown", {
+                     clientX: mouseInClient.x,
+                     clientY: mouseInClient.y,
+                     bubbles: true,
+                  })
                )
-            }
          } else if (name === "slide") {
             let c = closestGrabbable(mouseOnCanvas)
             if (c) target = { object: c.object, part: c.closestPart }
@@ -1017,7 +1018,7 @@
          symbolKinds = [
             ...symbolKinds,
             { fileName, svgTemplate: svg, svgBox, collisionBox, portLocations },
-         ]
+         ].sort((a, b) => (a.fileName < b.fileName ? -1 : 1))
       }
    }
    function spawnSymbol(
@@ -1027,7 +1028,9 @@
       draggingUsingLMB: boolean
    ) {
       // Spawn a symbol on the canvas, and initiate a move action.
-      let spawnPosition = mouseOnCanvas.displacedBy(grabOffset)
+      let spawnPosition = mouseOnCanvas.displacedBy(
+         grabOffset.scaledBy(1 / cameraZoom)
+      )
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       beginWarp(new Set([symbol]), mouseOnCanvas)
       button.warp = {
@@ -2076,6 +2079,7 @@
       bind:this={canvas}
       style="cursor: {cursor}"
       on:mousedown={(event) => {
+         event.preventDefault() // Disable selection of nearby text elements.
          if (leftMouseIsDown(event) && !lmbShouldBeDown) {
             buttonPressed(buttonMap.LMB)
             lmbShouldBeDown = true
@@ -2268,6 +2272,7 @@
       <div class="projectPane">
          <button
             on:click={async () => {
+               if (!usingElectron) return
                let response = await fileSystem.openDirectory()
                if (response) {
                   projectFolder = response
@@ -2309,35 +2314,47 @@
          }}
       >
          {#if (projectFolder && symbolFiles) || !usingElectron}
-            {#each symbolKinds as kind}
-               <img
-                  src={filePathOfSymbol(kind.fileName)}
-                  alt=""
-                  style="visibility: {kind.fileName ===
-                  grabbedSymbol?.kind.fileName
-                     ? 'hidden'
-                     : 'visible'}"
-                  on:mousemove={(event) => {
-                     // Store the "mousemove" event so that it can later be used
-                     // to simulate a "mousedown" event with the right metadata!
-                     if (event.target) mouseEvents.set(event.target, event)
-                  }}
-                  on:mousedown={(event) => {
-                     grabbedSymbol = {
-                        kind,
-                        grabOffset: new Vector(-event.offsetX, -event.offsetY),
-                     }
-                  }}
-               />
-            {/each}
+            <div class="symbolGrid">
+               {#each symbolKinds as kind}
+                  <div
+                     class="symbolGridItem"
+                     on:mousedown={() => {
+                        grabbedSymbol = {
+                           kind,
+                           grabOffset: new Vector(
+                              (cameraZoom * -kind.svgBox.width()) / 2,
+                              (cameraZoom * -kind.svgBox.height()) / 2
+                           ),
+                        }
+                     }}
+                  >
+                     <div class="symbolName">
+                        {kind.fileName.replace(".svg", "")}
+                     </div>
+                     <div
+                        class="symbolImage"
+                        style="background-image: url({'"'}{filePathOfSymbol(
+                           kind.fileName
+                        )}{'"'})"
+                     />
+                  </div>
+               {/each}
+            </div>
          {:else if projectFolder}
-            <div>
+            <div class="symbolPaneMessage">
                Failed to find a "symbol" folder within the project folder.
             </div>
          {:else}
-            <div>
-               Open a project folder to see your symbols here. The symbols
-               should be placed in a subfolder named "symbols".
+            <div class="symbolPaneMessage">
+               <p>
+                  When you open a project folder, your schematic symbols will be
+                  displayed here.
+               </p>
+               <div class="spacer" />
+               <p>
+                  The SVG files for each symbol must be placed in a folder named
+                  "symbols" within the project folder.
+               </p>
             </div>
          {/if}
       </div>
@@ -2369,9 +2386,11 @@
          class="grabbedSymbolImage"
          src={filePathOfSymbol(grabbedSymbol.kind.fileName)}
          alt=""
-         style={absolutePosition(
+         style="{absolutePosition(
             mouseInClient.displacedBy(grabbedSymbol.grabOffset)
-         )}
+         )}; width: {cameraZoom *
+            grabbedSymbol.kind.svgBox.width()}px; height: {cameraZoom *
+            grabbedSymbol.kind.svgBox.height()}px;"
       />
    {/if}
 </div>
@@ -2439,9 +2458,14 @@
    :global(.debug.fill) {
       fill: #e58a00;
    }
-   p,
    div {
       font: 14px sans-serif;
+   }
+   p {
+      margin: 0;
+   }
+   .spacer {
+      height: 8px;
    }
    .sidebar {
       position: absolute;
@@ -2455,21 +2479,43 @@
       flex-direction: column;
    }
    .projectPane {
-      padding: 8px;
+      padding: 4px;
       border-bottom: 1px solid black;
       display: flex;
       flex-direction: column;
-      gap: 8px;
+      gap: 4px;
    }
    .symbolPane {
       flex-grow: 1;
-      overflow: scroll;
-      padding: 8px;
+      overflow-x: hidden;
+      overflow-y: scroll;
+      background-color: rgb(66, 66, 66);
+   }
+   .symbolPaneMessage {
+      padding: 4px;
+      background-color: rgb(193, 195, 199);
+   }
+   .symbolGrid {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
       user-select: none;
       -webkit-user-select: none;
    }
-   .symbolPane > img {
-      margin: 4px;
+   .symbolGridItem {
+      height: 80px;
+      padding: 4px;
+      background-color: rgb(193, 195, 199);
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 4px;
+   }
+   .symbolImage {
+      flex: 1;
+      width: 100%;
+      background-size: contain;
+      background-repeat: no-repeat;
    }
    .grabbedSymbolImage {
       pointer-events: none;

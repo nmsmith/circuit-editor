@@ -533,6 +533,12 @@ export class Range2D {
          )
       }
    }
+   width(): number {
+      return this.x.high - this.x.low
+   }
+   height(): number {
+      return this.y.high - this.y.low
+   }
    corners(): Point[] {
       return [
          new Point(this.x.low, this.y.low),
