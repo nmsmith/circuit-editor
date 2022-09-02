@@ -17,7 +17,7 @@
 
 <style>
    .button {
-      background-color: rgb(225, 225, 225);
+      background-color: rgb(231, 234, 237);
       white-space: nowrap;
       user-select: none;
       -webkit-user-select: none;

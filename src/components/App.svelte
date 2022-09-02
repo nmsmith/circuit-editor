@@ -375,8 +375,8 @@
       )
    }
    function filePathOfSymbol(fileName: string) {
-      if (usingElectron) {
-         return `file://${projectDirectory}/symbols/${fileName}`
+      if (usingElectron && projectFolder) {
+         return "file://" + path.join(projectFolder, "symbols", fileName)
       } else {
          return `symbols/${fileName}`
       }
@@ -433,8 +433,8 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
-   let projectDirectory: null | string = null
-   let symbolFiles: string[] = []
+   let projectFolder: null | string = null
+   let symbolFiles: null | string[] = []
    // If we're not using Electron, use dummy symbols.
    let usingElectron: boolean
    try {
@@ -2265,33 +2265,32 @@
    </svg>
 
    <div class="sidebar">
-      <button
-         on:click={async () => {
-            let response = await fileSystem.openDirectory()
-            if (response) {
-               projectDirectory = response
-               symbolFiles = []
-               symbolKinds = []
-               let newFiles = await fileSystem.getFileNames(
-                  `${projectDirectory}/symbols`
-               )
-               if (newFiles) {
-                  symbolFiles = newFiles.filter((s) => s.endsWith(".svg"))
-               } else {
-                  console.error(
-                     `Failed to read contents of the 'symbol' folder in the following directory: ${projectDirectory}`
+      <div class="projectPane">
+         <button
+            on:click={async () => {
+               let response = await fileSystem.openDirectory()
+               if (response) {
+                  projectFolder = response
+                  let newFiles = await fileSystem.getFileNames(
+                     path.join(projectFolder, "symbols")
                   )
+                  if (newFiles) {
+                     symbolFiles = newFiles.filter(
+                        (s) => path.extname(s) === ".svg"
+                     )
+                  } else {
+                     symbolFiles = null
+                  }
+                  symbolKinds = []
                }
-            } else {
-               console.error("Failed to open directory.")
-            }
-         }}>Choose project directory</button
-      >
-      {#if projectDirectory}
-         <p>{projectDirectory}</p>
-      {:else}
-         <p>No directory chosen.</p>
-      {/if}
+            }}>Choose a project folder</button
+         >
+         {#if projectFolder}
+            <div><b>Project name:</b> {path.basename(projectFolder)}</div>
+         {:else}
+            <div>No folder chosen.</div>
+         {/if}
+      </div>
       <div
          class="symbolPane"
          on:mouseup={() => {
@@ -2309,28 +2308,38 @@
             }
          }}
       >
-         <div class="paneTitle">Symbols</div>
-         {#each symbolKinds as kind}
-            <img
-               src={filePathOfSymbol(kind.fileName)}
-               alt=""
-               style="visibility: {kind.fileName ===
-               grabbedSymbol?.kind.fileName
-                  ? 'hidden'
-                  : 'visible'}"
-               on:mousemove={(event) => {
-                  // Store the "mousemove" event so that it can later be used to
-                  // simulate a "mousedown" event with the right metadata!
-                  if (event.target) mouseEvents.set(event.target, event)
-               }}
-               on:mousedown={(event) => {
-                  grabbedSymbol = {
-                     kind,
-                     grabOffset: new Vector(-event.offsetX, -event.offsetY),
-                  }
-               }}
-            />
-         {/each}
+         {#if (projectFolder && symbolFiles) || !usingElectron}
+            {#each symbolKinds as kind}
+               <img
+                  src={filePathOfSymbol(kind.fileName)}
+                  alt=""
+                  style="visibility: {kind.fileName ===
+                  grabbedSymbol?.kind.fileName
+                     ? 'hidden'
+                     : 'visible'}"
+                  on:mousemove={(event) => {
+                     // Store the "mousemove" event so that it can later be used
+                     // to simulate a "mousedown" event with the right metadata!
+                     if (event.target) mouseEvents.set(event.target, event)
+                  }}
+                  on:mousedown={(event) => {
+                     grabbedSymbol = {
+                        kind,
+                        grabOffset: new Vector(-event.offsetX, -event.offsetY),
+                     }
+                  }}
+               />
+            {/each}
+         {:else if projectFolder}
+            <div>
+               Failed to find a "symbol" folder within the project folder.
+            </div>
+         {:else}
+            <div>
+               Open a project folder to see your symbols here. The symbols
+               should be placed in a subfolder named "symbols".
+            </div>
+         {/if}
       </div>
       <div class="toolbox">
          {#each row1Buttons as b}
@@ -2372,15 +2381,17 @@
    as necessary. We will clone an <object>'s DOM content when the corresponding
    symbol needs to be instantiated on the main drawing canvas. -->
    <!-- N.B: display:none doesn't work: it prevents the objects from loading.-->
-   {#each symbolFiles as fileName}
-      <object
-         id={fileName}
-         type="image/svg+xml"
-         data={filePathOfSymbol(fileName)}
-         title=""
-         on:load={() => registerSymbolKind(fileName)}
-      />
-   {/each}
+   {#if symbolFiles}
+      {#each symbolFiles as fileName}
+         <object
+            id={fileName}
+            type="image/svg+xml"
+            data={filePathOfSymbol(fileName)}
+            title=""
+            on:load={() => registerSymbolKind(fileName)}
+         />
+      {/each}
+   {/if}
 </div>
 
 <style>
@@ -2428,21 +2439,27 @@
    :global(.debug.fill) {
       fill: #e58a00;
    }
-   .paneTitle {
-      font: bold 24px sans-serif;
-      margin-bottom: 12px;
-      cursor: default;
+   p,
+   div {
+      font: 14px sans-serif;
    }
    .sidebar {
       position: absolute;
       top: 0;
       left: 0;
-      width: 260px;
+      width: 254px;
       height: 100%;
       background-color: rgb(231, 234, 237);
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.2);
       display: flex;
       flex-direction: column;
+   }
+   .projectPane {
+      padding: 8px;
+      border-bottom: 1px solid black;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
    }
    .symbolPane {
       flex-grow: 1;
@@ -2458,14 +2475,12 @@
       pointer-events: none;
    }
    .toolbox {
+      border-top: 1px solid black;
       display: grid;
       grid-template-rows: 50px 50px;
       grid-template-columns: repeat(5, 50px);
       gap: 1px;
       background-color: rgb(58, 58, 58);
-      border-style: solid;
-      border-color: black;
-      border-width: 3px;
    }
    svg {
       width: 100%;

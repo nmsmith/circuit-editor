@@ -1,5 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron")
 const { readdir } = require("node:fs/promises")
+const path = require("node:path")
 
 let webSecurity
 if (process.env.NODE_ENV === "development") {
@@ -18,10 +19,9 @@ const createWindow = () => {
       height: 600,
       webPreferences: {
          // nodeIntegration: true,
-         // nodeIntegrationInWorker: true,
-         // sandbox: false,
          // contextIsolation: false,
-         preload: `${__dirname}/preload.cjs`,
+         sandbox: false, // Allow the preload script to have access to Node.
+         preload: path.join(__dirname, "preload.cjs"),
          webSecurity,
       },
    })
@@ -44,7 +44,7 @@ const createWindow = () => {
       window.webContents.openDevTools({ mode: "bottom" })
    } else {
       // Load the production build.
-      window.loadFile(`${__dirname}/../dist-web/index.html`)
+      window.loadFile(path.join(__dirname, "..", "dist-web", "index.html"))
    }
 }
 
