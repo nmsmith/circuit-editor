@@ -41,10 +41,10 @@
 
    // ------------------------------ Constants --------------------------------
    const symbolFilesForBrowserTesting: string[] = [
-      "limit switch (web).svg",
-      "prox sensor (web).svg",
-      "pump (web).svg",
-      "valve (web).svg",
+      "limit switch.svg",
+      "prox sensor.svg",
+      "pump.svg",
+      "valve.svg",
    ]
    let canvas: SVGElement | undefined // the root element of this component
    type Button = keyof typeof button
@@ -96,7 +96,7 @@
    // Circuit-sizing constants (zoom-independent)
    const sqMinSegmentLength = 15 ** 2
    const standardGap = 30 // standard spacing between circuit elements
-   const halfGap = standardGap / 2
+   const halfGap = 15
    const slidePad = halfGap / 2 // dist at which close-passing elements collide
    const hopoverRadius = halfGap / 2
    // Zoom-dependent constants
@@ -261,7 +261,7 @@
    }
    function selectedDrawMode(): DrawMode {
       return shift
-         ? snapToAxes
+         ? config.angleSnap.state === "on"
             ? "snapped rotation"
             : "free rotation"
          : "strafing"
@@ -447,7 +447,53 @@
    let cameraZoom: number = 1
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
-   let snapToAxes = true
+   const onAndOff = ["on", "off"] as const
+   type OnOrOff = typeof onAndOff[number]
+   const stdHalfAndOff = [standardGap, halfGap, "off"] as const
+   type StdHalfOrOff = typeof stdHalfAndOff[number]
+   let config = {
+      distanceSnap: {
+         tooltip: "Snap to a standard distance?",
+         icon: "icons/test.svg",
+         values: stdHalfAndOff,
+         state: standardGap as StdHalfOrOff,
+      },
+      distanceWarn: {
+         tooltip: "Warn when distances are slightly askew?",
+         icon: "icons/test.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
+      angleSnap: {
+         tooltip: "Snap to common angles?",
+         icon: "icons/test.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
+      angleWarn: {
+         tooltip: "Warn when angles are slightly askew?",
+         icon: "icons/test.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
+      targetSnap: {
+         tooltip: "Snap to points of interest?",
+         icon: "icons/test.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
+      showSymbolSnaps: {
+         tooltip: "Display ports and collision boxes?",
+         icon: "icons/test.svg",
+         values: onAndOff,
+         state: "off" as OnOrOff,
+      },
+   }
+   function toggleConfig(item: typeof config[keyof typeof config]) {
+      let i = item.values.indexOf(item.state as any)
+      item.state = item.values[(i + 1) % item.values.length]
+      config = config // Inform Svelte of change.
+   }
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
       mode: DrawMode
@@ -1461,7 +1507,7 @@
             slideDistance > 0 ? slide.posInstructions : slide.negInstructions
          slideDistance = Math.abs(slideDistance)
          return !instructions.find(
-            (i) => movable === i.movable && i.delay < slideDistance
+            (i) => movable === i.movable && slideDistance >= i.delay + 0.5
          )
       }
       if (draw) {
@@ -2241,6 +2287,28 @@
          </g>
          <!-- HUD layer -->
          <g>
+            {#if config.showSymbolSnaps.state === "on"}
+               {#each [...SymbolInstance.s] as symbol}
+                  {@const c = symbol.corners()}
+                  <polygon
+                     style="fill: none; stroke: red; stroke-width: {2 /
+                        cameraZoom}px"
+                     points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
+                        .y} {c[3].x},{c[3].y}"
+                  />
+                  {#each symbol.ports as port}
+                     <circle
+                        style="fill: none; stroke: red; stroke-width: {2 /
+                           cameraZoom}px"
+                        cx={port.x}
+                        cy={port.y}
+                        r={6 / cameraZoom}
+                     />
+                  {/each}
+               {/each}
+            {/if}
+         </g>
+         <g>
             <!-- Selection boxes -->
             <!-- {#if multiSelect} <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
             {#if eraseSelect}
@@ -2333,9 +2401,9 @@
                      </div>
                      <div
                         class="symbolImage"
-                        style="background-image: url({'"'}{filePathOfSymbol(
+                        style="background-image: url('{filePathOfSymbol(
                            kind.fileName
-                        )}{'"'})"
+                        )}')"
                      />
                   </div>
                {/each}
@@ -2357,6 +2425,24 @@
                </p>
             </div>
          {/if}
+      </div>
+      <div class="configPane">
+         {#each Object.values(config) as item}
+            <div class="configItem" on:click={() => toggleConfig(item)}>
+               <div
+                  class="configImage"
+                  style="background-image: url('{item.icon}')"
+               />
+               <div>{item.state}</div>
+               <div
+                  class="configTooltip"
+                  style="left: {mouseInClient.x + 8}px; top: {mouseInClient.y +
+                     18}px"
+               >
+                  {item.tooltip}
+               </div>
+            </div>
+         {/each}
       </div>
       <div class="toolbox">
          {#each row1Buttons as b}
@@ -2474,7 +2560,7 @@
       width: 254px;
       height: 100%;
       background-color: rgb(231, 234, 237);
-      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.2);
+      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);
       display: flex;
       flex-direction: column;
    }
@@ -2519,6 +2605,42 @@
    }
    .grabbedSymbolImage {
       pointer-events: none;
+   }
+   .configPane {
+      height: 48px;
+      display: flex;
+      flex-direction: row;
+      gap: 1px;
+      background-color: rgb(58, 58, 58);
+      user-select: none;
+      -webkit-user-select: none;
+   }
+   .configItem {
+      flex: 1;
+      padding: 4px;
+      background-color: rgb(231, 234, 237);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+   }
+   .configImage {
+      flex: 1;
+      width: 100%;
+      background-size: contain;
+      background-position: center;
+      background-repeat: no-repeat;
+   }
+   .configTooltip {
+      position: absolute;
+      visibility: hidden;
+      pointer-events: none;
+   }
+   .configItem:hover .configTooltip {
+      visibility: visible;
+      width: 140px;
+      padding: 2px;
+      background-color: white;
+      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);
    }
    .toolbox {
       border-top: 1px solid black;
