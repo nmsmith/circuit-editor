@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 28 28" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-linejoin:round;stroke-miterlimit:1.5;">
+    <g transform="matrix(1,0,0,1,-35,-35)">
+        <g id="angleWarn" transform="matrix(0.933333,0,0,0.933333,34.0667,4.2)">
+            <rect x="1" y="33" width="30" height="30" style="fill:none;"/>
+            <g transform="matrix(1.07143,0,0,1.07143,1,-1.28571)">
+                <path d="M26,58L2,58L11,36" style="fill:none;stroke:black;stroke-width:4px;"/>
+            </g>
+            <g transform="matrix(0.714286,0,0,0.714286,-18.1071,35.8571)">
+                <circle cx="53" cy="26" r="3" style="fill:rgb(194,0,0);"/>
+            </g>
+            <g transform="matrix(0.714286,0,0,0.989011,-10.25,32.8764)">
+                <path d="M45,7.167C45,5.971 43.656,5 42,5C40.344,5 39,5.971 39,7.167L39,15.833C39,17.029 40.344,18 42,18C43.656,18 45,17.029 45,15.833L45,7.167Z" style="fill:rgb(194,0,0);"/>
+            </g>
+        </g>
+    </g>
+</svg>

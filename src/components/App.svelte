@@ -454,37 +454,37 @@
    let config = {
       distanceSnap: {
          tooltip: "Snap to a standard distance?",
-         icon: "icons/test.svg",
+         icon: "icons/distanceSnap.svg",
          values: stdHalfAndOff,
          state: standardGap as StdHalfOrOff,
       },
       distanceWarn: {
          tooltip: "Warn when distances are slightly askew?",
-         icon: "icons/test.svg",
+         icon: "icons/distanceWarn.svg",
          values: onAndOff,
          state: "on" as OnOrOff,
       },
       angleSnap: {
          tooltip: "Snap to common angles?",
-         icon: "icons/test.svg",
+         icon: "icons/angleSnap.svg",
          values: onAndOff,
          state: "on" as OnOrOff,
       },
       angleWarn: {
          tooltip: "Warn when angles are slightly askew?",
-         icon: "icons/test.svg",
+         icon: "icons/angleWarn.svg",
          values: onAndOff,
          state: "on" as OnOrOff,
       },
       targetSnap: {
          tooltip: "Snap to points of interest?",
-         icon: "icons/test.svg",
+         icon: "icons/targetSnap.svg",
          values: onAndOff,
          state: "on" as OnOrOff,
       },
       showSymbolSnaps: {
          tooltip: "Display ports and collision boxes?",
-         icon: "icons/test.svg",
+         icon: "icons/symbolSnaps.svg",
          values: onAndOff,
          state: "off" as OnOrOff,
       },
@@ -2615,18 +2615,17 @@
       height: 48px;
       display: flex;
       flex-direction: row;
-      gap: 1px;
-      background-color: rgb(58, 58, 58);
       user-select: none;
       -webkit-user-select: none;
    }
    .configItem {
       flex: 1;
-      padding: 4px;
-      background-color: rgb(231, 234, 237);
+      padding: 5px;
+      padding-bottom: 2px;
       display: flex;
       flex-direction: column;
       align-items: center;
+      gap: 2px;
    }
    .configImage {
       flex: 1;
