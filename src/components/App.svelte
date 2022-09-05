@@ -476,17 +476,17 @@
          values: onAndOff,
          state: "on" as OnOrOff,
       },
-      targetSnap: {
-         tooltip: "Snap to points of interest?",
-         icon: "icons/targetSnap.svg",
-         values: onAndOff,
-         state: "on" as OnOrOff,
-      },
       showSymbolSnaps: {
          tooltip: "Display ports and collision boxes?",
          icon: "icons/symbolSnaps.svg",
          values: onAndOff,
          state: "off" as OnOrOff,
+      },
+      placeholder: {
+         tooltip: "Placeholder.",
+         icon: "icons/targetSnap.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
       },
    }
    function toggleConfig(item: typeof config[keyof typeof config]) {
@@ -2600,7 +2600,7 @@
       flex-grow: 1;
       overflow-x: hidden;
       overflow-y: scroll;
-      background-color: rgb(66, 66, 66);
+      background-color: rgb(90, 90, 90);
    }
    .symbolPaneMessage {
       padding: 4px;
