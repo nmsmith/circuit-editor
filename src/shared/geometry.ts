@@ -555,7 +555,7 @@ export class Range2D {
 export class Rectangle extends Object2D {
    readonly position: Point
    readonly direction: Direction
-   protected readonly range: Range2D
+   readonly range: Range2D
    constructor(position: Point, rotation: Rotation, range: Range2D) {
       super()
       this.position = position

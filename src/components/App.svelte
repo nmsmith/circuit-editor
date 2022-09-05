@@ -518,6 +518,7 @@
       axis: Axis
       posInstructions: SlideInstruction[]
       negInstructions: SlideInstruction[]
+      contactPositions: number[]
    } = null
    type WarpMode = "pan" | "rotate"
    let warp: null | {
@@ -1442,6 +1443,9 @@
          posInstructions = generateInstructions(slideAxis.posDirection(), true)
          negInstructions = generateInstructions(slideAxis.negDirection(), true)
       }
+      let contactPositions = posInstructions
+         .flatMap((i) => (i.isPush ? [i.delay] : []))
+         .concat(negInstructions.flatMap((i) => (i.isPush ? [-i.delay] : [])))
       slide = {
          mode: selectedSlideMode(),
          originalPositions: copyPositions(),
@@ -1450,6 +1454,7 @@
          axis: slideAxis,
          posInstructions,
          negInstructions,
+         contactPositions,
       }
    }
    function endSlide() {
@@ -1507,7 +1512,7 @@
             slideDistance > 0 ? slide.posInstructions : slide.negInstructions
          slideDistance = Math.abs(slideDistance)
          return !instructions.find(
-            (i) => movable === i.movable && slideDistance >= i.delay + 0.5
+            (i) => movable === i.movable && slideDistance >= i.delay + 0.001
          )
       }
       if (draw) {
@@ -1643,6 +1648,17 @@
                   minDisp = d
             }
          }
+         // Also consider the snap positions of the slide operation.
+         let slideDisp = draw.end
+            .displacementFrom(draw.segment.start)
+            .inTermsOfBasis([slide.axis, draw.segment.axis])[0]
+            .scalarProjectionOnto(slide.axis)
+         for (let position of slide.contactPositions) {
+            let d = slide.axis
+               .scaledBy(position - slideDisp)
+               .scalarProjectionOnto(orthoAxis)
+            if (Math.abs(d) < Math.abs(minDisp)) minDisp = d
+         }
          // Perform the snap.
          if (Math.abs(minDisp) >= easeRadius) {
             minDisp = 0
@@ -1668,31 +1684,11 @@
             slideDistance = mouseOnCanvas
                .displacementFrom(slide.start)
                .scalarProjectionOnto(slide.axis)
-         }
-         let direction, dirInstructions, otherInstructions
-         if (slideDistance > 0) {
-            direction = slide.axis.posDirection()
-            dirInstructions = slide.posInstructions
-            otherInstructions = slide.negInstructions
-         } else {
-            direction = slide.axis.negDirection()
-            dirInstructions = slide.negInstructions
-            otherInstructions = slide.posInstructions
-            slideDistance = -slideDistance
-         }
-         if (!draw) {
             // If the current slideDistance is _close_ to the distance at which
             // two objects touch, ease toward that distance.
             let smallestDistance = Infinity
-            for (let instruction of dirInstructions) {
-               if (!instruction.isPush) continue
-               let distance = slideDistance - instruction.delay
-               if (Math.abs(distance) < Math.abs(smallestDistance))
-                  smallestDistance = distance
-            }
-            for (let instruction of otherInstructions) {
-               if (!instruction.isPush) continue
-               let distance = slideDistance + instruction.delay
+            for (let position of slide.contactPositions) {
+               let distance = slideDistance - position
                if (Math.abs(distance) < Math.abs(smallestDistance))
                   smallestDistance = distance
             }
@@ -1704,8 +1700,17 @@
                   easeFn(Math.abs(smallestDistance))
             }
          }
+         let direction, instructions
+         if (slideDistance > 0) {
+            direction = slide.axis.posDirection()
+            instructions = slide.posInstructions
+         } else {
+            direction = slide.axis.negDirection()
+            instructions = slide.negInstructions
+            slideDistance = -slideDistance
+         }
          // Perform the new movement.
-         for (let instruction of dirInstructions) {
+         for (let instruction of instructions) {
             let distance = slideDistance - instruction.delay
             if (distance <= 0) break
             instruction.movable.moveBy(direction.scaledBy(distance))
