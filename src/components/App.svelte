@@ -1237,8 +1237,19 @@
       let drawAxis = draw.segment.axis
       let orthoAxis = drawAxis.orthogonal()
       // Pre-compute the information required for snapping.
-      draw.drawAxisRanges = projectionOfCircuitOnto(drawAxis, standardGap)
-      draw.orthoRanges = projectionOfCircuitOnto(orthoAxis, standardGap)
+      if (config.distanceSnap.state === "off") {
+         draw.drawAxisRanges = undefined
+         draw.orthoRanges = undefined
+      } else {
+         draw.drawAxisRanges = projectionOfCircuitOnto(
+            drawAxis,
+            config.distanceSnap.state
+         )
+         draw.orthoRanges = projectionOfCircuitOnto(
+            orthoAxis,
+            config.distanceSnap.state
+         )
+      }
       // Initialize sliding.
       let thingToMove = movableAt(draw.segment.start)
       let axes = thingToMove.axes()
@@ -1362,6 +1373,7 @@
             instructions.push(nextInstruction) // Finalize this instruction.
 
             function pushNonConnected(pusher: Pushable) {
+               if (config.distanceSnap.state === "off") return
                if (!slideRanges.has(pusher)) return
                let pusherSlide = slideRanges.get(pusher) as Range1D
                let pusherOrthogonal = orthoRanges.get(pusher) as Range1D
@@ -1379,9 +1391,9 @@
                   }
                   if (!pusherOrthogonal.intersects(targetOrthogonal)) continue
                   let targetSlide = slideRanges.get(target) as Range1D
-                  let displacement = targetSlide.displacementFrom(pusherSlide)
-                  if (displacement <= 0) continue
-                  let distance = Math.max(0, displacement - standardGap)
+                  let disp = targetSlide.displacementFrom(pusherSlide)
+                  if (disp <= 0) continue
+                  let distance = Math.max(0, disp - config.distanceSnap.state)
                   if (target instanceof Segment) {
                      proposeTo(movableAt(target.start), delay + distance, true)
                      proposeTo(movableAt(target.end), delay + distance, true)
@@ -1405,9 +1417,16 @@
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
                let canStretch = segment.axis === slideAxis && !segment.isRigid
-               if (canStretch && adjDir.approxEquals(slideDir, 0.1)) {
-                  // Allow the edge to contract to a length of standardGap.
-                  let contraction = Math.max(0, segment.length() - standardGap)
+               if (
+                  canStretch &&
+                  adjDir.approxEquals(slideDir, 0.1) &&
+                  config.distanceSnap.state !== "off"
+               ) {
+                  // Allow the edge to contract to the standard length.
+                  let contraction = Math.max(
+                     0,
+                     segment.length() - config.distanceSnap.state
+                  )
                   proposeTo(movableAt(adjVertex), delay + contraction, true)
                } else if (canStretch) {
                   // The segment can stretch indefinitely.
@@ -1720,6 +1739,7 @@
       // Now that sliding has been performed (if applicable), snap the *length*
       // of draw.segment toward things of interest.
       if (draw && !snappedToVertex) {
+         draw.endObject = undefined
          let drawAxis = draw.segment.axis
          let orthoAxis = drawAxis.orthogonal()
          let closest = closestSegmentNearTo(draw.end, drawAxis, targetSegments)
@@ -1727,14 +1747,14 @@
             // Snap to the nearby segment.
             draw.end.moveTo(closest.closestPart)
             draw.endObject = closest.object
-         } else {
-            // Try snapping draw.end to a standard distance (standardGap) away
-            // from a nearby circuit element.
-            draw.endObject = undefined
+         } else if (config.distanceSnap.state !== "off") {
+            // Try snapping draw.end to a standard distance from a nearby
+            // circuit element.
             // The circuit needs to be re-projected (every frame!) so that we
             // can figure out what circuit elements are "in front of" draw.end.
-            let drawAxisRanges = projectionOfCircuitOnto(drawAxis, halfGap)
-            let orthoRanges = projectionOfCircuitOnto(orthoAxis, halfGap)
+            let halfDist = config.distanceSnap.state / 2
+            let drawAxisRanges = projectionOfCircuitOnto(drawAxis, halfDist)
+            let orthoRanges = projectionOfCircuitOnto(orthoAxis, halfDist)
             let drawEndRange = drawAxisRanges.get(draw.end) as Range1D
             let orthoRange = orthoRanges.get(draw.end) as Range1D
             // Find the closest thing that draw.end can snap toward.
@@ -1837,76 +1857,78 @@
       let d = mouseOnCanvas.displacementFrom(warp.start)
       for (let movable of warp.movables) movable.moveBy(d)
 
-      // Gather the axes of interest.
-      let neighbourAxes = new Set(
-         [...warp.incidentEdges].flatMap(([s, neighbour]) =>
-            [...neighbour.edges()]
-               .filter(([_, v]) => !warp!.movables.has(movableAt(v)))
-               .map(([segment]) => segment.axis)
+      if (config.angleSnap.state === "on") {
+         // Gather the axes of interest.
+         let neighbourAxes = new Set(
+            [...warp.incidentEdges].flatMap(([s, neighbour]) =>
+               [...neighbour.edges()]
+                  .filter(([_, v]) => !warp!.movables.has(movableAt(v)))
+                  .map(([segment]) => segment.axis)
+            )
          )
-      )
-      // We aim to displace ("snap") the Movables slightly such that their
-      // incident edges will have a "nice" axis.
-      let niceAxes = [...snapAxes, ...neighbourAxes]
+         // We aim to displace ("snap") the Movables slightly such that their
+         // incident edges will have a "nice" axis.
+         let niceAxes = [...snapAxes, ...neighbourAxes]
 
-      // Begin by computing the minimum rejection from each axis.
-      let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
-      for (let [segment, farVertex] of warp.incidentEdges) {
-         let nearVertex =
-            farVertex === segment.end ? segment.start : segment.end
-         for (let axis of niceAxes) {
-            let rejection = new Line(farVertex, axis)
-               .partClosestTo(nearVertex)
-               .displacementFrom(nearVertex)
-            if (rejection.sqLength() < axisRejections.read(axis).sqLength())
-               axisRejections.set(axis, rejection)
+         // Begin by computing the minimum rejection from each axis.
+         let axisRejections = new DefaultMap<Axis, Vector>(() => infinityVector)
+         for (let [segment, farVertex] of warp.incidentEdges) {
+            let nearVertex =
+               farVertex === segment.end ? segment.start : segment.end
+            for (let axis of niceAxes) {
+               let rejection = new Line(farVertex, axis)
+                  .partClosestTo(nearVertex)
+                  .displacementFrom(nearVertex)
+               if (rejection.sqLength() < axisRejections.read(axis).sqLength())
+                  axisRejections.set(axis, rejection)
+            }
          }
-      }
-      // Sort the rejections so that the two smallest ones can be used.
-      let rejections = [...axisRejections].sort(
-         (x, y) => x[1].sqLength() - y[1].sqLength()
-      )
-      let oneAxisDisplacement = infinityVector
-      if (rejections.length >= 1) {
-         oneAxisDisplacement = rejections[0][1]
-      }
-      let twoAxisDisplacement = infinityVector
-      if (rejections.length >= 2) {
-         // Find the displacement vector that satisfies both of the rejections
-         // simultaneously. (Take the intersection of the dual lines associated
-         // with each displacement vector.)
-         let [[axis1, reject1], [axis2, reject2]] = rejections
-         let dualLine1 = new Line(Point.zero.displacedBy(reject1), axis1)
-         let dualLine2 = new Line(Point.zero.displacedBy(reject2), axis2)
-         let intersection = dualLine1.intersection(dualLine2)
-         if (intersection) {
-            twoAxisDisplacement = intersection.displacementFrom(Point.zero)
-         }
-      }
-      let displacement = zeroVector
-      // First, ease to the nearest axis. This keeps the movement "on a rail".
-      let sqLength1 = oneAxisDisplacement.sqLength()
-      if (sqLength1 < sqSnapRadius) {
-         displacement = oneAxisDisplacement
-      } else if (sqLength1 < sqEaseRadius) {
-         displacement = oneAxisDisplacement
-            .direction()
-            ?.scaledBy(easeFn(Math.sqrt(sqLength1))) as Vector
-      }
-      // Next, ease to the intersection.
-      let remainingDisplacement = twoAxisDisplacement.sub(displacement)
-      let sqLength2 = remainingDisplacement.sqLength()
-      if (sqLength2 < sqSnapRadius) {
-         displacement = twoAxisDisplacement
-      } else if (sqLength2 < sqEaseRadius) {
-         displacement = displacement.add(
-            remainingDisplacement
-               .direction()
-               ?.scaledBy(easeFn(Math.sqrt(sqLength2))) as Vector
+         // Sort the rejections so that the two smallest ones can be used.
+         let rejections = [...axisRejections].sort(
+            (x, y) => x[1].sqLength() - y[1].sqLength()
          )
+         let oneAxisDisplacement = infinityVector
+         if (rejections.length >= 1) {
+            oneAxisDisplacement = rejections[0][1]
+         }
+         let twoAxisDisplacement = infinityVector
+         if (rejections.length >= 2) {
+            // Find the displacement vector that satisfies both of the
+            // rejections simultaneously. (Take the intersection of the dual
+            // lines associated with each displacement vector.)
+            let [[axis1, reject1], [axis2, reject2]] = rejections
+            let dualLine1 = new Line(Point.zero.displacedBy(reject1), axis1)
+            let dualLine2 = new Line(Point.zero.displacedBy(reject2), axis2)
+            let intersection = dualLine1.intersection(dualLine2)
+            if (intersection) {
+               twoAxisDisplacement = intersection.displacementFrom(Point.zero)
+            }
+         }
+         let displacement = zeroVector
+         // First, ease to the nearest axis. This keeps the movement "on a rail".
+         let sqLength1 = oneAxisDisplacement.sqLength()
+         if (sqLength1 < sqSnapRadius) {
+            displacement = oneAxisDisplacement
+         } else if (sqLength1 < sqEaseRadius) {
+            displacement = oneAxisDisplacement
+               .direction()
+               ?.scaledBy(easeFn(Math.sqrt(sqLength1))) as Vector
+         }
+         // Next, ease to the intersection.
+         let remainingDisplacement = twoAxisDisplacement.sub(displacement)
+         let sqLength2 = remainingDisplacement.sqLength()
+         if (sqLength2 < sqSnapRadius) {
+            displacement = twoAxisDisplacement
+         } else if (sqLength2 < sqEaseRadius) {
+            displacement = displacement.add(
+               remainingDisplacement
+                  .direction()
+                  ?.scaledBy(easeFn(Math.sqrt(sqLength2))) as Vector
+            )
+         }
+         // Execute the movement.
+         for (let movable of warp.movables) movable.moveBy(displacement)
       }
-      // Execute the movement.
-      for (let movable of warp.movables) movable.moveBy(displacement)
 
       // Finally, update the axis object associated with each incident edge.
       for (let [segment] of warp.incidentEdges) {
@@ -1914,7 +1936,6 @@
          if (!axis) continue
          segment.updateAxis(axis)
       }
-
       Junction.s = Junction.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
@@ -1929,24 +1950,23 @@
       let mouseRotation = mouseDir.rotationFrom(startDir)
 
       // Then, if the rotation is close to a keyRotation, ease to it.
-      let closest: Rotation = Rotation.fromDegrees(180)
-      for (let key of warp.keyRotations) {
-         let r = key.sub(mouseRotation)
-         if (Math.abs(r.toRadians()) < Math.abs(closest.toRadians()))
-            closest = r
+      let easedRotation = mouseRotation
+      if (config.angleSnap.state === "on") {
+         let closest: Rotation = Rotation.fromDegrees(180)
+         for (let key of warp.keyRotations) {
+            let r = key.sub(mouseRotation)
+            if (Math.abs(r.toRadians()) < Math.abs(closest.toRadians()))
+               closest = r
+         }
+         let radius = mouseOnCanvas.distanceFrom(warp.centroid)
+         let arcLength = radius * Math.abs(closest.toRadians())
+         if (arcLength < snapRadius) {
+            easedRotation = mouseRotation.add(closest)
+         } else if (arcLength < easeRadius) {
+            let scale = easeFn(arcLength) / arcLength
+            easedRotation = mouseRotation.add(closest.scaledBy(scale))
+         }
       }
-      let radius = mouseOnCanvas.distanceFrom(warp.centroid)
-      let arcLength = radius * Math.abs(closest.toRadians())
-      let easedRotation
-      if (arcLength < snapRadius) {
-         easedRotation = mouseRotation.add(closest)
-      } else if (arcLength < easeRadius) {
-         let scale = easeFn(arcLength) / arcLength
-         easedRotation = mouseRotation.add(closest.scaledBy(scale))
-      } else {
-         easedRotation = mouseRotation
-      }
-
       // Then, apply the rotation.
       for (let m of warp.movables) m.rotateAround(warp.centroid, easedRotation)
 
