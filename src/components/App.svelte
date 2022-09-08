@@ -1309,6 +1309,7 @@
       Port.s = Port.s
    }
    function abortDraw() {
+      abortSlide()
       if (draw?.segmentIsNew) deleteItems([draw.end])
       draw = null
    }
