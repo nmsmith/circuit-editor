@@ -36,7 +36,7 @@
    import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Plug from "~/components/lines/Plug.svelte"
-   import Button from "~/components/Button.svelte"
+   import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
@@ -47,42 +47,11 @@
       "valve.svg",
    ]
    let canvas: SVGElement | undefined // the root element of this component
-   type Button = keyof typeof button
-   export const buttonMap: {
-      LMB: Button
-      RMB: Button
-      Space: Button
-      KeyQ: Button
-      KeyW: Button
-      KeyE: Button
-      KeyR: Button
-      KeyT: Button
-      KeyA: Button
-      KeyS: Button
-      KeyD: Button
-      KeyF: Button
-      KeyG: Button
-   } = {
-      LMB: "draw",
-      RMB: "pan",
-      Space: "pan",
-      KeyQ: "query",
-      KeyW: "warp",
-      KeyE: "erase",
-      KeyR: "rigid",
-      KeyT: "tether",
-      KeyA: "aButton",
-      KeyS: "slide",
-      KeyD: "draw",
-      KeyF: "flex",
-      KeyG: "gButton",
-   }
-   const row1Buttons: Button[] = ["query", "warp", "erase", "rigid", "tether"]
-   const row2Buttons: Button[] = ["aButton", "slide", "draw", "flex", "gButton"]
-   const visibleButtons = [...row1Buttons, ...row2Buttons]
-   function buttonOf(key: string): Button | undefined {
-      return buttonMap[key as keyof typeof buttonMap]
-   }
+   const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
+   const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
+   const tools = [...row1Tools, ...row2Tools] as const
+   type Tool = typeof tools[number]
+   type Operation = Tool | "pan"
    // Input constants
    const panSpeed = 1.5 // when panning with trackpad
    const pinchZoomSpeed = 0.02
@@ -256,21 +225,18 @@
       let scores = ofAxes.map((axis) => Math.abs(to.dot(axis)))
       return ofAxes[scores.indexOf(Math.max(...scores))]
    }
-   $: aButtonIsHeld = (): boolean => {
-      return Object.values(button).some((k) => k.state)
-   }
    function selectedDrawMode(): DrawMode {
-      return shift
+      return keyInfo.read(Shift).pressing
          ? config.angleSnap.state === "on"
             ? "snapped rotation"
             : "free rotation"
          : "strafing"
    }
    function selectedSlideMode(): SlideMode {
-      return shift ? "push connected" : "push all"
+      return keyInfo.read(Shift).pressing ? "push connected" : "push all"
    }
    function selectedWarpMode(): WarpMode {
-      return shift ? "rotate" : "pan"
+      return keyInfo.read(Shift).pressing ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
       if (s.endsWith("Button")) return s[0].toUpperCase()
@@ -384,51 +350,38 @@
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
-   let [shift, alt, cmd] = [false, false, false]
-   type TargetInfo<T> = { object: T; part: Point }
-   type ButtonDownInfo<Target> = {
-      downTime: number
-      clientDownPosition: Point
-      canvasDownPosition: Point
-      target?: TargetInfo<Target>
-      repeated?: boolean
-   }
-   type ButtonState<Target> =
-      | { state: null } // 'null' is more convenient than the string "up".
-      // Pressing, but not yet moved enough to constitute a drag.
-      | ({ state: "pressing" | "dragging" } & ButtonDownInfo<Target>)
-   let button: {
-      pan: ButtonState<null>
-      query: ButtonState<null>
-      warp: ButtonState<Grabbable>
-      erase: ButtonState<null>
-      rigid: ButtonState<null>
-      tether: ButtonState<null>
-      aButton: ButtonState<null>
-      slide: ButtonState<Grabbable>
-      draw: ButtonState<Attachable>
-      flex: ButtonState<null>
-      gButton: ButtonState<null>
-      nothing: ButtonState<null> // A dummy button.
-   } = {
-      pan: { state: null },
-      query: { state: null },
-      warp: { state: null },
-      erase: { state: null },
-      rigid: { state: null },
-      tether: { state: null },
-      aButton: { state: null },
-      slide: { state: null },
-      draw: { state: null },
-      flex: { state: null },
-      gButton: { state: null },
-      nothing: { state: null },
-   }
-   let [lmbShouldBeDown, rmbShouldBeDown] = [false, false]
-   // This is a hack that I'm using to have the act of dragging from the
-   // sidebar be interpreted as a move operation, irrespective of what
-   // operation the LMB is actually mapped to.
-   let lmbShouldSimulate: keyof typeof button | null = null
+   const [LMB, RMB, Shift, Alt, Control] = [
+      "LMB",
+      "RMB",
+      "Shift",
+      "Alt",
+      "Control",
+   ]
+   let keyInfo = new DefaultMap<
+      string,
+      (
+         | { type: "none" | "pan" | "useTool" }
+         | { type: "holdTool"; tool: Tool }
+      ) & {
+         pressing: boolean
+      }
+   >(() => {
+      return { type: "none", pressing: false }
+   }, [
+      [RMB, { type: "pan", pressing: false }],
+      ["Space", { type: "pan", pressing: false }],
+      ["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
+      ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
+      ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
+      ["KeyR", { type: "holdTool", tool: "rigid", pressing: false }],
+      ["KeyT", { type: "holdTool", tool: "tether", pressing: false }],
+      ["KeyA", { type: "holdTool", tool: "aButton", pressing: false }],
+      ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
+      ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
+      ["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
+      ["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
+      [LMB, { type: "useTool", pressing: false }],
+   ])
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
@@ -443,10 +396,10 @@
       usingElectron = false
       symbolFiles = symbolFilesForBrowserTesting
    }
-   let committedCameraPosition: Point = Point.zero // Position on the canvas.
-   let cameraZoom: number = 1
+
    let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
+
    const onAndOff = ["on", "off"] as const
    type OnOrOff = typeof onAndOff[number]
    const stdHalfAndOff = [standardGap, halfGap, "off"] as const
@@ -494,6 +447,26 @@
       item.state = item.values[(i + 1) % item.values.length]
       config = config // Inform Svelte of change.
    }
+
+   let committedCameraPosition: Point = Point.zero // Position on the canvas.
+   let cameraZoom: number = 1
+
+   // The "boundTool" is the tool that will be used when no keyboard keys of
+   // type "holdTool" are being pressed.
+   let boundTool: Tool = "draw"
+   // When a "holdTool" key is pressed, it assigns a "heldTool". When the key
+   // is released, "heldTool" is reset to null.
+   let heldTool: null | { tool: Tool; shouldBind: boolean } = null
+   // If there is a "heldTool", use that. Otherwise, use the "boundTool".
+   $: toolToUse = heldTool ? heldTool.tool : boundTool
+   // The tool of the operation currently in-progress (if any).
+   let toolBeingUsed: null | {
+      tool: Tool
+      canvasDownPosition: Point
+      chainDrawFromEnd?: Junction // Special field for the draw tool.
+   } = null
+
+   let pan: null | { clientDownPosition: Point } = null
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
       mode: DrawMode
@@ -557,8 +530,8 @@
    $: computeCameraPosition = (): Point => {
       // This function is an indirection (a hack) for allowing `cameraPosition`
       // to be updated reactively AND manually.
-      if (button.pan.state) {
-         let d = button.pan.clientDownPosition
+      if (pan) {
+         let d = pan.clientDownPosition
             .displacementFrom(mouseInClient)
             .scaledBy(1 / cameraZoom)
          return committedCameraPosition.displacedBy(d)
@@ -611,9 +584,9 @@
    $: /* Set the appearance of the mouse cursor. */ {
       if (slide) {
          cursor = "grabbing"
-      } else if (button.slide.state) {
+      } else if (toolToUse === "slide") {
          if (closestGrabbable(mouseOnCanvas)) {
-            cursor = button.slide.state === "pressing" ? "grabbing" : "grab"
+            cursor = slide ? "grabbing" : "grab"
          } else {
             cursor = "default"
          }
@@ -629,7 +602,7 @@
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
          if (draw?.endObject instanceof Segment) {
             hoverLight.add(draw.endObject)
-         } else if (!aButtonIsHeld()) {
+         } else if (!toolBeingUsed) {
             let thing = closestAttachableOrToggleable(mouseOnCanvas)
             if (thing) {
                if (thing.object instanceof Crossing) {
@@ -645,12 +618,8 @@
    $: {
       grabLight = new Set()
       if (draw) grabLight.add(draw.end)
-      if (button.warp.state && button.warp.target?.object)
-         grabLight.add(button.warp.target.object)
-      else if (button.slide.state && button.slide.target?.object)
-         grabLight.add(button.slide.target.object)
-      else if (button.tether.state && button.tether.target?.object)
-         grabLight.add(button.tether.target.object)
+      else if (warp) for (let m of warp.movables) grabLight.add(m)
+      else if (slide) grabLight.add(slide.grabbed)
    }
    type HighlightStyle = "hover" | "grab" | undefined
    $: styleOf = function (thing: Highlightable): HighlightStyle {
@@ -767,99 +736,67 @@
    }
 
    // ---------------------------- Primary events -----------------------------
-   function buttonSelected(name: keyof typeof button) {
-      buttonMap.LMB = name
-   }
-   function buttonPressed(name: keyof typeof button) {
-      if (name === "nothing") return
-      let instantActionPossible = buttonMap.LMB === name
-      // This function abstracts over mouse and keyboard events.
-      if ((name === "rigid" || name === "flex") && button.draw.state) {
-         chainDraw(name === "rigid")
-      } else {
-         // Only panning can be performed concurrently with other operations.
-         if (name !== "pan") {
-            for (let b of Object.keys(button) as Array<keyof typeof button>) {
-               if (b === "pan") continue
-               buttonAborted(b)
-            }
+   function keyPressed(name: string) {
+      let key = keyInfo.getOrCreate(name)
+      if (key.pressing) return // in case we missed a release
+      key.pressing = true
+      if (key.type === "pan") {
+         pan = { clientDownPosition: mouseInClient }
+      } else if (key.type === "holdTool") {
+         if (
+            toolBeingUsed?.tool === "draw" &&
+            (key.tool === "rigid" || key.tool === "flex")
+         ) {
+            // Pressing rigid/flex initiates a chain draw.
+            chainDraw(key.tool === "rigid")
+         } else {
+            // Hold the tool. If another tool is already held, it is overridden.
+            heldTool = { tool: key.tool, shouldBind: true }
          }
-         let stateTemplate = {
-            state: "pressing" as const,
-            downTime: performance.now(),
-            clientDownPosition: mouseInClient,
-            canvasDownPosition: mouseOnCanvas,
+      } else if (key.type === "useTool") {
+         toolBeingUsed = { tool: toolToUse, canvasDownPosition: mouseOnCanvas }
+         if (heldTool) {
+            heldTool.shouldBind = false // The tool is being used temporarily.
          }
-         let target
-         if (name === "draw") {
-            let c = closestAttachable(mouseOnCanvas)
-            if (c) target = { object: c.object, part: c.closestPart }
-            button.draw = { ...stateTemplate, target }
-         } else if (name === "warp") {
-            let c = closestGrabbable(mouseOnCanvas)
-            if (c) target = { object: c.object, part: c.closestPart }
-            button.warp = { ...stateTemplate, target }
-            // Logic for dragging symbols from sidebar (if applicable):
-            let symbolUnderMouse = document.elementFromPoint(
-               mouseInClient.x,
-               mouseInClient.y
-            )
-            if (symbolUnderMouse)
-               symbolUnderMouse.dispatchEvent(
-                  new MouseEvent("mousedown", {
-                     clientX: mouseInClient.x,
-                     clientY: mouseInClient.y,
-                     bubbles: true,
-                  })
-               )
-         } else if (name === "slide") {
-            let c = closestGrabbable(mouseOnCanvas)
-            if (c) target = { object: c.object, part: c.closestPart }
-            button.slide = { ...stateTemplate, target }
-         } else if (name === "rigid" && instantActionPossible) {
+         // Actions to perform immediately:
+         if (toolToUse === "rigid") {
             let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
                Segment.s = Segment.s
             }
-            button.rigid = stateTemplate
-         } else if (name === "flex" && instantActionPossible) {
+         } else if (toolToUse === "flex") {
             let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid) {
                segment.isRigid = false
                Segment.s = Segment.s
             }
-            button.flex = stateTemplate
-         } else {
-            button[name] = stateTemplate
          }
       }
+      keyInfo = keyInfo
    }
-   function buttonReleased(name: keyof typeof button) {
-      if (name === "nothing") return
-      let b = button[name]
-      if (!b.state) return
-      if (
-         b.state === "pressing" &&
-         buttonMap.LMB !== name &&
-         visibleButtons.includes(name)
-      ) {
-         // Select the tool associated with this button.
-         buttonSelected(name)
-      } else {
-         switch (name) {
-            case "pan":
-               endPan()
-               break
+   function keyReleased(name: string) {
+      let key = keyInfo.getOrCreate(name)
+      if (!key.pressing) return // in case we missed a press
+      key.pressing = false
+      if (key.type === "pan") {
+         endPan()
+      } else if (key.type === "holdTool") {
+         if (heldTool?.tool === key.tool) {
+            if (heldTool.shouldBind) boundTool = heldTool.tool
+            heldTool = null
+         }
+      } else if (key.type === "useTool" && toolBeingUsed) {
+         switch (toolBeingUsed.tool) {
             case "warp":
                endWarp()
                grabbedSymbol = null
                break
             case "draw": {
-               if (b.state === "pressing" && !b.repeated) {
-                  drawButtonTapped()
-               } else if (b.state === "dragging") {
+               if (draw) {
                   endDraw()
+               } else if (!toolBeingUsed.chainDrawFromEnd) {
+                  drawButtonTapped()
                }
                break
             }
@@ -876,44 +813,52 @@
                endFlexSelect()
                break
          }
+         toolBeingUsed = null
       }
-      button[name] = { state: null }
+      keyInfo = keyInfo
    }
-   function buttonAborted(name: keyof typeof button) {
-      if (!button[name].state) return
-      // TODO: Instead of having an "abort" function for each operation, all
-      // aborts should be implemented the same way: by invoking "undo".
-      // (...and then setting the operation's state to "null")
-      switch (name) {
-         case "pan":
-            endPan() // Never abort this.
-            break
-         case "warp":
-            abortWarp()
-            grabbedSymbol = null
-            break
-         case "draw":
-            abortDraw()
-            break
-         case "erase":
-            abortEraseSelect()
-            break
-         case "rigid":
-            abortRigidSelect()
-            break
-         case "slide":
-            abortSlide()
-            break
-         case "flex":
-            abortFlexSelect()
-            break
+   function keyAborted(name: string) {
+      let key = keyInfo.getOrCreate(name)
+      if (!key.pressing) return // in case we missed a press
+      key.pressing = false
+      if (key.type === "pan") {
+         endPan() // Never abort this.
+      } else if (key.type === "holdTool") {
+         if (heldTool?.tool === key.tool) heldTool = null
+      } else if (key.type === "useTool" && toolBeingUsed) {
+         // TODO: Instead of having an "abort" function for each operation, all
+         // aborts should be implemented the same way: by invoking "undo".
+         // (...and then setting the operation's state to "null")
+         switch (toolBeingUsed.tool) {
+            case "warp":
+               abortWarp()
+               grabbedSymbol = null
+               break
+            case "draw":
+               abortDraw()
+               break
+            case "erase":
+               abortEraseSelect()
+               break
+            case "rigid":
+               abortRigidSelect()
+               break
+            case "slide":
+               abortSlide()
+               break
+            case "flex":
+               abortFlexSelect()
+               break
+         }
+         toolBeingUsed = null
       }
-      button[name] = { state: null }
+      keyInfo = keyInfo
    }
    function updateModifierKeys(event: KeyboardEvent | MouseEvent) {
-      shift = event.getModifierState("Shift")
-      alt = event.getModifierState("Alt")
-      cmd = event.getModifierState("Control") || event.getModifierState("Meta")
+      keyInfo.getOrCreate(Shift).pressing = event.getModifierState(Shift)
+      keyInfo.getOrCreate(Alt).pressing = event.getModifierState(Alt)
+      keyInfo.getOrCreate(Control).pressing =
+         event.getModifierState(Control) || event.getModifierState("Meta")
       if (
          (draw && draw.mode !== selectedDrawMode()) ||
          (slide && slide.mode !== selectedSlideMode())
@@ -975,57 +920,46 @@
       updateRigidSelect()
       updateFlexSelect()
       // Check for the initiation of drag-based operations.
-      function checkDrag<T>(
-         b: ButtonState<T>,
-         dragType: "short" | "long",
-         callback: (dragVector: Vector, info: ButtonDownInfo<T>) => void
-      ) {
-         if (b.state !== "pressing") return
+      if (toolBeingUsed) {
          let dragVector = mouseOnCanvas
-            .displacementFrom(b.canvasDownPosition)
+            .displacementFrom(toolBeingUsed.canvasDownPosition)
             .scaledBy(cameraZoom)
-         if (
-            dragVector.sqLength() >=
-            (dragType === "short" ? sqShortDragDelay : sqLongDragDelay)
-         ) {
-            callback(dragVector, b)
-            b.state = "dragging"
+         let shortDrag = dragVector.sqLength() >= sqShortDragDelay
+         let longDrag = dragVector.sqLength() >= sqLongDragDelay
+         let { tool } = toolBeingUsed
+         if (tool === "draw" && !draw && longDrag) {
+            beginDraw(dragVector)
+         } else if (tool === "warp" && !warp && shortDrag) {
+            let target = closestGrabbable(toolBeingUsed.canvasDownPosition)
+            if (target) beginWarp(movablesOf(target.object), target.closestPart)
+         } else if (tool === "slide" && !slide && longDrag) {
+            let dragAxis = Axis.fromVector(dragVector)
+            let target = closestGrabbable(toolBeingUsed.canvasDownPosition)
+            if (dragAxis && target) {
+               let slideAxis: Axis
+               if (target.object instanceof Segment) {
+                  let axes = new Set([
+                     ...target.object.start.axes(),
+                     ...target.object.end.axes(),
+                  ])
+                  if (axes.size === 1) axes.add(target.object.axis.orthogonal())
+                  slideAxis = nearestAxis(dragAxis, [...axes])
+               } else {
+                  let axes = target.object.axes()
+                  if (axes.length === 0) axes = primaryAxes
+                  else if (axes.length === 1) axes.push(axes[0].orthogonal())
+                  slideAxis = nearestAxis(dragAxis, axes)
+               }
+               beginSlide(slideAxis, target.object, target.closestPart)
+            }
+         } else if (tool === "erase" && !eraseSelect && shortDrag) {
+            beginEraseSelect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "rigid" && !rigidSelect && shortDrag) {
+            beginRigidSelect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "flex" && !flexSelect && shortDrag) {
+            beginFlexSelect(toolBeingUsed.canvasDownPosition)
          }
       }
-      checkDrag(button.pan, "short", () => {})
-      checkDrag(button.draw, "long", beginDraw)
-      checkDrag(button.warp, "short", (_, { target }) => {
-         if (target) beginWarp(movablesOf(target.object), target.part)
-      })
-      checkDrag(button.slide, "long", (dragVector, { target }) => {
-         let dragAxis = Axis.fromVector(dragVector)
-         if (dragAxis && target) {
-            let slideAxis: Axis
-            if (target.object instanceof Segment) {
-               let axes = new Set([
-                  ...target.object.start.axes(),
-                  ...target.object.end.axes(),
-               ])
-               if (axes.size === 1) axes.add(target.object.axis.orthogonal())
-               slideAxis = nearestAxis(dragAxis, [...axes])
-            } else {
-               let axes = target.object.axes()
-               if (axes.length === 0) axes = primaryAxes
-               else if (axes.length === 1) axes.push(axes[0].orthogonal())
-               slideAxis = nearestAxis(dragAxis, axes)
-            }
-            beginSlide(slideAxis, target.object, target.part)
-         }
-      })
-      checkDrag(button.erase, "short", (_, i) =>
-         beginEraseSelect(i.canvasDownPosition)
-      )
-      checkDrag(button.rigid, "short", (_, i) =>
-         beginRigidSelect(i.canvasDownPosition)
-      )
-      checkDrag(button.flex, "short", (_, i) =>
-         beginFlexSelect(i.canvasDownPosition)
-      )
    }
    // Pre-process the SVG (already in the DOM) of the schematic symbol whose
    // file path is given.
@@ -1068,47 +1002,30 @@
          ].sort((a, b) => (a.fileName < b.fileName ? -1 : 1))
       }
    }
-   function spawnSymbol(
-      kind: SymbolKind,
-      grabOffset: Vector,
-      e: MouseEvent,
-      draggingUsingLMB: boolean
-   ) {
+   function spawnSymbol(kind: SymbolKind, grabOffset: Vector) {
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouseOnCanvas.displacedBy(
          grabOffset.scaledBy(1 / cameraZoom)
       )
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
+      toolBeingUsed = { tool: "warp", canvasDownPosition: mouseOnCanvas }
       beginWarp(new Set([symbol]), mouseOnCanvas)
-      button.warp = {
-         state: "dragging",
-         downTime: performance.now(),
-         clientDownPosition: mouseInClient,
-         canvasDownPosition: mouseOnCanvas,
-         target: { object: symbol, part: mouseOnCanvas },
-      }
-      if (draggingUsingLMB) {
-         // Set some flags so that when the LMB is released, the move operation
-         // is terminated.
-         lmbShouldBeDown = true
-         lmbShouldSimulate = "warp"
-      }
    }
 
    // ---------------------------- Derived events -----------------------------
    function endPan() {
       committedCameraPosition = cameraPosition
+      pan = null
    }
    function beginDraw(dragVector: Vector) {
-      if (!button.draw.state) return
+      if (!toolBeingUsed) return
       let drawMode = selectedDrawMode()
-      if (
-         button.draw.repeated &&
-         button.draw.target?.object instanceof Junction
-      ) {
+      if (toolBeingUsed.chainDrawFromEnd) {
+         let end = toolBeingUsed.chainDrawFromEnd
+         toolBeingUsed.chainDrawFromEnd = undefined
          // Start the draw operation at the endpoint of the previous
          // draw operation.
-         let lastDrawAxis = button.draw.target.object.axes()[0]
+         let lastDrawAxis = end.axes()[0]
          // Determine the axis the draw operation should begin along.
          let drawAxis = Axis.fromVector(dragVector) as Axis
          if (drawMode === "strafing") {
@@ -1122,17 +1039,17 @@
                snapAxes.filter((axis) => axis !== lastDrawAxis)
             )
          }
-         newDraw(button.draw.target.object, drawAxis)
+         newDraw(end, drawAxis)
          return
       } else if (
-         closestAttachableOrToggleable(button.draw.canvasDownPosition)
+         closestAttachableOrToggleable(toolBeingUsed.canvasDownPosition)
             ?.object instanceof Crossing
       ) {
          return // Don't allow draw operations to start at crossings.
       }
       // Otherwise, start the draw operation at the closest attachable.
-      let attach = button.draw.target
-      // Determine the axis the draw operation should begin along.
+      let attach = closestAttachable(toolBeingUsed.canvasDownPosition)
+      // First, determine the axis the draw operation should begin along.
       let dragAxis = Axis.fromVector(dragVector) as Axis
       let regularDrawAxis, specialDrawAxis
       if (drawMode === "free rotation") {
@@ -1155,20 +1072,20 @@
          let segment = attach.object
          if (specialDrawAxis === segment.axis) {
             // Cut the segment, and allow the user to move one side of it.
-            let direction = segment.start.displacementFrom(attach.part)
+            let direction = segment.start.displacementFrom(attach.closestPart)
             let [newStart, other] =
                direction.dot(dragVector) > 0
                   ? [segment.start, segment.end]
                   : [segment.end, segment.start]
-            let jMove = new Junction(attach.part)
-            let jOther = new Junction(attach.part)
+            let jMove = new Junction(attach.closestPart)
+            let jOther = new Junction(attach.closestPart)
             let moveSegment = new Segment(newStart, jMove, segment.axis)
             let otherSegment = new Segment(other, jOther, segment.axis)
             segment.replaceWith(moveSegment, otherSegment)
             continueDraw(moveSegment, jMove)
          } else {
             // Create a T-junction.
-            let junction = new Junction(attach.part)
+            let junction = new Junction(attach.closestPart)
             segment.splitAt(junction)
             newDraw(junction, regularDrawAxis)
          }
@@ -1200,7 +1117,10 @@
          }
          if (!continuedDraw) newDraw(vertex, regularDrawAxis)
       } else
-         newDraw(new Junction(button.draw.canvasDownPosition), regularDrawAxis)
+         newDraw(
+            new Junction(toolBeingUsed.canvasDownPosition),
+            regularDrawAxis
+         )
    }
    function newDraw(start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
@@ -1314,17 +1234,11 @@
       draw = null
    }
    function chainDraw(rigidifyCurrent: boolean) {
-      if (!draw) return
+      if (!draw || !toolBeingUsed) return
       draw.segment.isRigid = rigidifyCurrent
       // Start a new draw operation at the current draw endpoint.
-      button.draw = {
-         state: "pressing",
-         downTime: performance.now(),
-         clientDownPosition: mouseInClient,
-         canvasDownPosition: mouseOnCanvas,
-         target: { object: draw.end, part: draw.end },
-         repeated: true,
-      }
+      toolBeingUsed.canvasDownPosition = mouseOnCanvas
+      toolBeingUsed.chainDrawFromEnd = draw.end
       draw.endObject = undefined // Don't connect to anything else.
       endDraw(false)
    }
@@ -2048,8 +1962,7 @@
       flexSelect = null
    }
    function abortAllButtons() {
-      for (let b of Object.keys(button) as Array<keyof typeof button>)
-         buttonAborted(b)
+      for (let key of keyInfo.keys()) keyAborted(key)
    }
    function deleteItems(items: Iterable<Grabbable>) {
       let junctionsToConvert = new Set<Junction>()
@@ -2081,18 +1994,13 @@
    on:keydown={(event) => {
       updateModifierKeys(event)
       if (event.repeat) return // Ignore repeated events from held-down keys.
-      let b = buttonOf(event.code)
-      if (b) buttonPressed(b)
+      keyPressed(event.code)
    }}
    on:keyup={(event) => {
       updateModifierKeys(event)
-      let b = buttonOf(event.code)
-      if (b) buttonReleased(b)
+      keyReleased(event.code)
    }}
    on:blur={() => {
-      shift = false
-      alt = false
-      cmd = false
       abortAllButtons()
    }}
 />
@@ -2106,19 +2014,21 @@
    }}
    on:mousemove|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
-      if (!leftMouseIsDown(event) && lmbShouldBeDown) {
+      if (!leftMouseIsDown(event) && keyInfo.read(LMB).pressing) {
          if (waitedOneFrameLMB) {
-            buttonAborted(buttonMap.LMB)
-            lmbShouldBeDown = false
-         } else waitedOneFrameLMB = true
+            keyAborted(LMB)
+         } else {
+            waitedOneFrameLMB = true
+         }
       } else {
          waitedOneFrameLMB = false
       }
-      if (!rightMouseIsDown(event) && rmbShouldBeDown) {
+      if (!rightMouseIsDown(event) && keyInfo.read(RMB).pressing) {
          if (waitedOneFrameRMB) {
-            buttonAborted(buttonMap.RMB)
-            rmbShouldBeDown = false
-         } else waitedOneFrameRMB = true
+            keyAborted(RMB)
+         } else {
+            waitedOneFrameRMB = true
+         }
       } else {
          waitedOneFrameRMB = false
       }
@@ -2129,16 +2039,8 @@
    }}
    on:mouseup|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
-      if (!leftMouseIsDown(event) && lmbShouldBeDown) {
-         buttonReleased(lmbShouldSimulate || buttonMap.LMB)
-         lmbShouldBeDown = false
-         lmbShouldSimulate = null
-      }
-      if (!rightMouseIsDown(event) && rmbShouldBeDown) {
-         buttonReleased(lmbShouldSimulate || buttonMap.RMB)
-         rmbShouldBeDown = false
-         lmbShouldSimulate = null
-      }
+      if (!leftMouseIsDown(event)) keyReleased(LMB)
+      if (!rightMouseIsDown(event)) keyReleased(RMB)
    }}
    on:wheel|capture|nonpassive={(event) => {
       // Turn off the browser's built-in pinch-zoom behaviour.
@@ -2152,14 +2054,8 @@
       style="cursor: {cursor}"
       on:mousedown={(event) => {
          event.preventDefault() // Disable selection of nearby text elements.
-         if (leftMouseIsDown(event) && !lmbShouldBeDown) {
-            buttonPressed(buttonMap.LMB)
-            lmbShouldBeDown = true
-         }
-         if (rightMouseIsDown(event) && !rmbShouldBeDown) {
-            buttonPressed(buttonMap.RMB)
-            rmbShouldBeDown = true
-         }
+         if (leftMouseIsDown(event)) keyPressed(LMB)
+         if (rightMouseIsDown(event)) keyPressed(RMB)
       }}
       on:wheel={(event) => {
          event.preventDefault()
@@ -2395,14 +2291,10 @@
          on:mouseup={() => {
             grabbedSymbol = null
          }}
-         on:mouseleave={(event) => {
+         on:mouseleave={() => {
             if (grabbedSymbol) {
-               spawnSymbol(
-                  grabbedSymbol.kind,
-                  grabbedSymbol.grabOffset,
-                  event,
-                  leftMouseIsDown(event)
-               )
+               spawnSymbol(grabbedSymbol.kind, grabbedSymbol.grabOffset)
+               keyInfo.getOrCreate(LMB).pressing = true
                grabbedSymbol = null
             }
          }}
@@ -2471,23 +2363,25 @@
          {/each}
       </div>
       <div class="toolbox">
-         {#each row1Buttons as b}
+         {#each row1Tools as tool}
             <Button
-               label={labelOfButton(b)}
-               isMouseButton={buttonMap.LMB === b}
-               isPressed={button[b].state !== null}
+               label={labelOfButton(tool)}
+               isHeld={heldTool?.tool === tool}
+               shouldBind={heldTool?.tool === tool && heldTool.shouldBind}
+               isBound={boundTool === tool}
                on:mousedown={() => {
-                  buttonSelected(b)
+                  boundTool = tool
                }}
             />
          {/each}
-         {#each row2Buttons as b}
+         {#each row2Tools as tool}
             <Button
-               label={labelOfButton(b)}
-               isMouseButton={buttonMap.LMB === b}
-               isPressed={button[b].state !== null}
+               label={labelOfButton(tool)}
+               isHeld={heldTool?.tool === tool}
+               shouldBind={heldTool?.tool === tool && heldTool.shouldBind}
+               isBound={boundTool === tool}
                on:mousedown={() => {
-                  buttonSelected(b)
+                  boundTool = tool
                }}
             />
          {/each}

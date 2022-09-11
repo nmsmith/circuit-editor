@@ -1,12 +1,14 @@
 <script lang="ts">
    export let label: string
-   export let isMouseButton: boolean
-   export let isPressed: boolean
+   export let isHeld: boolean
+   export let shouldBind: boolean | undefined
+   export let isBound: boolean
    let className: string
    $: {
       className = "button"
-      if (isMouseButton) className += " mouse"
-      if (isPressed) className += " pressed"
+      if (isHeld) className += " isHeld"
+      if (shouldBind) className += " shouldBind"
+      if (isBound) className += " isBound"
    }
 </script>
 
@@ -22,13 +24,14 @@
       user-select: none;
       -webkit-user-select: none;
    }
-   .mouse {
-      background-color: rgb(255, 252, 170);
-   }
-   .pressed {
+   .isHeld {
+      background-color: rgb(220, 220, 220);
       box-shadow: 1px 1px 2px 1px #00000088 inset;
       padding-left: 1px;
       padding-top: 1px;
+   }
+   .isBound {
+      background-color: rgb(255, 252, 170);
    }
    .capital {
       display: inline;
