@@ -463,7 +463,7 @@
    let toolBeingUsed: null | {
       tool: Tool
       canvasDownPosition: Point
-      chainDrawFromEnd?: Junction // Special field for the draw tool.
+      chainDrawFromEnd?: Vertex // Special field for the draw tool.
    } = null
 
    let pan: null | { clientDownPosition: Point } = null
@@ -740,7 +740,7 @@
       let key = keyInfo.getOrCreate(name)
       if (key.pressing) return // in case we missed a release
       key.pressing = true
-      if (key.type === "pan") {
+      if (key.type === "pan" && !pan) {
          pan = { clientDownPosition: mouseInClient }
       } else if (key.type === "holdTool") {
          if (
@@ -1021,22 +1021,36 @@
       if (!toolBeingUsed) return
       let drawMode = selectedDrawMode()
       if (toolBeingUsed.chainDrawFromEnd) {
-         let end = toolBeingUsed.chainDrawFromEnd
-         toolBeingUsed.chainDrawFromEnd = undefined
          // Start the draw operation at the endpoint of the previous
          // draw operation.
-         let lastDrawAxis = end.axes()[0]
+         let end = toolBeingUsed.chainDrawFromEnd
+         toolBeingUsed.chainDrawFromEnd = undefined
+         // Avoid drawing along undesirable axes.
+         let avoidDrawAxes = new Set<Axis>()
+         if (end.axes().length === 1) {
+            avoidDrawAxes.add(end.axes()[0])
+         } else {
+            // Avoid axes that are "full" (i.e. two segments occupy them).
+            let axes = new Set<Axis>()
+            for (let [seg] of end.edges()) {
+               if (axes.has(seg.axis)) {
+                  avoidDrawAxes.add(seg.axis)
+               } else {
+                  axes.add(seg.axis)
+               }
+            }
+         }
          // Determine the axis the draw operation should begin along.
          let drawAxis = Axis.fromVector(dragVector) as Axis
          if (drawMode === "strafing") {
             drawAxis = nearestAxis(
                drawAxis,
-               primaryAxes.filter((axis) => axis !== lastDrawAxis)
+               primaryAxes.filter((axis) => !avoidDrawAxes.has(axis))
             )
          } else if (drawMode === "snapped rotation") {
             drawAxis = nearestAxis(
                drawAxis,
-               snapAxes.filter((axis) => axis !== lastDrawAxis)
+               snapAxes.filter((axis) => !avoidDrawAxes.has(axis))
             )
          }
          newDraw(end, drawAxis)
@@ -1183,7 +1197,7 @@
       }
       beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
-   function endDraw(allowedToDelete: boolean = true) {
+   function endDraw(willChainDraw: boolean = false): Vertex | undefined {
       if (!draw) return
       endSlide()
       let segment = draw.segment
@@ -1201,24 +1215,32 @@
          }
          return true
       }
+      let endVertex: Vertex | undefined
       if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
-         if (endObject) {
-            if (endObject instanceof Segment) {
-               // Turn the intersected Segment into a T-junction.
-               endObject.splitAt(draw.end)
-            } else {
-               let extend =
-                  endObject instanceof Junction &&
-                  shouldExtendTheSegmentAt(endObject, segment.axis)
-               // Replace the drawn segment with one that ends at the Vertex.
-               segment.replaceWith(
-                  new Segment(segment.start, endObject, segment.axis)
-               )
-               if (extend)
-                  (endObject as Junction).convertToCrossing(crossingMap)
-            }
+         if (endObject instanceof Segment) {
+            // Turn the intersected Segment into a T-junction.
+            endObject.splitAt(draw.end)
+            endVertex = draw.end
+         } else if (endObject) {
+            // Check whether there is an existing segment incident to the
+            // endObject (before we attach the new one), that has the same axis.
+            let extend =
+               endObject instanceof Junction &&
+               shouldExtendTheSegmentAt(endObject, segment.axis)
+            // Replace the drawn segment with one that ends at the endObject.
+            segment.replaceWith(
+               new Segment(segment.start, endObject, segment.axis)
+            )
+            endVertex = endObject
+            // Consider fusing the segment with an existing segment.
+            if (extend && !willChainDraw)
+               (endObject as Junction).convertToCrossing(crossingMap)
+         } else {
+            endVertex = draw.end
          }
-      } else if (allowedToDelete) {
+      } else if (willChainDraw) {
+         endVertex = draw.end
+      } else {
          deleteItems([draw.end])
       }
       draw = null
@@ -1227,6 +1249,8 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+
+      return endVertex
    }
    function abortDraw() {
       abortSlide()
@@ -1238,9 +1262,7 @@
       draw.segment.isRigid = rigidifyCurrent
       // Start a new draw operation at the current draw endpoint.
       toolBeingUsed.canvasDownPosition = mouseOnCanvas
-      toolBeingUsed.chainDrawFromEnd = draw.end
-      draw.endObject = undefined // Don't connect to anything else.
-      endDraw(false)
+      toolBeingUsed.chainDrawFromEnd = endDraw(true)
    }
    function beginSlide(slideAxis: Axis, grabbed: Grabbable, atPart: Point) {
       function generateInstructions(
