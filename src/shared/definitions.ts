@@ -146,6 +146,27 @@ export class Port extends Point {
    }
 }
 
+export type LineType = {
+   name: string // name of the JSON file
+   // The remaining fields correspond to the contents of the JSON file:
+   color: string // hex color
+   thickness: number // in pixels
+   dasharray: null | string // in the format of SVG's stroke-dasharray
+   ending: null | string // file path
+   meeting: {
+      // "lineType" should be the file name of another line type (sans file
+      // extension), and "pass/L/T/X" should be the file name of the symbol that
+      // should appear at each meeting type (with extension). The letters L/T/X
+      // refer to the shape of the intersection where the two line types meet.
+      [lineType: string]: {
+         pass: null | string // when the two line types pass over one another
+         L: null | string // when the two line types intersect at an L
+         T: null | string // when the first line type intersects this one at a T
+         X: null | string // when the two line types intersect at an X
+      }
+   }
+}
+
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    isRigid = false

@@ -12,6 +12,7 @@
       SymbolKind,
       SymbolInstance,
       convertToJunction,
+      LineType,
    } from "~/shared/definitions"
    import {
       rememberAxis,
@@ -46,6 +47,16 @@
       "pump.svg",
       "valve.svg",
    ]
+   const lineTypesForBrowserTesting: LineType[] = []
+   // Load the test line types asynchronously.
+   ;["hydraulic.json"].map((fileName) =>
+      fetch("./lines/" + fileName)
+         .then((response) => response.json())
+         .then((json) => {
+            json.name = fileName
+            lineTypesForBrowserTesting.push(json)
+         })
+   )
    let canvas: SVGElement | undefined // the root element of this component
    const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
    const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
@@ -386,7 +397,8 @@
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let projectFolder: null | string = null
-   let symbolFiles: null | string[] = []
+   let symbolFiles: null | string[] = null
+   let lineTypes: null | LineType[] = null
    // If we're not using Electron, use dummy symbols.
    let usingElectron: boolean
    try {
@@ -395,6 +407,7 @@
    } catch {
       usingElectron = false
       symbolFiles = symbolFilesForBrowserTesting
+      lineTypes = lineTypesForBrowserTesting
    }
 
    let symbolKinds: SymbolKind[] = []
@@ -2015,8 +2028,12 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (event.repeat) return // Ignore repeated events from held-down keys.
-      keyPressed(event.code)
+      if (!event.repeat) {
+         // Ignore repeated events from held-down keys.
+         keyPressed(event.code)
+      }
+      if (keyInfo.read(Control).pressing && event.code === "KeyA")
+         event.preventDefault() // Don't select all text on the page.
    }}
    on:keyup={(event) => {
       updateModifierKeys(event)
@@ -2281,32 +2298,35 @@
    </svg>
 
    <div class="sidebar">
-      <div class="projectPane">
-         <button
-            on:click={async () => {
-               if (!usingElectron) return
-               let response = await fileSystem.openDirectory()
-               if (response) {
-                  projectFolder = response
-                  let newFiles = await fileSystem.getFileNames(
-                     path.join(projectFolder, "symbols")
-                  )
-                  if (newFiles) {
-                     symbolFiles = newFiles.filter(
-                        (s) => path.extname(s) === ".svg"
+      <div class="topThings">
+         <div class="projectPane">
+            <button
+               on:click={async () => {
+                  if (!usingElectron) return
+                  let response = await fileSystem.openDirectory()
+                  if (response) {
+                     projectFolder = response
+                     let newFiles = await fileSystem.getFileNames(
+                        path.join(projectFolder, "symbols")
                      )
-                  } else {
-                     symbolFiles = null
+                     if (newFiles) {
+                        symbolFiles = newFiles.filter(
+                           (s) => path.extname(s) === ".svg"
+                        )
+                     } else {
+                        symbolFiles = null
+                     }
+                     symbolKinds = []
                   }
-                  symbolKinds = []
-               }
-            }}>Choose a project folder</button
-         >
-         {#if projectFolder}
-            <div><b>Project name:</b> {path.basename(projectFolder)}</div>
-         {:else}
-            <div>No folder chosen.</div>
-         {/if}
+               }}>Choose a project folder</button
+            >
+            {#if projectFolder}
+               <div><b>Project name:</b> {path.basename(projectFolder)}</div>
+            {:else}
+               <div>No folder chosen.</div>
+            {/if}
+         </div>
+         <div class="paneTitle">Symbols</div>
       </div>
       <div
          class="symbolPane"
@@ -2349,11 +2369,11 @@
                {/each}
             </div>
          {:else if projectFolder}
-            <div class="symbolPaneMessage">
-               Failed to find a "symbol" folder within the project folder.
+            <div class="paneMessage">
+               Failed to find a "symbols" folder within the project folder.
             </div>
          {:else}
-            <div class="symbolPaneMessage">
+            <div class="paneMessage">
                <p>
                   When you open a project folder, your schematic symbols will be
                   displayed here.
@@ -2362,6 +2382,27 @@
                <p>
                   The SVG files for each symbol must be placed in a folder named
                   "symbols" within the project folder.
+               </p>
+            </div>
+         {/if}
+      </div>
+      <div class="paneTitle linePaneTitle">Lines</div>
+      <div class="linePane">
+         {#if lineTypes}
+            <div class="lineGrid">
+               {#each lineTypes as line}
+                  <div class="lineGridItem">Line</div>
+               {/each}
+            </div>
+         {:else if projectFolder}
+            <div class="paneMessage">
+               Failed to find a "lines" folder within the project folder.
+            </div>
+         {:else}
+            <div class="paneMessage">
+               <p>
+                  Similarly, the JSON files for each line type must be placed in
+                  a folder named "lines".
                </p>
             </div>
          {/if}
@@ -2385,28 +2426,36 @@
          {/each}
       </div>
       <div class="toolbox">
-         {#each row1Tools as tool}
-            <Button
-               label={labelOfButton(tool)}
-               isHeld={heldTool?.tool === tool}
-               shouldBind={heldTool?.tool === tool && heldTool.shouldBind}
-               isBound={boundTool === tool}
-               on:mousedown={() => {
-                  boundTool = tool
-               }}
-            />
-         {/each}
-         {#each row2Tools as tool}
-            <Button
-               label={labelOfButton(tool)}
-               isHeld={heldTool?.tool === tool}
-               shouldBind={heldTool?.tool === tool && heldTool.shouldBind}
-               isBound={boundTool === tool}
-               on:mousedown={() => {
-                  boundTool = tool
-               }}
-            />
-         {/each}
+         <div class="toolButtons">
+            {#each row1Tools as tool}
+               <Button
+                  label={labelOfButton(tool)}
+                  isSelected={toolToUse === tool}
+                  isHeld={heldTool?.tool === tool}
+                  isBound={boundTool === tool &&
+                     (heldTool === null ||
+                        heldTool.tool === tool ||
+                        heldTool.shouldBind === false)}
+                  on:mousedown={() => {
+                     boundTool = tool
+                  }}
+               />
+            {/each}
+            {#each row2Tools as tool}
+               <Button
+                  label={labelOfButton(tool)}
+                  isSelected={toolToUse === tool}
+                  isHeld={heldTool?.tool === tool}
+                  isBound={boundTool === tool &&
+                     (heldTool === null ||
+                        heldTool.tool === tool ||
+                        heldTool.shouldBind === false)}
+                  on:mousedown={() => {
+                     boundTool = tool
+                  }}
+               />
+            {/each}
+         </div>
       </div>
    </div>
    {#if grabbedSymbol}
@@ -2486,8 +2535,34 @@
    :global(.debug.fill) {
       fill: #e58a00;
    }
+   @font-face {
+      font-family: "Inter";
+      src: url("fonts/Inter.ttf");
+      font-weight: 1 1000;
+      font-synthesis: none;
+   }
+   @font-face {
+      font-family: "Fira Code";
+      src: url("fonts/FiraCode.ttf");
+      font-weight: 1 1000;
+      font-synthesis: none;
+   }
+   @font-face {
+      font-family: "PT Mono";
+      src: url("fonts/PTMono.ttf");
+      font-synthesis: none;
+   }
+   :global(html, body, table, tr, td) {
+      font-family: "Inter";
+   }
+   :global(input, button, select, textarea, optgroup, option) {
+      font-family: inherit;
+      font-size: inherit;
+      font-style: inherit;
+      font-weight: inherit;
+   }
    div {
-      font: 14px sans-serif;
+      font-size: 14px;
    }
    p {
       margin: 0;
@@ -2499,29 +2574,44 @@
       position: absolute;
       top: 0;
       left: 0;
-      width: 254px;
+      width: 287px;
       height: 100%;
-      background-color: rgb(231, 234, 237);
-      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);
+      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
       display: flex;
       flex-direction: column;
+      background-color: rgb(193, 195, 199);
+   }
+   .topThings,
+   .linePaneTitle,
+   .configPane {
+      box-shadow: 0 0 3px 1px rgb(0, 0, 0, 0.3);
+   }
+   .topThings {
+      z-index: 1;
+   }
+   .paneTitle {
+      flex-shrink: 0;
+      padding: 4px;
+      font-size: 15px;
+      font-weight: 600;
+      background-color: rgb(231, 234, 237);
    }
    .projectPane {
+      flex-shrink: 0;
       padding: 4px;
-      border-bottom: 1px solid black;
       display: flex;
       flex-direction: column;
       gap: 4px;
+      background-color: rgb(231, 234, 237);
+      border-bottom: 1px solid grey;
    }
    .symbolPane {
-      flex-grow: 1;
+      min-height: 100px;
       overflow-x: hidden;
       overflow-y: scroll;
-      background-color: rgb(90, 90, 90);
    }
-   .symbolPaneMessage {
+   .paneMessage {
       padding: 4px;
-      background-color: rgb(193, 195, 199);
    }
    .symbolGrid {
       display: flex;
@@ -2529,6 +2619,7 @@
       gap: 1px;
       user-select: none;
       -webkit-user-select: none;
+      background-color: rgb(90, 90, 90);
    }
    .symbolGridItem {
       height: 80px;
@@ -2548,12 +2639,22 @@
    .grabbedSymbolImage {
       pointer-events: none;
    }
+   .linePane {
+      min-height: 100px;
+      flex-grow: 1;
+      overflow-x: hidden;
+      overflow-y: scroll;
+   }
    .configPane {
+      z-index: 2;
+      flex-shrink: 0;
       height: 48px;
       display: flex;
       flex-direction: row;
       user-select: none;
       -webkit-user-select: none;
+      background-color: rgb(231, 234, 237);
+      border-bottom: 1px solid rgb(156, 156, 156);
    }
    .configItem {
       flex: 1;
@@ -2584,12 +2685,19 @@
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);
    }
    .toolbox {
-      border-top: 1px solid black;
+      z-index: 1;
+      flex-shrink: 0;
+      background-color: rgb(231, 234, 237);
+      /* box-shadow: 0px 0px 2px 1px #00000088 inset; */
+   }
+   .toolButtons {
       display: grid;
-      grid-template-rows: 50px 50px;
-      grid-template-columns: repeat(5, 50px);
-      gap: 1px;
-      background-color: rgb(58, 58, 58);
+      grid-template-rows: 53px 53px;
+      grid-template-columns: repeat(5, 53px);
+      gap: 3px;
+      padding: 5px;
+      padding-top: 4px;
+      filter: drop-shadow(0 0 2px rgb(0, 0, 0, 0.9));
    }
    svg {
       width: 100%;
