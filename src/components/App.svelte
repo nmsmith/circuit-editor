@@ -47,14 +47,21 @@
       "pump.svg",
       "valve.svg",
    ]
-   const lineTypesForBrowserTesting: LineType[] = []
+   let lineTypesForBrowserTesting: LineType[] = []
    // Load the test line types asynchronously.
-   ;["hydraulic.json"].map((fileName) =>
+   ;[
+      "hydraulic.json",
+      "pilot.json",
+      "drain.json",
+      "manifold.json",
+      "reservoir.json",
+   ].map((fileName) =>
       fetch("./lines/" + fileName)
          .then((response) => response.json())
          .then((json) => {
             json.name = fileName
             lineTypesForBrowserTesting.push(json)
+            lineTypes = lineTypes // for Svelte
          })
    )
    let canvas: SVGElement | undefined // the root element of this component
@@ -464,6 +471,7 @@
    let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
 
+   let selectedLineType: null | LineType = null
    // The "boundTool" is the tool that will be used when no keyboard keys of
    // type "holdTool" are being pressed.
    let boundTool: Tool = "draw"
@@ -2089,6 +2097,7 @@
    }}
 >
    <svg
+      class="canvas"
       bind:this={canvas}
       style="cursor: {cursor}"
       on:mousedown={(event) => {
@@ -2391,7 +2400,27 @@
          {#if lineTypes}
             <div class="lineGrid">
                {#each lineTypes as line}
-                  <div class="lineGridItem">Line</div>
+                  <div
+                     class="lineGridItem {line === selectedLineType
+                        ? 'selected'
+                        : ''}"
+                     on:click={() => (selectedLineType = line)}
+                  >
+                     <div class="lineName">
+                        {line.name.replace(".json", "")}
+                     </div>
+                     <svg class="lineSvg">
+                        <line
+                           stroke={line.color}
+                           stroke-width={line.thickness}
+                           stroke-dasharray={line.dasharray}
+                           x1="8"
+                           y1="8"
+                           x2="1000"
+                           y2="8"
+                        />
+                     </svg>
+                  </div>
                {/each}
             </div>
          {:else if projectFolder}
@@ -2528,13 +2557,6 @@
    :global(.grab.fill) {
       fill: white;
    }
-   :global(.debug.stroke) {
-      stroke: #e58a00;
-      fill: none;
-   }
-   :global(.debug.fill) {
-      fill: #e58a00;
-   }
    @font-face {
       font-family: "Inter";
       src: url("fonts/Inter.ttf");
@@ -2586,7 +2608,8 @@
    .configPane {
       box-shadow: 0 0 3px 1px rgb(0, 0, 0, 0.3);
    }
-   .topThings {
+   .topThings,
+   .linePaneTitle {
       z-index: 1;
    }
    .paneTitle {
@@ -2645,6 +2668,27 @@
       overflow-x: hidden;
       overflow-y: scroll;
    }
+   .lineGrid {
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      user-select: none;
+      -webkit-user-select: none;
+   }
+   .lineGridItem {
+      padding: 4px;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 4px;
+   }
+   .lineGridItem.selected {
+      background-color: white;
+   }
+   .lineSvg {
+      height: 16px;
+      stroke-linecap: round;
+   }
    .configPane {
       z-index: 2;
       flex-shrink: 0;
@@ -2696,10 +2740,9 @@
       grid-template-columns: repeat(5, 53px);
       gap: 3px;
       padding: 5px;
-      padding-top: 4px;
       filter: drop-shadow(0 0 2px rgb(0, 0, 0, 0.9));
    }
-   svg {
+   .canvas {
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
