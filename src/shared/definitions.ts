@@ -68,9 +68,6 @@ export class Junction extends Point implements Deletable {
       this.edges_.delete(edge)
       if (this.edges_.size === 0) this.delete()
    }
-   isStraightLine() {
-      return this.edges_.size === 2 && this.axes().length === 1
-   }
    // If the junction is an X-junction or a straight line, convert it to a
    // crossing. Thereafter, all references to the junction should be discarded.
    convertToCrossing(
@@ -92,6 +89,7 @@ export class Junction extends Point implements Deletable {
       let crossing = []
       for (let segs of pairs) {
          let mergedSegment = new Segment(
+            segs[0].type, // Arbitrarily choose the first segment's type.
             this === segs[0].start ? segs[0].end : segs[0].start,
             this === segs[1].start ? segs[1].end : segs[1].start,
             segs[0].axis
@@ -147,7 +145,7 @@ export class Port extends Point {
 }
 
 export type LineType = {
-   name: string // name of the JSON file
+   name: string // name of the JSON file (sans extension)
    // The remaining fields correspond to the contents of the JSON file:
    color: string // hex color
    thickness: number // in pixels
@@ -169,14 +167,16 @@ export type LineType = {
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
+   type: LineType
    isRigid = false
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(
       () => "H up"
    )
    private readonly edgeS: Edge
    private readonly edgeE: Edge
-   constructor(start: Vertex, end: Vertex, axis: Axis) {
+   constructor(type: LineType, start: Vertex, end: Vertex, axis: Axis) {
       super(start, end, axis)
+      this.type = type
       this.edgeS = [this, end]
       this.edgeE = [this, start]
 
@@ -221,8 +221,8 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    splitAt(point: Junction) {
       let { start, end, axis } = this
       this.replaceWith(
-         new Segment(point, start, axis),
-         new Segment(point, end, axis)
+         new Segment(this.type, point, start, axis),
+         new Segment(this.type, point, end, axis)
       )
    }
 }
@@ -247,52 +247,128 @@ export class SymbolInstance extends Rectangle implements Deletable {
    static s = new Set<SymbolInstance>()
    private static nextUUID = 0
    readonly kind: SymbolKind
-   readonly svg: SVGElement
+   readonly image: SVGElement
+   readonly highlight: SVGElement
    readonly idSuffix: string
    readonly ports: Port[]
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
       super(position, rotation, kind.collisionBox)
       this.kind = kind
-      this.svg = document.createElementNS("http://www.w3.org/2000/svg", "g")
       this.idSuffix = ":" + SymbolInstance.nextUUID++
       this.ports = kind.portLocations.map(
          (p) => new Port(this, this.fromRectCoordinates(p))
       )
-      let image = kind.svgTemplate.cloneNode(true) as SVGElement
-      // Namespace the IDs (since IDs must be unique amongst all instances).
-      for (let element of this.svg.querySelectorAll("*")) {
-         if (element.hasAttribute("id")) {
-            element.setAttribute("id", element.id + this.idSuffix)
+      SymbolInstance.s.add(this)
+
+      // Create the SVG for this Symbol.
+      let svg = kind.svgTemplate.cloneNode(true) as SVGElement
+      this.namespaceIDs(svg)
+      this.image = document.createElementNS("http://www.w3.org/2000/svg", "g")
+      this.image.appendChild(svg)
+      document.getElementById("symbol layer")?.appendChild(this.image)
+      // Create the SVG for this Symbol's highlight.
+      let highlightSvg = kind.svgTemplate.cloneNode(true) as SVGElement
+      this.namespaceIDs(highlightSvg, true)
+      this.highlight = document.createElementNS(
+         "http://www.w3.org/2000/svg",
+         "g"
+      )
+      this.highlight.appendChild(highlightSvg)
+      // Find all the strokeable elements, and turn them into a highlight by
+      // assigning them a thick stroke whose color is the highlight color.
+      for (let e of highlightSvg.querySelectorAll(
+         "circle, ellipse, line, path, polygon, polyline, rect, text, textPath"
+      )) {
+         // We need to robustly check whether element "e" is actually visible.
+         // If it isn't visible, we shouldn't highlight it.
+         let stroke = e.getAttribute("stroke")
+         let so = e.getAttribute("stroke-opacity")
+         let strokeOpacity = so ? parseFloat(so) : 1 // default, per SVG spec
+         let sw = e.getAttribute("stroke-width")
+         let strokeWidth = sw ? parseFloat(sw) : 1 // default, per SVG spec
+         let fill = e.getAttribute("fill")
+         let fo = e.getAttribute("fill-opacity")
+         let fillOpacity = fo ? parseFloat(fo) : 1
+         function hasOpacity0(color: string): boolean {
+            let rgba = color.split(",") // I'm not handling rgba() with spaces.
+            if (rgba.length === 4) {
+               return parseFloat(rgba[3]) === 0
+            } else if (color[0] === "#") {
+               if (color.length === 5) return color[4] === "0"
+               else return color.slice(7) === "00"
+            } else {
+               return color === "transparent"
+            }
          }
-         if (element.nodeName === "use") {
-            let xlink = "http://www.w3.org/1999/xlink"
-            let ref = element.getAttribute("href")
-            let xRef = element.getAttributeNS(xlink, "href")
-            if (ref && ref[0] === "#")
-               element.setAttribute("href", ref + this.idSuffix)
-            else if (xRef && xRef[0] === "#")
-               element.setAttributeNS(xlink, "href", xRef + this.idSuffix)
+         let noStroke =
+            !stroke ||
+            stroke === "none" ||
+            hasOpacity0(stroke) ||
+            strokeOpacity === 0 ||
+            strokeWidth === 0
+         let noFill =
+            fill === "none" || (fill && hasOpacity0(fill)) || fillOpacity === 0
+         if (
+            e.getAttribute("display") === "none" ||
+            e.getAttribute("visibility") === "hidden" ||
+            parseFloat(e.getAttribute("opacity") as string) === 0 ||
+            (noStroke && noFill)
+         ) {
+            // The element is invisible, so it shouldn't be used as a highlight.
+            e.remove()
+         } else {
+            // Turn the element into a highlight.
+            e.setAttribute("fill", "none")
+            e.setAttribute("stroke", "white")
+            e.setAttribute("stroke-width", (strokeWidth + 5).toString())
+            // To stop highlights from "poking out" too far, use a round join.
+            e.setAttribute("stroke-linejoin", "round")
          }
       }
-      this.svg.appendChild(image)
-      SymbolInstance.s.add(this)
-      document.getElementById("symbol layer")?.appendChild(this.svg)
+      // When rendering the highlight, ignore its viewbox.
+      highlightSvg.setAttribute("overflow", "visible")
+      // TODO: Dynamically assign the highlight to an appropriate layer.
+      document
+         .getElementById("symbol grabLight layer")
+         ?.appendChild(this.highlight)
+   }
+   private namespaceIDs(svg: SVGElement, isHighlight?: boolean) {
+      // To prevent the IDs of different instances of a Symbol SVG,
+      // namespace the IDs.
+      let suffix = this.idSuffix + (isHighlight ? "h" : "")
+      for (let element of svg.querySelectorAll("[id]")) {
+         element.setAttribute("id", element.id + suffix)
+      }
+      for (let element of svg.querySelectorAll("use")) {
+         const xlink = "http://www.w3.org/1999/xlink"
+         let ref = element.getAttribute("href")
+         let xRef = element.getAttributeNS(xlink, "href")
+         if (ref && ref[0] === "#") element.setAttribute("href", ref + suffix)
+         else if (xRef && xRef[0] === "#")
+            element.setAttributeNS(xlink, "href", xRef + suffix)
+      }
    }
    refresh() {
       // Add the SVG back to the DOM after a hot reload. (only needed for dev.)
-      document.getElementById("symbol layer")?.appendChild(this.svg)
+      document.getElementById("symbol layer")?.appendChild(this.image)
+      document
+         .getElementById("symbol grabLight layer")
+         ?.appendChild(this.highlight)
    }
    delete(): Set<Junction> {
       SymbolInstance.s.delete(this)
-      this.svg.remove()
+      this.image.remove()
+      this.highlight.remove()
       for (let port of this.ports) {
          Port.s.delete(port)
          if (port.edges().size > 0) {
             // Convert the Port to a Junction, and replace the Port's segments.
             let junction = new Junction(port)
             for (let [oldSegment, v] of port.edges()) {
-               oldSegment.replaceWith(new Segment(junction, v, oldSegment.axis))
+               oldSegment.replaceWith(
+                  new Segment(oldSegment.type, junction, v, oldSegment.axis)
+               )
             }
             port.edges().clear()
          }
@@ -309,12 +385,11 @@ export class SymbolInstance extends Rectangle implements Deletable {
    }
    moveTo(point: Point) {
       ;(this.position as Point) = point
-      this.svg.setAttribute(
-         "transform",
-         `translate(${point.x} ${
-            point.y
-         }) rotate(${this.rotation().toDegrees()})`
-      )
+      let translate = `translate(${point.x} ${
+         point.y
+      }) rotate(${this.rotation().toDegrees()})`
+      this.image.setAttribute("transform", translate)
+      this.highlight.setAttribute("transform", translate)
       for (let [i, port] of this.ports.entries()) {
          let p = this.fromRectCoordinates(this.kind.portLocations[i])
          ;(port.x as number) = p.x

@@ -1,5 +1,5 @@
 {
-   "color": "#0000FF",
+   "color": "#00F",
    "thickness": 3,
    "dasharray": "6 6",
    "ending": null,
@@ -10,11 +10,23 @@
          "T": "node.svg",
          "X": "node.svg"
       },
+      "drain": {
+         "pass": "hopover.svg",
+         "L": null,
+         "T": "node.svg",
+         "X": "node.svg"
+      },
+      "pilot": {
+         "pass": "hopover.svg",
+         "L": null,
+         "T": "node.svg",
+         "X": "node.svg"
+      },
       "manifold": {
-         "pass": "hole.svg",
+         "pass": "port.svg",
          "L": null,
          "T": "plug.svg",
-         "X": "hole.svg"
+         "X": "port.svg"
       }
    }
 }

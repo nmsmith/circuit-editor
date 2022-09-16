@@ -1,20 +1,7 @@
 {
-   "color": "#999999",
+   "color": "#666",
    "thickness": 1,
    "dasharray": "50 5 10 5 10 5",
    "ending": null,
-   "meeting": {
-      "hydraulic": {
-         "pass": "hopover.svg",
-         "L": null,
-         "T": "node.svg",
-         "X": "node.svg"
-      },
-      "manifold": {
-         "pass": "hole.svg",
-         "L": null,
-         "T": "plug.svg",
-         "X": "hole.svg"
-      }
-   }
+   "meeting": {}
 }

@@ -10,5 +10,6 @@
    "svelte.plugin.svelte.compilerWarnings": {
       "missing-declaration": "ignore"
    },
-   "eslint.validate": ["javascript", "javascriptreact", "svelte"]
+   "eslint.validate": ["javascript", "javascriptreact", "svelte"],
+   "svg.preview.background": "transparent"
 }

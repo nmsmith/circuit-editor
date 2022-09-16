@@ -34,4 +34,11 @@
    .debug {
       stroke-width: 8px;
    }
+   .fluid.stroke {
+      stroke: blue;
+      fill: none;
+   }
+   .hover.stroke {
+      stroke: rgb(0, 234, 255);
+   }
 </style>

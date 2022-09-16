@@ -31,12 +31,10 @@
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
    import { DefaultMap } from "~/shared/utilities"
-   import FluidLine from "~/components/lines/FluidLine.svelte"
+   import CircuitLine from "~/components/lines/CircuitLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
-   import JunctionNode from "~/components/lines/JunctionNode.svelte"
    import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
-   import Plug from "~/components/lines/Plug.svelte"
    import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
 
@@ -46,6 +44,9 @@
       "prox sensor.svg",
       "pump.svg",
       "valve.svg",
+      "node.svg",
+      "port.svg",
+      "plug.svg",
    ]
    let lineTypesForBrowserTesting: LineType[] = []
    // Load the test line types asynchronously.
@@ -59,7 +60,18 @@
       fetch("./lines/" + fileName)
          .then((response) => response.json())
          .then((json) => {
-            json.name = fileName
+            json.name = fileName.replace(".json", "")
+            // Wrap the "meeting" dict in a Proxy such that it returns a
+            // default value for missing line types.
+            json.meeting = new Proxy(json.meeting, {
+               get: (object, prop) => {
+                  if (prop in object) {
+                     return object[prop]
+                  } else {
+                     return { pass: null, L: null, T: null, X: null }
+                  }
+               },
+            })
             lineTypesForBrowserTesting.push(json)
             lineTypes = lineTypes // for Svelte
          })
@@ -69,7 +81,6 @@
    const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
-   type Operation = Tool | "pan"
    // Input constants
    const panSpeed = 1.5 // when panning with trackpad
    const pinchZoomSpeed = 0.02
@@ -536,10 +547,11 @@
    }
    let eraseSelect: SelectOperation<Grabbable>
    $: {
-      for (let symbol of SymbolInstance.s)
-         symbol.svg.style.visibility = eraseSelect?.items.has(symbol)
-            ? "hidden"
-            : "visible"
+      for (let symbol of SymbolInstance.s) {
+         let vis = eraseSelect?.items.has(symbol) ? "hidden" : "visible"
+         symbol.image.style.visibility = vis
+         symbol.highlight.style.visibility = vis
+      }
    }
    let rigidSelect: SelectOperation<Segment>
    let flexSelect: SelectOperation<Segment>
@@ -654,15 +666,14 @@
       | {
            type: "hopover"
            segment: Segment
-           point: Point
+           position: Point
            start: Point
            end: Point
            flip: boolean
            style: HighlightStyle
         }
-      | { type: "junction node"; junction: Junction; style: HighlightStyle }
-      | { type: "plug"; vertex: Vertex; style: HighlightStyle }
-      | { type: "point marker"; point: Point; style: HighlightStyle }
+      | { type: "glyph"; glyph: string; position: Point; style: HighlightStyle }
+      | { type: "point marker"; position: Point; style: HighlightStyle }
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
@@ -699,7 +710,7 @@
                glyphsToDraw.add({
                   type: "hopover",
                   segment,
-                  point: crossPoint,
+                  position: crossPoint,
                   start,
                   end,
                   flip,
@@ -708,7 +719,7 @@
             } else if (type === "no hop" && hoverLight.has(crossPoint)) {
                glyphsToDraw.add({
                   type: "point marker",
-                  point: crossPoint,
+                  position: crossPoint,
                   style: styleOf(crossPoint),
                })
             }
@@ -726,30 +737,79 @@
       }
       // Determine the other glyphs that need to be drawn at vertices.
       for (let v of allVertices()) {
-         if (v.glyph === "plug") {
-            glyphsToDraw.add({ type: "plug", vertex: v, style: styleOf(v) })
-         } else if (v instanceof Junction) {
-            if (v.edges().size > 2) {
+         if (v instanceof Junction) {
+            // Find the appropriate glyph to display at the Junction.
+            let glyph: null | string = null
+            let edgeTypes = [...v.edges()].map(([segment]) => segment.type)
+            if (edgeTypes.length === 1) {
+               glyph = edgeTypes[0].ending
+            } else if (edgeTypes.length === 2) {
+               let glyphA = edgeTypes[0].meeting[edgeTypes[1].name].L
+               let glyphB = edgeTypes[1].meeting[edgeTypes[0].name].L
+               if (glyphA === glyphB) {
+                  glyph = glyphA
+               } else if (!glyphA || !glyphB) {
+                  glyph = glyphA || glyphB
+               } else {
+                  glyph = null
+               }
+            } else if (edgeTypes.length === 3) {
+               if (edgeTypes[0].name === edgeTypes[1].name) {
+                  glyph = edgeTypes[2].meeting[edgeTypes[0].name].T
+               } else if (edgeTypes[0].name === edgeTypes[2].name) {
+                  glyph = edgeTypes[1].meeting[edgeTypes[0].name].T
+               } else if (edgeTypes[1].name === edgeTypes[2].name) {
+                  glyph = edgeTypes[0].meeting[edgeTypes[1].name].T
+               } else {
+                  // If each edge has a different type, don't show a glyph.
+                  glyph = null
+               }
+            } else if (edgeTypes.length >= 4) {
+               let names = new Set(edgeTypes.map((t) => t.name))
+               if (names.size === 1) {
+                  glyph = edgeTypes[0].meeting[edgeTypes[0].name].X
+               } else if (names.size === 2) {
+                  let [nameA, nameB] = [...names]
+                  let typeA = edgeTypes.find((t) => t.name == nameA) as LineType
+                  let typeB = edgeTypes.find((t) => t.name == nameB) as LineType
+                  let glyphA = typeA.meeting[typeB.name].X
+                  let glyphB = typeB.meeting[typeA.name].X
+                  if (glyphA === glyphB) {
+                     glyph = glyphA
+                  } else if (!glyphA || !glyphB) {
+                     glyph = glyphA || glyphB
+                  } else {
+                     glyph = null
+                  }
+               } else {
+                  glyph = null
+               }
+            }
+            if (glyph) {
                glyphsToDraw.add({
-                  type: "junction node",
-                  junction: v,
+                  type: "glyph",
+                  glyph,
+                  position: v,
                   style: styleOf(v),
                })
             } else if (
-               v.isStraightLine() ||
                hoverLight.has(v) ||
-               grabLight.has(v)
+               grabLight.has(v) ||
+               (edgeTypes.length === 2 &&
+                  edgeTypes[0].name === edgeTypes[1].name &&
+                  v.axes().length === 1) // The two edges form a straight line.
             ) {
+               // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
                   type: "point marker",
-                  point: v,
+                  position: v,
                   style: styleOf(v),
                })
             }
          } else if (v instanceof Port && hoverLight.has(v)) {
             glyphsToDraw.add({
                type: "point marker",
-               point: v,
+               position: v,
                style: styleOf(v),
             })
          }
@@ -1039,7 +1099,7 @@
       pan = null
    }
    function beginDraw(dragVector: Vector) {
-      if (!toolBeingUsed) return
+      if (!toolBeingUsed || !selectedLineType) return
       let drawMode = selectedDrawMode()
       if (toolBeingUsed.chainDrawFromEnd) {
          // Start the draw operation at the endpoint of the previous
@@ -1074,7 +1134,7 @@
                snapAxes.filter((axis) => !avoidDrawAxes.has(axis))
             )
          }
-         newDraw(end, drawAxis)
+         newDraw(selectedLineType, end, drawAxis)
          return
       } else if (
          closestAttachableOrToggleable(toolBeingUsed.canvasDownPosition)
@@ -1108,21 +1168,21 @@
          if (specialDrawAxis === segment.axis) {
             // Cut the segment, and allow the user to move one side of it.
             let direction = segment.start.displacementFrom(attach.closestPart)
-            let [newStart, other] =
+            let [newStart, otherV] =
                direction.dot(dragVector) > 0
                   ? [segment.start, segment.end]
                   : [segment.end, segment.start]
             let jMove = new Junction(attach.closestPart)
             let jOther = new Junction(attach.closestPart)
-            let moveSegment = new Segment(newStart, jMove, segment.axis)
-            let otherSegment = new Segment(other, jOther, segment.axis)
-            segment.replaceWith(moveSegment, otherSegment)
-            continueDraw(moveSegment, jMove)
+            let move = new Segment(segment.type, newStart, jMove, segment.axis)
+            let other = new Segment(segment.type, otherV, jOther, segment.axis)
+            segment.replaceWith(move, other)
+            continueDraw(move, jMove)
          } else {
             // Create a T-junction.
             let junction = new Junction(attach.closestPart)
             segment.splitAt(junction)
-            newDraw(junction, regularDrawAxis)
+            newDraw(selectedLineType, junction, regularDrawAxis)
          }
       } else if (attach) {
          let vertex = attach.object
@@ -1140,7 +1200,12 @@
                if (other.displacementFrom(vertex).dot(dragVector) <= 0) continue
                // Unplug this segment from the vertex.
                let junction = new Junction(vertex)
-               let newSegment = new Segment(other, junction, segment.axis)
+               let newSegment = new Segment(
+                  segment.type,
+                  other,
+                  junction,
+                  segment.axis
+               )
                segment.replaceWith(newSegment)
                if (vertex instanceof Junction && vertex.edges().size === 2)
                   vertex.convertToCrossing(crossingMap)
@@ -1150,17 +1215,18 @@
                break
             }
          }
-         if (!continuedDraw) newDraw(vertex, regularDrawAxis)
+         if (!continuedDraw) newDraw(selectedLineType, vertex, regularDrawAxis)
       } else
          newDraw(
+            selectedLineType,
             new Junction(toolBeingUsed.canvasDownPosition),
             regularDrawAxis
          )
    }
-   function newDraw(start: Vertex, axis: Axis) {
+   function newDraw(type: LineType, start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
       let end = new Junction(start)
-      let segment = new Segment(start, end, axis)
+      let segment = new Segment(type, start, end, axis)
       draw = {
          mode,
          segment,
@@ -1176,7 +1242,12 @@
          segment = drawSegment
       } else {
          // Flip the segment around.
-         segment = new Segment(drawSegment.end, end, drawSegment.axis)
+         segment = new Segment(
+            drawSegment.type,
+            drawSegment.end,
+            end,
+            drawSegment.axis
+         )
          drawSegment.replaceWith(segment)
       }
       draw = {
@@ -1250,7 +1321,7 @@
                shouldExtendTheSegmentAt(endObject, segment.axis)
             // Replace the drawn segment with one that ends at the endObject.
             segment.replaceWith(
-               new Segment(segment.start, endObject, segment.axis)
+               new Segment(segment.type, segment.start, endObject, segment.axis)
             )
             endVertex = endObject
             // Consider fusing the segment with an existing segment.
@@ -2036,8 +2107,9 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (!event.repeat) {
-         // Ignore repeated events from held-down keys.
+      if (!event.repeat && !keyInfo.read(Control).pressing) {
+         // Ignore repeated events from held-down keys, and don't trigger the
+         // key press if Ctrl/Cmd is held.
          keyPressed(event.code)
       }
       if (keyInfo.read(Control).pressing && event.code === "KeyA")
@@ -2131,9 +2203,8 @@
       <g
          transform="scale({cameraZoom}) translate({svgTranslate.x} {svgTranslate.y})"
       >
-         <!-- Symbol highlight layer -->
-         <g>
-            {#each [...SymbolInstance.s] as symbol}
+         <g id="symbol hoverLight layer">
+            <!-- {#each [...SymbolInstance.s] as symbol}
                {@const c = symbol.svgCorners()}
                {#if styleOf(symbol)}
                   <polygon
@@ -2143,14 +2214,19 @@
                         .y} {c[3].x},{c[3].y}"
                   />
                {/if}
-            {/each}
+            {/each} -->
          </g>
+         <g id="symbol grabLight layer" />
          <!-- Segment highlight layer 1 -->
          <g>
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if hoverLight.has(segment)}
                   {#each sections as section}
-                     <FluidLine renderStyle="hover" segment={section} />
+                     <CircuitLine
+                        renderStyle="hover"
+                        type={segment.type}
+                        segment={section}
+                     />
                   {/each}
                {/if}
             {/each}
@@ -2160,7 +2236,11 @@
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if grabLight.has(segment)}
                   {#each sections as section}
-                     <FluidLine renderStyle="grab" segment={section} />
+                     <CircuitLine
+                        renderStyle="grab"
+                        type={segment.type}
+                        segment={section}
+                     />
                   {/each}
                {/if}
             {/each}
@@ -2170,7 +2250,8 @@
             {#each [...segmentsToDraw] as [segment, sections]}
                {#each sections as section}
                   {#if !eraseSelect?.items.has(segment)}
-                     <FluidLine
+                     <CircuitLine
+                        type={segment.type}
                         segment={section}
                         isRigid={Boolean(
                            (segment.isRigid &&
@@ -2185,17 +2266,10 @@
          <!-- Lower glyph highlight layer -->
          <g>
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
+               {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
                   <PointMarker
                      renderStyle={glyph.style}
-                     position={glyph.point}
-                  />
-               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-                  <Plug renderStyle={glyph.style} position={glyph.vertex} />
-               {:else if glyph.type === "junction node"}
-                  <JunctionNode
-                     renderStyle={glyph.style}
-                     position={glyph.junction}
+                     position={glyph.position}
                   />
                {:else if glyph.type === "hopover"}
                   <Hopover
@@ -2210,12 +2284,15 @@
          <!-- Lower glyph layer -->
          <g>
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.point) === "lower"}
-                  <PointMarker position={glyph.point} />
-               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "lower"}
-                  <Plug position={glyph.vertex} />
-               {:else if glyph.type === "junction node"}
-                  <JunctionNode position={glyph.junction} />
+               {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
+                  <PointMarker position={glyph.position} />
+               {:else if glyph.type === "glyph"}
+                  <g
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y})"
+                  >
+                     <use href={filePathOfSymbol(glyph.glyph) + "#glyph"} />
+                  </g>
                {:else if glyph.type === "hopover"}
                   <Hopover
                      start={glyph.start}
@@ -2235,23 +2312,19 @@
          <!-- Upper glyph highlight layer -->
          <g>
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
+               {#if glyph.type === "point marker" && layerOf(glyph.position) === "upper"}
                   <PointMarker
                      renderStyle={glyph.style}
-                     position={glyph.point}
+                     position={glyph.position}
                   />
-               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-                  <Plug renderStyle={glyph.style} position={glyph.vertex} />
                {/if}
             {/each}
          </g>
          <!-- Upper glyph layer -->
          <g>
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.point) === "upper"}
-                  <PointMarker position={glyph.point} />
-               {:else if glyph.type === "plug" && layerOf(glyph.vertex) === "upper"}
-                  <Plug position={glyph.vertex} />
+               {#if glyph.type === "point marker" && layerOf(glyph.position) === "upper"}
+                  <PointMarker position={glyph.position} />
                {/if}
             {/each}
          </g>
@@ -2407,7 +2480,7 @@
                      on:click={() => (selectedLineType = line)}
                   >
                      <div class="lineName">
-                        {line.name.replace(".json", "")}
+                        {line.name}
                      </div>
                      <svg class="lineSvg">
                         <line
@@ -2529,19 +2602,12 @@
       stroke-linejoin: round;
       stroke-linecap: round;
    }
-   :global(.fluid.stroke) {
-      stroke: blue;
+   :global(.frozen.stroke) {
+      stroke: rgb(113, 68, 29);
       fill: none;
    }
-   :global(.fluid.fill) {
-      fill: blue;
-   }
-   :global(.relaxed.stroke) {
-      stroke: rgb(0, 140, 75);
-      fill: none;
-   }
-   :global(.relaxed.fill) {
-      fill: rgb(0, 140, 75);
+   :global(.frozen.fill) {
+      fill: rgb(113, 68, 29);
    }
    :global(.hover.stroke) {
       stroke: rgb(0, 234, 255);
