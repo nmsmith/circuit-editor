@@ -659,7 +659,7 @@
    $: /* Highlight objects near the mouse cursor. */ {
       hoverLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
-         if (draw?.endObject instanceof Segment) {
+         if (draw?.endObject) {
             hoverLight.add(draw.endObject)
          } else if (!toolBeingUsed) {
             let thing = closestInteractable(mouseOnCanvas)
@@ -676,9 +676,8 @@
    let grabLight: Set<Highlightable>
    $: {
       grabLight = new Set()
-      if (draw) grabLight.add(draw.end)
-      else if (warp) for (let m of warp.movables) grabLight.add(m)
-      else if (slide) grabLight.add(slide.grabbed)
+      if (warp) for (let m of warp.movables) grabLight.add(m)
+      else if (slide && !draw) grabLight.add(slide.grabbed)
    }
    $: {
       // Dynamically assign the highlight of each Symbol to the required layer.
