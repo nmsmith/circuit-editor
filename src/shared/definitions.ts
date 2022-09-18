@@ -258,8 +258,9 @@ export class SymbolKind {
       this.fileName = fileName
       this.svgTemplate = doc.firstChild as SVGElement
       this.svgTemplate.id = fileName
+      this.svgTemplate.classList.add("svgTemplate")
       // Add the template to the main document so its size can be measured.
-      document.getElementById("size testing")?.appendChild(this.svgTemplate)
+      document.getElementById("symbol templates")?.appendChild(this.svgTemplate)
 
       // Compute the bounding box of the whole SVG.
       {
@@ -296,6 +297,10 @@ export class SymbolKind {
       // a "highlight" around the original element.
       this.highlightTemplate = this.svgTemplate.cloneNode(true) as SVGElement
       this.highlightTemplate.id = `${fileName}-highlight`
+      this.highlightTemplate.classList.add("svgTemplate")
+      document
+         .getElementById("symbol templates")
+         ?.appendChild(this.highlightTemplate)
       // Find all the strokeable elements, and turn them into a highlight by
       // assigning them a thick stroke whose color is the highlight color.
       for (let e of this.highlightTemplate.querySelectorAll(
@@ -353,9 +358,6 @@ export class SymbolKind {
       }
       // When rendering the highlight, ignore its viewbox.
       this.highlightTemplate.setAttribute("overflow", "visible")
-      // The required size measurements have now been taken, so remove the SVG
-      // from the main document.
-      //this.svgTemplate.remove() // TODO: Restore this!
    }
 }
 

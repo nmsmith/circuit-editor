@@ -38,8 +38,9 @@
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
+   const pointMarkerFileName = "point marker.svg"
    const symbolsForBrowserTesting: string[] = [
-      "point marker.svg",
+      pointMarkerFileName,
       "node.svg",
       "port.svg",
       "plug.svg",
@@ -370,7 +371,10 @@
          fetch(filePathOfSymbol(fileName))
             .then((response) => response.text())
             .then((text) => {
-               new SymbolKind(fileName, text)
+               let symbolKind = new SymbolKind(fileName, text)
+               if (fileName === pointMarkerFileName) {
+                  pointMarkerGlyph = symbolKind
+               }
                SymbolKind.s = SymbolKind.s // for Svelte's sake
             })
       )
@@ -447,6 +451,7 @@
       loadSymbols(symbolsForBrowserTesting)
       loadLineTypes(lineTypesForBrowserTesting)
    }
+   let pointMarkerGlyph: SymbolKind | undefined
    let symbolLoadError = false
    let lineTypeLoadError = false
 
@@ -704,7 +709,12 @@
            flip: boolean
            style: HighlightStyle
         }
-      | { type: "glyph"; glyph: string; position: Point; style: HighlightStyle }
+      | {
+           type: "glyph"
+           glyph: SymbolKind
+           position: Point
+           style: HighlightStyle
+        }
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
@@ -751,10 +761,14 @@
                   flip,
                   style: styleOf(segment) || styleOf(crossPoint),
                })
-            } else if (type === "no hop" && hoverLight.has(crossPoint)) {
+            } else if (
+               type === "no hop" &&
+               hoverLight.has(crossPoint) &&
+               pointMarkerGlyph
+            ) {
                glyphsToDraw.add({
                   type: "glyph",
-                  glyph: "point marker.svg",
+                  glyph: pointMarkerGlyph,
                   position: crossPoint,
                   style: styleOf(crossPoint),
                })
@@ -821,32 +835,39 @@
                   glyph = null
                }
             }
-            if (glyph) {
+            let glyphSymbol = [...SymbolKind.s].find((k) => k.fileName == glyph)
+            if (glyph && glyphSymbol) {
                glyphsToDraw.add({
                   type: "glyph",
-                  glyph,
+                  glyph: glyphSymbol,
                   position: v,
                   style: styleOf(v),
                })
             } else if (
-               hoverLight.has(v) ||
-               grabLight.has(v) ||
-               (edgeTypes.length === 2 &&
-                  edgeTypes[0].name === edgeTypes[1].name &&
-                  v.axes().length === 1) // The two edges form a straight line.
+               pointMarkerGlyph &&
+               (hoverLight.has(v) ||
+                  grabLight.has(v) ||
+                  // If the edges form a straight line
+                  (edgeTypes.length === 2 &&
+                     edgeTypes[0].name === edgeTypes[1].name &&
+                     v.axes().length === 1))
             ) {
                // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
                   type: "glyph",
-                  glyph: "point marker.svg",
+                  glyph: pointMarkerGlyph,
                   position: v,
                   style: styleOf(v),
                })
             }
-         } else if (v instanceof Port && hoverLight.has(v)) {
+         } else if (
+            v instanceof Port &&
+            hoverLight.has(v) &&
+            pointMarkerGlyph
+         ) {
             glyphsToDraw.add({
                type: "glyph",
-               glyph: "point marker.svg",
+               glyph: pointMarkerGlyph,
                position: v,
                style: styleOf(v),
             })
@@ -2248,11 +2269,17 @@
          <!-- Segment glyph highlight layer -->
          <g>
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
-                  <PointMarker
-                     renderStyle={glyph.style}
-                     position={glyph.position}
-                  />
+               {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
+                  {@const port = glyph.glyph.portLocations[0]}
+                  <g
+                     class={glyph.style === "hover"
+                        ? "hoverLight"
+                        : "grabLight"}
+                     transform="translate({glyph.position.x - port.x} {glyph
+                        .position.y - port.y})"
+                  >
+                     <use href="#{glyph.glyph.fileName}-highlight" />
+                  </g>
                {:else if glyph.type === "hopover"}
                   <Hopover
                      renderStyle={glyph.style}
@@ -2266,14 +2293,14 @@
          <!-- Segment glyph layer -->
          <g>
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
-                  <PointMarker position={glyph.position} />
-               {:else if glyph.type === "glyph"}
+               {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
+                  {@const port = glyph.glyph.portLocations[0]}
                   <g
-                     transform="translate({glyph.position.x} {glyph.position
-                        .y})"
+                     color="blue"
+                     transform="translate({glyph.position.x - port.x} {glyph
+                        .position.y - port.y})"
                   >
-                     <use href={filePathOfSymbol(glyph.glyph) + "#glyph"} />
+                     <use href="#{glyph.glyph.fileName}" />
                   </g>
                {:else if glyph.type === "hopover"}
                   <Hopover
@@ -2572,8 +2599,8 @@
 </div>
 
 <div
-   id="size testing"
-   style="position: absolute; left: 0; top: 0; visibility: hidden;"
+   id="symbol templates"
+   style="position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none;"
 />
 
 <style>
@@ -2627,6 +2654,11 @@
       font-size: inherit;
       font-style: inherit;
       font-weight: inherit;
+   }
+   :global(.svgTemplate) {
+      position: absolute;
+      left: 0;
+      top: 0;
    }
    div {
       font-size: 14px;
