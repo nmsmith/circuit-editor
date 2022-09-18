@@ -1,23 +1,25 @@
 <script lang="ts">
-   import type { LineType } from "~/shared/definitions"
+   import { highlightThickness, LineType } from "~/shared/definitions"
    import type { LineSegment } from "~/shared/geometry"
-   export let renderStyle: "default" | "hover" | "grab" | "debug" = "default"
    export let type: LineType
    export let segment: LineSegment
-   export let isRigid: boolean = false
-   $: start = segment.start
-   $: end = segment.end
+   export let highlight: boolean = false
+   export let className: string = ""
 </script>
 
 <line
-   class="fluid {isRigid ? 'frozen' : 'relaxed'} line {renderStyle} stroke"
-   stroke={type.color}
-   stroke-width={type.thickness}
+   class={highlight ? "" : className}
+   stroke={highlight ? "currentColor" : type.color}
+   stroke-width={highlight
+      ? type.thickness + highlightThickness
+      : type.thickness}
    stroke-dasharray={type.dasharray}
-   x1={start.x}
-   y1={start.y}
-   x2={end.x}
-   y2={end.y}
+   stroke-linejoin="round"
+   stroke-linecap="round"
+   x1={segment.start.x}
+   y1={segment.start.y}
+   x2={segment.end.x}
+   y2={segment.end.y}
 />
 
 <style>

@@ -26,6 +26,10 @@
 {/if}
 
 <style>
+   path {
+      stroke-linejoin: "round";
+      stroke-linecap: "round";
+   }
    .default {
       stroke-width: 3px;
    }

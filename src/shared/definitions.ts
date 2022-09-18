@@ -8,6 +8,7 @@ import {
    Axis,
    Range2D,
    Rectangle,
+   Range1D,
 } from "~/shared/geometry"
 import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap } from "./utilities"
@@ -164,6 +165,9 @@ export type LineType = {
       }
    }
 }
+export const LineType = {
+   s: new Set<LineType>(), // To mimic what is done with the other classes.
+}
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
@@ -235,49 +239,66 @@ export function convertToJunction(crossing: Crossing) {
    crossing.seg2.splitAt(cutPoint)
 }
 
-export type SymbolKind = {
+export class SymbolKind {
+   static s = new Set<SymbolKind>()
    readonly fileName: string
    readonly svgTemplate: SVGElement
+   readonly highlightTemplate: SVGElement
    readonly svgBox: Range2D
    readonly collisionBox: Range2D
    readonly portLocations: Point[]
-}
 
-export class SymbolInstance extends Rectangle implements Deletable {
-   static s = new Set<SymbolInstance>()
-   private static nextUUID = 0
-   readonly kind: SymbolKind
-   readonly image: SVGElement
-   readonly highlight: SVGElement
-   readonly idSuffix: string
-   readonly ports: Port[]
+   constructor(fileName: string, fileContents: string) {
+      let doc = new DOMParser().parseFromString(fileContents, "image/svg+xml")
+      if (!doc?.firstChild || doc.firstChild.nodeName !== "svg") {
+         throw `Failed to parse ${fileName}. Contents:\n${fileContents}`
+      }
+      SymbolKind.s.add(this)
 
-   constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
-      super(position, rotation, kind.collisionBox)
-      this.kind = kind
-      this.idSuffix = ":" + SymbolInstance.nextUUID++
-      this.ports = kind.portLocations.map(
-         (p) => new Port(this, this.fromRectCoordinates(p))
-      )
-      SymbolInstance.s.add(this)
+      this.fileName = fileName
+      this.svgTemplate = doc.firstChild as SVGElement
+      this.svgTemplate.id = fileName
+      // Add the template to the main document so its size can be measured.
+      document.getElementById("size testing")?.appendChild(this.svgTemplate)
 
-      // Create the SVG for this Symbol.
-      let svg = kind.svgTemplate.cloneNode(true) as SVGElement
-      this.namespaceIDs(svg)
-      this.image = document.createElementNS("http://www.w3.org/2000/svg", "g")
-      this.image.appendChild(svg)
-      document.getElementById("symbol layer")?.appendChild(this.image)
-      // Create the SVG for this Symbol's highlight.
-      let highlightSvg = kind.svgTemplate.cloneNode(true) as SVGElement
-      this.namespaceIDs(highlightSvg, true)
-      this.highlight = document.createElementNS(
-         "http://www.w3.org/2000/svg",
-         "g"
-      )
-      this.highlight.appendChild(highlightSvg)
+      // Compute the bounding box of the whole SVG.
+      {
+         this.svgTemplate.getBoundingClientRect() // hack to fix Safari bug
+         let { x, y, width, height } = this.svgTemplate.getBoundingClientRect()
+         this.svgBox = Range2D.fromXY(
+            new Range1D([x, x + width]),
+            new Range1D([y, y + height])
+         )
+      }
+
+      // Locate the collision box of the symbol.
+      let box = doc.getElementById("collisionBox")
+      if (box) {
+         let { x, y, width, height } = box.getBoundingClientRect()
+         this.collisionBox = Range2D.fromXY(
+            new Range1D([x, x + width]),
+            new Range1D([y, y + height])
+         )
+      } else {
+         this.collisionBox = this.svgBox // a sensible alternative
+      }
+
+      // Locate the ports of the symbol.
+      this.portLocations = []
+      for (let element of this.svgTemplate.querySelectorAll("[id]")) {
+         if (element.id.endsWith("Snap")) {
+            let { x, y, width, height } = element.getBoundingClientRect()
+            this.portLocations.push(new Point(x + width / 2, y + height / 2))
+         }
+      }
+
+      // The most complicated part: construct a second SVG element to act as
+      // a "highlight" around the original element.
+      this.highlightTemplate = this.svgTemplate.cloneNode(true) as SVGElement
+      this.highlightTemplate.id = `${fileName}-highlight`
       // Find all the strokeable elements, and turn them into a highlight by
       // assigning them a thick stroke whose color is the highlight color.
-      for (let e of highlightSvg.querySelectorAll(
+      for (let e of this.highlightTemplate.querySelectorAll(
          "circle, ellipse, line, path, polygon, polyline, rect, text, textPath"
       )) {
          // We need to robustly check whether element "e" is actually visible.
@@ -320,18 +341,58 @@ export class SymbolInstance extends Rectangle implements Deletable {
          } else {
             // Turn the element into a highlight.
             e.setAttribute("fill", "none")
-            e.setAttribute("stroke", "white")
-            e.setAttribute("stroke-width", (strokeWidth + 5).toString())
+            e.setAttribute(
+               "stroke-width",
+               (strokeWidth + highlightThickness).toString()
+            )
             // To stop highlights from "poking out" too far, use a round join.
             e.setAttribute("stroke-linejoin", "round")
+            // Inherit the stroke color from an ancestor's "color" prop.
+            e.setAttribute("stroke", "currentColor")
          }
       }
       // When rendering the highlight, ignore its viewbox.
-      highlightSvg.setAttribute("overflow", "visible")
-      // TODO: Dynamically assign the highlight to an appropriate layer.
-      document
-         .getElementById("symbol grabLight layer")
-         ?.appendChild(this.highlight)
+      this.highlightTemplate.setAttribute("overflow", "visible")
+      // The required size measurements have now been taken, so remove the SVG
+      // from the main document.
+      //this.svgTemplate.remove() // TODO: Restore this!
+   }
+}
+
+export const highlightThickness = 5
+
+export class SymbolInstance extends Rectangle implements Deletable {
+   static s = new Set<SymbolInstance>()
+   private static nextUUID = 0
+   readonly kind: SymbolKind
+   readonly image: SVGElement
+   readonly highlight: SVGElement
+   readonly idSuffix: string
+   readonly ports: Port[]
+
+   constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
+      super(position, rotation, kind.collisionBox)
+      this.kind = kind
+      this.idSuffix = ":" + SymbolInstance.nextUUID++
+      this.ports = kind.portLocations.map(
+         (p) => new Port(this, this.fromRectCoordinates(p))
+      )
+      SymbolInstance.s.add(this)
+
+      // Create the SVG for this Symbol.
+      let svg = kind.svgTemplate.cloneNode(true) as SVGElement
+      this.namespaceIDs(svg)
+      this.image = document.createElementNS("http://www.w3.org/2000/svg", "g")
+      this.image.appendChild(svg)
+      document.getElementById("symbol layer")?.appendChild(this.image)
+      // Create the SVG for this Symbol's highlight.
+      let highlightSvg = kind.highlightTemplate.cloneNode(true) as SVGElement
+      this.namespaceIDs(highlightSvg, true)
+      this.highlight = document.createElementNS(
+         "http://www.w3.org/2000/svg",
+         "g"
+      )
+      this.highlight.appendChild(highlightSvg)
    }
    private namespaceIDs(svg: SVGElement, isHighlight?: boolean) {
       // To prevent the IDs of different instances of a Symbol SVG,

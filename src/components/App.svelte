@@ -33,49 +33,28 @@
    import { DefaultMap } from "~/shared/utilities"
    import CircuitLine from "~/components/lines/CircuitLine.svelte"
    import Hopover from "~/components/lines/Hopover.svelte"
-   import PointMarker from "~/components/PointMarker.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
-   const symbolFilesForBrowserTesting: string[] = [
+   const symbolsForBrowserTesting: string[] = [
+      "point marker.svg",
+      "node.svg",
+      "port.svg",
+      "plug.svg",
       "limit switch.svg",
       "prox sensor.svg",
       "pump.svg",
       "valve.svg",
-      "node.svg",
-      "port.svg",
-      "plug.svg",
    ]
-   let lineTypesForBrowserTesting: LineType[] = []
-   // Load the test line types asynchronously.
-   ;[
+   let lineTypesForBrowserTesting: string[] = [
       "hydraulic.json",
       "pilot.json",
       "drain.json",
       "manifold.json",
       "reservoir.json",
-   ].map((fileName) =>
-      fetch("./lines/" + fileName)
-         .then((response) => response.json())
-         .then((json) => {
-            json.name = fileName.replace(".json", "")
-            // Wrap the "meeting" dict in a Proxy such that it returns a
-            // default value for missing line types.
-            json.meeting = new Proxy(json.meeting, {
-               get: (object, prop) => {
-                  if (prop in object) {
-                     return object[prop]
-                  } else {
-                     return { pass: null, L: null, T: null, X: null }
-                  }
-               },
-            })
-            lineTypesForBrowserTesting.push(json)
-            lineTypes = lineTypes // for Svelte
-         })
-   )
+   ]
    let canvas: SVGElement | undefined // the root element of this component
    const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
    const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
@@ -202,9 +181,16 @@
          ) || closestNearTo(point, Segment.s)
       )
    }
-   function closestAttachableOrToggleable(
+   function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
+      return (
+         closestNearTo(point, Junction.s) ||
+         closestNearTo(point, SymbolInstance.s) ||
+         closestNearTo(point, Segment.s)
+      )
+   }
+   function closestInteractable(
       point: Point
-   ): ClosenessResult<Attachable | Toggleable> {
+   ): ClosenessResult<Attachable | Toggleable | Grabbable> {
       // This additional function is necessary because the individual functions
       // don't compose.
       return (
@@ -212,12 +198,7 @@
             point,
             allVertices(),
             allCrossings()
-         ) || closestNearTo(point, Segment.s)
-      )
-   }
-   function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
-      return (
-         closestNearTo(point, Junction.s) ||
+         ) ||
          closestNearTo(point, SymbolInstance.s) ||
          closestNearTo(point, Segment.s)
       )
@@ -369,12 +350,53 @@
             .scaledBy((zoomFactor - 1) / zoomFactor)
       )
    }
-   function filePathOfSymbol(fileName: string) {
+   function filePathOfSymbol(fileName: string): string {
       if (usingElectron && projectFolder) {
          return "file://" + path.join(projectFolder, "symbols", fileName)
       } else {
          return `symbols/${fileName}`
       }
+   }
+   function filePathOfLineType(fileName: string): string {
+      if (usingElectron && projectFolder) {
+         return "file://" + path.join(projectFolder, "lines", fileName)
+      } else {
+         return `lines/${fileName}`
+      }
+   }
+   function loadSymbols(fileNames: string[]) {
+      SymbolKind.s = new Set()
+      fileNames.map((fileName) =>
+         fetch(filePathOfSymbol(fileName))
+            .then((response) => response.text())
+            .then((text) => {
+               new SymbolKind(fileName, text)
+               SymbolKind.s = SymbolKind.s // for Svelte's sake
+            })
+      )
+   }
+   function loadLineTypes(fileNames: string[]) {
+      LineType.s = new Set()
+      fileNames.map((fileName) =>
+         fetch(filePathOfLineType(fileName))
+            .then((response) => response.json())
+            .then((json) => {
+               json.name = fileName.replace(".json", "")
+               // Wrap the "meeting" dict in a Proxy such that it returns a
+               // default value for missing line types.
+               json.meeting = new Proxy(json.meeting, {
+                  get: (object, prop) => {
+                     if (prop in object) {
+                        return object[prop]
+                     } else {
+                        return { pass: null, L: null, T: null, X: null }
+                     }
+                  },
+               })
+               LineType.s.add(json)
+               LineType.s = LineType.s // for Svelte's sake
+            })
+      )
    }
 
    // ---------------------- State of input peripherals -----------------------
@@ -415,8 +437,6 @@
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let projectFolder: null | string = null
-   let symbolFiles: null | string[] = null
-   let lineTypes: null | LineType[] = null
    // If we're not using Electron, use dummy symbols.
    let usingElectron: boolean
    try {
@@ -424,11 +444,12 @@
       usingElectron = true
    } catch {
       usingElectron = false
-      symbolFiles = symbolFilesForBrowserTesting
-      lineTypes = lineTypesForBrowserTesting
+      loadSymbols(symbolsForBrowserTesting)
+      loadLineTypes(lineTypesForBrowserTesting)
    }
+   let symbolLoadError = false
+   let lineTypeLoadError = false
 
-   let symbolKinds: SymbolKind[] = []
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
    const onAndOff = ["on", "off"] as const
@@ -636,7 +657,7 @@
          if (draw?.endObject instanceof Segment) {
             hoverLight.add(draw.endObject)
          } else if (!toolBeingUsed) {
-            let thing = closestAttachableOrToggleable(mouseOnCanvas)
+            let thing = closestInteractable(mouseOnCanvas)
             if (thing) {
                if (thing.object instanceof Crossing) {
                   hoverLight.add(thing.closestPart)
@@ -654,13 +675,24 @@
       else if (warp) for (let m of warp.movables) grabLight.add(m)
       else if (slide) grabLight.add(slide.grabbed)
    }
-   type HighlightStyle = "hover" | "grab" | undefined
-   $: styleOf = function (thing: Highlightable): HighlightStyle {
-      // This function _must_ be defined within $, because its behaviour changes
-      // whenever the state below changes, and Svelte needs to know that.
-      if (grabLight.has(thing)) return "grab"
-      else if (hoverLight.has(thing)) return "hover"
+   $: {
+      // Dynamically assign the highlight of each Symbol to the required layer.
+      // The color of a highlight is inherited from the layer it is assigned to.
+      for (let symbol of SymbolInstance.s) {
+         if (hoverLight.has(symbol)) {
+            document
+               .getElementById("symbol hoverLight layer")
+               ?.appendChild(symbol.highlight)
+         } else if (grabLight.has(symbol)) {
+            document
+               .getElementById("symbol grabLight layer")
+               ?.appendChild(symbol.highlight)
+         } else {
+            symbol.highlight.remove()
+         }
+      }
    }
+   type HighlightStyle = "hover" | "grab" | undefined
    type Section = Geometry.LineSegment<Point>
    type Glyph =
       | {
@@ -673,12 +705,15 @@
            style: HighlightStyle
         }
       | { type: "glyph"; glyph: string; position: Point; style: HighlightStyle }
-      | { type: "point marker"; position: Point; style: HighlightStyle }
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
       segmentsToDraw = new Map()
       glyphsToDraw = new Set()
+      function styleOf(thing: Highlightable): HighlightStyle {
+         if (grabLight.has(thing)) return "grab"
+         else if (hoverLight.has(thing)) return "hover"
+      }
       for (let segment of Segment.s) {
          // This array will collect the segment endpoints, and all of the
          // points at which the hopovers should be spliced into the segment.
@@ -718,7 +753,8 @@
                })
             } else if (type === "no hop" && hoverLight.has(crossPoint)) {
                glyphsToDraw.add({
-                  type: "point marker",
+                  type: "glyph",
+                  glyph: "point marker.svg",
                   position: crossPoint,
                   style: styleOf(crossPoint),
                })
@@ -801,14 +837,16 @@
             ) {
                // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
-                  type: "point marker",
+                  type: "glyph",
+                  glyph: "point marker.svg",
                   position: v,
                   style: styleOf(v),
                })
             }
          } else if (v instanceof Port && hoverLight.has(v)) {
             glyphsToDraw.add({
-               type: "point marker",
+               type: "glyph",
+               glyph: "point marker.svg",
                position: v,
                style: styleOf(v),
             })
@@ -1042,47 +1080,6 @@
          }
       }
    }
-   // Pre-process the SVG (already in the DOM) of the schematic symbol whose
-   // file path is given.
-   function registerSymbolKind(fileName: string) {
-      let object = document.getElementById(fileName) as HTMLObjectElement
-      let svgDocument = object.contentDocument
-      if (svgDocument && svgDocument.firstChild?.nodeName === "svg") {
-         let svg = svgDocument.firstChild as SVGElement
-         // Compute the bounding box of the whole SVG.
-         let svgBox
-         {
-            svg.getBoundingClientRect() // hack to fix Safari's calculations
-            let { x, y, width, height } = svg.getBoundingClientRect()
-            svgBox = Range2D.fromXY(
-               new Range1D([x, x + width]),
-               new Range1D([y, y + height])
-            )
-         }
-         // Locate the collision box and ports of the symbol.
-         let collisionBox
-         let portLocations = []
-         for (let element of svg.querySelectorAll("[id]")) {
-            if (element.id === "collisionBox") {
-               let { x, y, width, height } = element.getBoundingClientRect()
-               collisionBox = Range2D.fromXY(
-                  new Range1D([x, x + width]),
-                  new Range1D([y, y + height])
-               )
-            } else if (element.id.endsWith("Snap")) {
-               let { x, y, width, height } = element.getBoundingClientRect()
-               portLocations.push(new Point(x + width / 2, y + height / 2))
-            }
-         }
-         // If the symbol has no defined collision box, use the SVG's box.
-         if (!collisionBox) collisionBox = svgBox
-         // Add the symbol to the app's list of symbols.
-         symbolKinds = [
-            ...symbolKinds,
-            { fileName, svgTemplate: svg, svgBox, collisionBox, portLocations },
-         ].sort((a, b) => (a.fileName < b.fileName ? -1 : 1))
-      }
-   }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector) {
       // Spawn a symbol on the canvas, and initiate a move action.
       let spawnPosition = mouseOnCanvas.displacedBy(
@@ -1137,7 +1134,7 @@
          newDraw(selectedLineType, end, drawAxis)
          return
       } else if (
-         closestAttachableOrToggleable(toolBeingUsed.canvasDownPosition)
+         closestInteractable(toolBeingUsed.canvasDownPosition)
             ?.object instanceof Crossing
       ) {
          return // Don't allow draw operations to start at crossings.
@@ -2203,67 +2200,52 @@
       <g
          transform="scale({cameraZoom}) translate({svgTranslate.x} {svgTranslate.y})"
       >
-         <g id="symbol hoverLight layer">
-            <!-- {#each [...SymbolInstance.s] as symbol}
-               {@const c = symbol.svgCorners()}
-               {#if styleOf(symbol)}
-                  <polygon
-                     style="stroke-width: 8px"
-                     class="symbolHighlight fill stroke {styleOf(symbol)}"
-                     points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
-                        .y} {c[3].x},{c[3].y}"
-                  />
-               {/if}
-            {/each} -->
-         </g>
-         <g id="symbol grabLight layer" />
-         <!-- Segment highlight layer 1 -->
-         <g>
+         <g id="symbol hoverLight layer" class="hoverLight" />
+         <g id="symbol grabLight layer" class="grabLight" />
+         <g id="segment hoverLight layer" class="hoverLight">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if hoverLight.has(segment)}
                   {#each sections as section}
                      <CircuitLine
-                        renderStyle="hover"
                         type={segment.type}
                         segment={section}
+                        highlight={true}
                      />
                   {/each}
                {/if}
             {/each}
          </g>
-         <!-- Segment highlight layer 2 -->
-         <g>
+         <g id="segment grabLight layer" class="grabLight">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if grabLight.has(segment)}
                   {#each sections as section}
                      <CircuitLine
-                        renderStyle="grab"
                         type={segment.type}
                         segment={section}
+                        highlight={true}
                      />
                   {/each}
                {/if}
             {/each}
          </g>
-         <!-- Segment layer -->
-         <g>
+         <g id="segment layer">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#each sections as section}
                   {#if !eraseSelect?.items.has(segment)}
                      <CircuitLine
                         type={segment.type}
                         segment={section}
-                        isRigid={Boolean(
-                           (segment.isRigid &&
-                              !flexSelect?.items.has(segment)) ||
-                              rigidSelect?.items.has(segment)
-                        )}
+                        className={(segment.isRigid &&
+                           !flexSelect?.items.has(segment)) ||
+                        rigidSelect?.items.has(segment)
+                           ? "rigid"
+                           : ""}
                      />
                   {/if}
                {/each}
             {/each}
          </g>
-         <!-- Lower glyph highlight layer -->
+         <!-- Segment glyph highlight layer -->
          <g>
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
@@ -2281,7 +2263,7 @@
                {/if}
             {/each}
          </g>
-         <!-- Lower glyph layer -->
+         <!-- Segment glyph layer -->
          <g>
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "point marker" && layerOf(glyph.position) === "lower"}
@@ -2309,10 +2291,10 @@
          </g>
          <!-- Symbol layer -->
          <g id="symbol layer" />
-         <!-- Upper glyph highlight layer -->
-         <g>
+         <!-- Symbol glyph highlight layer -->
+         <!-- <g>
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
                   <PointMarker
                      renderStyle={glyph.style}
                      position={glyph.position}
@@ -2320,14 +2302,14 @@
                {/if}
             {/each}
          </g>
-         <!-- Upper glyph layer -->
          <g>
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "point marker" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
                   <PointMarker position={glyph.position} />
                {/if}
             {/each}
          </g>
+         -->
          <!-- HUD layer -->
          <g>
             {#if config.showSymbolSnaps.state === "on"}
@@ -2388,17 +2370,28 @@
                   let response = await fileSystem.openDirectory()
                   if (response) {
                      projectFolder = response
-                     let newFiles = await fileSystem.getFileNames(
+                     SymbolKind.s = new Set()
+                     LineType.s = new Set()
+                     let symbolFiles = await fileSystem.getFileNames(
                         path.join(projectFolder, "symbols")
                      )
-                     if (newFiles) {
-                        symbolFiles = newFiles.filter(
-                           (s) => path.extname(s) === ".svg"
+                     let lineTypeFiles = await fileSystem.getFileNames(
+                        path.join(projectFolder, "lines")
+                     )
+                     symbolLoadError = !symbolFiles
+                     lineTypeLoadError = !lineTypeFiles
+                     if (symbolFiles) {
+                        loadSymbols(
+                           symbolFiles.filter((f) => path.extname(f) === ".svg")
                         )
-                     } else {
-                        symbolFiles = null
                      }
-                     symbolKinds = []
+                     if (lineTypeFiles) {
+                        loadLineTypes(
+                           lineTypeFiles.filter(
+                              (f) => path.extname(f) === ".json"
+                           )
+                        )
+                     }
                   }
                }}>Choose a project folder</button
             >
@@ -2423,9 +2416,15 @@
             }
          }}
       >
-         {#if (projectFolder && symbolFiles) || !usingElectron}
+         {#if symbolLoadError}
+            <div class="paneMessage">
+               Failed to find a "symbols" folder within the project folder.
+            </div>
+         {:else if projectFolder || !usingElectron}
             <div class="symbolGrid">
-               {#each symbolKinds as kind}
+               {#each [...SymbolKind.s].sort((a, b) => {
+                  return a.fileName < b.fileName ? -1 : 1
+               }) as kind}
                   <div
                      class="symbolGridItem"
                      on:mousedown={() => {
@@ -2450,10 +2449,6 @@
                   </div>
                {/each}
             </div>
-         {:else if projectFolder}
-            <div class="paneMessage">
-               Failed to find a "symbols" folder within the project folder.
-            </div>
          {:else}
             <div class="paneMessage">
                <p>
@@ -2470,9 +2465,15 @@
       </div>
       <div class="paneTitle linePaneTitle">Lines</div>
       <div class="linePane">
-         {#if lineTypes}
+         {#if lineTypeLoadError}
+            <div class="paneMessage">
+               Failed to find a "lines" folder within the project folder.
+            </div>
+         {:else if projectFolder || !usingElectron}
             <div class="lineGrid">
-               {#each lineTypes as line}
+               {#each [...LineType.s].sort((a, b) => {
+                  return a.name < b.name ? -1 : 1
+               }) as line}
                   <div
                      class="lineGridItem {line === selectedLineType
                         ? 'selected'
@@ -2495,10 +2496,6 @@
                      </svg>
                   </div>
                {/each}
-            </div>
-         {:else if projectFolder}
-            <div class="paneMessage">
-               Failed to find a "lines" folder within the project folder.
             </div>
          {:else}
             <div class="paneMessage">
@@ -2574,40 +2571,16 @@
    {/if}
 </div>
 
-<div id="resources" style="visibility: hidden">
-   <!-- Load each kind of symbol as an invisible <object>, and pre-process it
-   as necessary. We will clone an <object>'s DOM content when the corresponding
-   symbol needs to be instantiated on the main drawing canvas. -->
-   <!-- N.B: display:none doesn't work: it prevents the objects from loading.-->
-   {#if symbolFiles}
-      {#each symbolFiles as fileName}
-         <object
-            id={fileName}
-            type="image/svg+xml"
-            data={filePathOfSymbol(fileName)}
-            title=""
-            on:load={() => registerSymbolKind(fileName)}
-         />
-      {/each}
-   {/if}
-</div>
+<div
+   id="size testing"
+   style="position: absolute; left: 0; top: 0; visibility: hidden;"
+/>
 
 <style>
    :global(html, body, #app) {
       height: 100%;
       margin: 0;
       overflow: hidden;
-   }
-   :global(.fluid.line) {
-      stroke-linejoin: round;
-      stroke-linecap: round;
-   }
-   :global(.frozen.stroke) {
-      stroke: rgb(113, 68, 29);
-      fill: none;
-   }
-   :global(.frozen.fill) {
-      fill: rgb(113, 68, 29);
    }
    :global(.hover.stroke) {
       stroke: rgb(0, 234, 255);
@@ -2622,6 +2595,12 @@
    }
    :global(.grab.fill) {
       fill: white;
+   }
+   .hoverLight {
+      color: rgb(0, 234, 255);
+   }
+   .grabLight {
+      color: white;
    }
    @font-face {
       font-family: "Inter";
