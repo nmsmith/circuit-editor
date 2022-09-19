@@ -2466,11 +2466,10 @@
                      <div class="symbolName">
                         {kind.fileName.replace(".svg", "")}
                      </div>
-                     <div
+                     <img
                         class="symbolImage"
-                        style="background-image: url('{filePathOfSymbol(
-                           kind.fileName
-                        )}')"
+                        alt=""
+                        src={filePathOfSymbol(kind.fileName)}
                      />
                   </div>
                {/each}
@@ -2710,7 +2709,7 @@
       overflow-y: scroll;
    }
    .paneMessage {
-      padding: 4px;
+      padding: 5px;
    }
    .symbolGrid {
       display: flex;
@@ -2721,19 +2720,19 @@
       background-color: rgb(90, 90, 90);
    }
    .symbolGridItem {
-      height: 80px;
-      padding: 4px;
+      /* height: 80px; */
+      padding: 5px;
       background-color: rgb(193, 195, 199);
       display: flex;
       flex-direction: column;
       align-items: flex-start;
-      gap: 4px;
+      gap: 5px;
    }
    .symbolImage {
-      flex: 1;
-      width: 100%;
-      background-size: contain;
-      background-repeat: no-repeat;
+      min-height: 20px;
+      max-height: 70px;
+      max-width: 100%;
+      pointer-events: none;
    }
    .grabbedSymbolImage {
       pointer-events: none;
@@ -2752,7 +2751,10 @@
       -webkit-user-select: none;
    }
    .lineGridItem {
-      padding: 4px;
+      padding-left: 5px;
+      padding-right: 5px;
+      padding-top: 4px;
+      padding-bottom: 4px;
       display: flex;
       flex-direction: row;
       align-items: center;
