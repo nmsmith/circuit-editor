@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="26" height="10.5" viewBox="-13 -9 26 10.5">
+<path
+   d="M-7.5,0 A 7.5,7.5 0 0 1 7.5,0" stroke="currentColor" stroke-width="3" stroke-linecap="round" fill="none"
+/>
+<line class="noHighlight" x1="-7.5" y1="0" x2="-11.5" y2="0" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+<line class="noHighlight" x1="7.5" y1="0" x2="11.5" y2="0" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+<circle id="leftSnap" cx="-7.5" cy="0" r="0.5" stroke="none" fill="#13e57c" opacity="0"/>
+<circle id="rightSnap" cx="7.5" cy="0" r="0.5" stroke="none" fill="#13e57c" opacity="0"/>
+</svg>

@@ -38,25 +38,28 @@
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
-   const hydraulicLineFileName = "hydraulic.json"
-   const pointMarkerFileName = "point marker.svg"
-   const symbolsForBrowserTesting: string[] = [
-      pointMarkerFileName,
-      "node.svg",
-      "port.svg",
-      "plug.svg",
+   const symbolFolderName = "symbols"
+   const vertexGlyphFolderName = "vertex glyphs"
+   const crossingGlyphFolderName = "crossing glyphs"
+   const pointMarkerFolderName = "special glyphs"
+   const lineTypeFolderName = "lines"
+   const symbolsForBrowserTesting = [
       "limit switch.svg",
       "prox sensor.svg",
       "pump.svg",
       "valve.svg",
    ]
-   let lineTypesForBrowserTesting: string[] = [
+   const vertexGlyphsForBrowserTesting = ["node.svg", "port.svg", "plug.svg"]
+   const crossingGlyphsForBrowserTesting = ["hopover.svg"]
+   const pointMarkerFileName = "point marker.svg"
+   const lineTypesForBrowserTesting = [
       "hydraulic.json",
       "pilot.json",
       "drain.json",
       "manifold.json",
       "reservoir.json",
    ]
+   const hydraulicLineFileName = "hydraulic"
    let canvas: SVGElement | undefined // the root element of this component
    const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
    const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
@@ -354,58 +357,49 @@
             .scaledBy((zoomFactor - 1) / zoomFactor)
       )
    }
-   function filePathOfSymbol(fileName: string): string {
+   function assetFilePath(folderName: string, fileName: string): string {
       if (usingElectron && projectFolder) {
-         return "file://" + path.join(projectFolder, "symbols", fileName)
+         return "file://" + path.join(projectFolder, folderName, fileName)
       } else {
-         return `symbols/${fileName}`
+         return `${folderName}/${fileName}`
       }
    }
-   function filePathOfLineType(fileName: string): string {
-      if (usingElectron && projectFolder) {
-         return "file://" + path.join(projectFolder, "lines", fileName)
-      } else {
-         return `lines/${fileName}`
-      }
-   }
-   function loadSymbols(fileNames: string[]) {
-      SymbolKind.s = new Set()
-      fileNames.map((fileName) =>
-         fetch(filePathOfSymbol(fileName))
-            .then((response) => response.text())
-            .then((text) => {
-               let symbolKind = new SymbolKind(fileName, text)
-               if (fileName === pointMarkerFileName) {
-                  pointMarkerGlyph = symbolKind
-               }
-               SymbolKind.s = SymbolKind.s // for Svelte's sake
-            })
+   async function loadSymbols(
+      folderName: string,
+      fileNames: string[]
+   ): Promise<Set<SymbolKind>> {
+      let s = new Set<SymbolKind>()
+      await Promise.all(
+         fileNames.map((fileName) =>
+            fetch(assetFilePath(folderName, fileName))
+               .then((response) => response.text())
+               .then((text) => s.add(new SymbolKind(fileName, text)))
+         )
       )
+      return s
    }
-   function loadLineTypes(fileNames: string[]) {
-      LineType.s = new Set()
-      fileNames.map((fileName) =>
-         fetch(filePathOfLineType(fileName))
-            .then((response) => response.json())
-            .then((json: LineType) => {
-               json.name = fileName.replace(".json", "")
-               if (json.meeting) {
-                  // Wrap the "meeting" dict in a Proxy such that it returns an
-                  // empty record for missing line types.
-                  json.meeting = new Proxy(json.meeting, {
-                     get: (object, prop) => {
-                        return prop in object ? object[prop] : {}
-                     },
-                  })
-               }
-               LineType.s.add(json)
-               LineType.s = LineType.s // for Svelte's sake
-               // Bind the hydraulic line by default:
-               if (fileName === hydraulicLineFileName && !selectedLineType) {
-                  selectedLineType = json
-               }
-            })
+   async function loadLineTypes(fileNames: string[]): Promise<Set<LineType>> {
+      let s = new Set<LineType>()
+      await Promise.all(
+         fileNames.map((fileName) =>
+            fetch(assetFilePath(lineTypeFolderName, fileName))
+               .then((response) => response.json())
+               .then((json: LineType) => {
+                  json.name = fileName.replace(".json", "")
+                  if (json.meeting) {
+                     // Wrap the "meeting" dict in a Proxy such that it returns an
+                     // empty record for missing line types.
+                     json.meeting = new Proxy(json.meeting, {
+                        get: (object, prop) => {
+                           return prop in object ? object[prop] : {}
+                        },
+                     })
+                  }
+                  s.add(json)
+               })
+         )
       )
+      return s
    }
 
    // ---------------------- State of input peripherals -----------------------
@@ -446,6 +440,11 @@
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let projectFolder: null | string = null
+   let symbols = new Set<SymbolKind>()
+   let vertexGlyphs = new Set<SymbolKind>()
+   let crossingGlyphs = new Set<SymbolKind>()
+   let pointMarkerGlyph: SymbolKind | undefined
+   let lineTypes = new Set<LineType>()
    // If we're not using Electron, use dummy symbols.
    let usingElectron: boolean
    try {
@@ -453,10 +452,33 @@
       usingElectron = true
    } catch {
       usingElectron = false
-      loadSymbols(symbolsForBrowserTesting)
-      loadLineTypes(lineTypesForBrowserTesting)
+      loadSymbols(symbolFolderName, symbolsForBrowserTesting).then((kinds) => {
+         symbols = kinds
+      })
+      loadSymbols(vertexGlyphFolderName, vertexGlyphsForBrowserTesting).then(
+         (kinds) => {
+            vertexGlyphs = kinds
+         }
+      )
+      loadSymbols(
+         crossingGlyphFolderName,
+         crossingGlyphsForBrowserTesting
+      ).then((kinds) => {
+         crossingGlyphs = kinds
+      })
+      loadLineTypes(lineTypesForBrowserTesting).then((types) => {
+         lineTypes = types
+         types.forEach((type) => {
+            // Bind the hydraulic line by default:
+            if (type.name === hydraulicLineFileName && !selectedLineType) {
+               selectedLineType = type
+            }
+         })
+      })
    }
-   let pointMarkerGlyph: SymbolKind | undefined
+   loadSymbols(pointMarkerFolderName, [pointMarkerFileName]).then((kinds) => {
+      pointMarkerGlyph = [...kinds][0]
+   })
    let symbolLoadError = false
    let lineTypeLoadError = false
 
@@ -839,7 +861,7 @@
                   glyph = undefined
                }
             }
-            let glyphSymbol = [...SymbolKind.s].find((k) => k.fileName == glyph)
+            let glyphSymbol = [...vertexGlyphs].find((k) => k.fileName == glyph)
             if (glyph && glyphSymbol) {
                glyphsToDraw.add({
                   type: "glyph",
@@ -2422,28 +2444,71 @@
                   let response = await fileSystem.openDirectory()
                   if (response) {
                      projectFolder = response
-                     SymbolKind.s = new Set()
-                     LineType.s = new Set()
-                     let symbolFiles = await fileSystem.getFileNames(
-                        path.join(projectFolder, "symbols")
-                     )
-                     let lineTypeFiles = await fileSystem.getFileNames(
-                        path.join(projectFolder, "lines")
-                     )
-                     symbolLoadError = !symbolFiles
-                     lineTypeLoadError = !lineTypeFiles
-                     if (symbolFiles) {
-                        loadSymbols(
-                           symbolFiles.filter((f) => path.extname(f) === ".svg")
+                     fileSystem
+                        .getFileNames(
+                           path.join(projectFolder, symbolFolderName)
                         )
-                     }
-                     if (lineTypeFiles) {
-                        loadLineTypes(
-                           lineTypeFiles.filter(
-                              (f) => path.extname(f) === ".json"
-                           )
+                        .then((fileNames) => {
+                           symbolLoadError = !fileNames
+                           if (fileNames) {
+                              loadSymbols(
+                                 symbolFolderName,
+                                 fileNames.filter(
+                                    (f) => path.extname(f) === ".svg"
+                                 )
+                              ).then((kinds) => {
+                                 symbols = kinds
+                              })
+                           }
+                        })
+                     fileSystem
+                        .getFileNames(
+                           path.join(projectFolder, vertexGlyphFolderName)
                         )
-                     }
+                        .then((fileNames) => {
+                           if (fileNames) {
+                              loadSymbols(
+                                 vertexGlyphFolderName,
+                                 fileNames.filter(
+                                    (f) => path.extname(f) === ".svg"
+                                 )
+                              ).then((kinds) => {
+                                 vertexGlyphs = kinds
+                              })
+                           }
+                        })
+                     fileSystem
+                        .getFileNames(
+                           path.join(projectFolder, crossingGlyphFolderName)
+                        )
+                        .then((fileNames) => {
+                           if (fileNames) {
+                              loadSymbols(
+                                 crossingGlyphFolderName,
+                                 fileNames.filter(
+                                    (f) => path.extname(f) === ".svg"
+                                 )
+                              ).then((kinds) => {
+                                 crossingGlyphs = kinds
+                              })
+                           }
+                        })
+                     fileSystem
+                        .getFileNames(
+                           path.join(projectFolder, lineTypeFolderName)
+                        )
+                        .then((fileNames) => {
+                           lineTypeLoadError = !fileNames
+                           if (fileNames) {
+                              loadLineTypes(
+                                 fileNames.filter(
+                                    (f) => path.extname(f) === ".json"
+                                 )
+                              ).then((types) => {
+                                 lineTypes = types
+                              })
+                           }
+                        })
                   }
                }}>Choose a project folder</button
             >
@@ -2470,11 +2535,12 @@
       >
          {#if symbolLoadError}
             <div class="paneMessage">
-               Failed to find a "symbols" folder within the project folder.
+               Failed to find a "{symbolFolderName}" folder within the project
+               folder.
             </div>
          {:else if projectFolder || !usingElectron}
             <div class="symbolGrid">
-               {#each [...SymbolKind.s].sort((a, b) => {
+               {#each [...symbols].sort((a, b) => {
                   return a.fileName < b.fileName ? -1 : 1
                }) as kind}
                   <div
@@ -2495,7 +2561,7 @@
                      <img
                         class="symbolImage"
                         alt=""
-                        src={filePathOfSymbol(kind.fileName)}
+                        src={assetFilePath(symbolFolderName, kind.fileName)}
                      />
                   </div>
                {/each}
@@ -2509,7 +2575,7 @@
                <div class="spacer" />
                <p>
                   The SVG files for each symbol must be placed in a folder named
-                  "symbols" within the project folder.
+                  "{symbolFolderName}" within the project folder.
                </p>
             </div>
          {/if}
@@ -2518,11 +2584,12 @@
       <div class="linePane">
          {#if lineTypeLoadError}
             <div class="paneMessage">
-               Failed to find a "lines" folder within the project folder.
+               Failed to find a "{lineTypeFolderName}" folder within the project
+               folder.
             </div>
          {:else if projectFolder || !usingElectron}
             <div class="lineGrid">
-               {#each [...LineType.s].sort((a, b) => {
+               {#each [...lineTypes].sort((a, b) => {
                   return a.name < b.name ? -1 : 1
                }) as line}
                   <div
@@ -2552,7 +2619,7 @@
             <div class="paneMessage">
                <p>
                   Similarly, the JSON files for each line type must be placed in
-                  a folder named "lines".
+                  a folder named "{lineTypeFolderName}".
                </p>
             </div>
          {/if}
@@ -2611,7 +2678,7 @@
    {#if grabbedSymbol}
       <img
          class="grabbedSymbolImage"
-         src={filePathOfSymbol(grabbedSymbol.kind.fileName)}
+         src={assetFilePath(symbolFolderName, grabbedSymbol.kind.fileName)}
          alt=""
          style="{absolutePosition(
             mouseInClient.displacedBy(grabbedSymbol.grabOffset)

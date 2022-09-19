@@ -166,9 +166,6 @@ export type LineType = {
       }
    }
 }
-export const LineType = {
-   s: new Set<LineType>(), // To mimic what is done with the other classes.
-}
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
@@ -240,8 +237,9 @@ export function convertToJunction(crossing: Crossing) {
    crossing.seg2.splitAt(cutPoint)
 }
 
+// A common abstraction for storing the information required to instantiate
+// and highlight circuit symbols and glyphs.
 export class SymbolKind {
-   static s = new Set<SymbolKind>()
    readonly fileName: string
    readonly svgTemplate: SVGElement
    readonly highlightTemplate: SVGElement
@@ -254,7 +252,6 @@ export class SymbolKind {
       if (!doc?.firstChild || doc.firstChild.nodeName !== "svg") {
          throw `Failed to parse ${fileName}. Contents:\n${fileContents}`
       }
-      SymbolKind.s.add(this)
 
       this.fileName = fileName
       this.svgTemplate = doc.firstChild as SVGElement
