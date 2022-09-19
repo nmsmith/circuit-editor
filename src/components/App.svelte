@@ -2722,19 +2722,14 @@
    }
    @font-face {
       font-family: "Inter";
-      src: url("fonts/Inter.ttf");
+      src: url("../fonts/Inter.ttf");
       font-weight: 1 1000;
       font-synthesis: none;
    }
    @font-face {
       font-family: "Fira Code";
-      src: url("fonts/FiraCode.ttf");
+      src: url("../fonts/FiraCode.ttf");
       font-weight: 1 1000;
-      font-synthesis: none;
-   }
-   @font-face {
-      font-family: "PT Mono";
-      src: url("fonts/PTMono.ttf");
       font-synthesis: none;
    }
    :global(html, body, table, tr, td) {
