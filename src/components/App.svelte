@@ -148,7 +148,8 @@
       let closest = closestTo(point, ...objectSets)
       if (
          closest &&
-         closest.closestPart.sqDistanceFrom(point) < sqInteractRadius
+         closest.closestPart.sqDistanceFrom(point) <
+            sqInteractRadius / cameraZoom // divisor intentionally nonsquared
       ) {
          return closest
       }
@@ -162,7 +163,8 @@
       let sqBuffer = hopoverRadius * hopoverRadius
       if (
          closest &&
-         closest.closestPart.sqDistanceFrom(point) < sqInteractRadius &&
+         closest.closestPart.sqDistanceFrom(point) <
+            sqInteractRadius / cameraZoom && // divisor intentionally nonsquared
          closest.closestPart.sqDistanceFrom(closest.object.start) >= sqBuffer &&
          closest.closestPart.sqDistanceFrom(closest.object.end) >= sqBuffer
       ) {
