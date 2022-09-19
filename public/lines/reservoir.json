@@ -1,7 +1,4 @@
 {
    "color": "black",
-   "thickness": 3,
-   "dasharray": null,
-   "ending": null,
-   "meeting": {}
+   "thickness": 3
 }

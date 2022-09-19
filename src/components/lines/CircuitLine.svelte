@@ -23,9 +23,7 @@
 />
 
 <style>
-   .hover,
-   .grab,
-   .debug {
-      stroke-width: 8px;
+   .rigid {
+      stroke: rgb(113, 68, 29);
    }
 </style>

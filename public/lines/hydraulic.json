@@ -1,30 +1,24 @@
 {
    "color": "#00F",
    "thickness": 3,
-   "dasharray": null,
-   "ending": null,
    "meeting": {
       "hydraulic": {
-         "pass": "hopover.svg",
-         "L": null,
+         "crossing": "hopover.svg",
          "T": "node.svg",
          "X": "node.svg"
       },
       "drain": {
-         "pass": "hopover.svg",
-         "L": null,
+         "crossing": "hopover.svg",
          "T": "node.svg",
          "X": "node.svg"
       },
       "pilot": {
-         "pass": "hopover.svg",
-         "L": null,
+         "crossing": "hopover.svg",
          "T": "node.svg",
          "X": "node.svg"
       },
       "manifold": {
-         "pass": "port.svg",
-         "L": null,
+         "crossing": "port.svg",
          "T": "plug.svg",
          "X": "port.svg"
       }

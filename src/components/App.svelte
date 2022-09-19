@@ -38,6 +38,7 @@
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
+   const hydraulicLineFileName = "hydraulic.json"
    const pointMarkerFileName = "point marker.svg"
    const symbolsForBrowserTesting: string[] = [
       pointMarkerFileName,
@@ -384,21 +385,23 @@
       fileNames.map((fileName) =>
          fetch(filePathOfLineType(fileName))
             .then((response) => response.json())
-            .then((json) => {
+            .then((json: LineType) => {
                json.name = fileName.replace(".json", "")
-               // Wrap the "meeting" dict in a Proxy such that it returns a
-               // default value for missing line types.
-               json.meeting = new Proxy(json.meeting, {
-                  get: (object, prop) => {
-                     if (prop in object) {
-                        return object[prop]
-                     } else {
-                        return { pass: null, L: null, T: null, X: null }
-                     }
-                  },
-               })
+               if (json.meeting) {
+                  // Wrap the "meeting" dict in a Proxy such that it returns an
+                  // empty record for missing line types.
+                  json.meeting = new Proxy(json.meeting, {
+                     get: (object, prop) => {
+                        return prop in object ? object[prop] : {}
+                     },
+                  })
+               }
                LineType.s.add(json)
                LineType.s = LineType.s // for Svelte's sake
+               // Bind the hydraulic line by default:
+               if (fileName === hydraulicLineFileName && !selectedLineType) {
+                  selectedLineType = json
+               }
             })
       )
    }
@@ -788,50 +791,50 @@
       for (let v of allVertices()) {
          if (v instanceof Junction) {
             // Find the appropriate glyph to display at the Junction.
-            let glyph: null | string = null
+            let glyph: string | undefined
             let edgeTypes = [...v.edges()].map(([segment]) => segment.type)
             if (edgeTypes.length === 1) {
                glyph = edgeTypes[0].ending
             } else if (edgeTypes.length === 2) {
-               let glyphA = edgeTypes[0].meeting[edgeTypes[1].name].L
-               let glyphB = edgeTypes[1].meeting[edgeTypes[0].name].L
+               let glyphA = edgeTypes[0].meeting?.[edgeTypes[1].name].L
+               let glyphB = edgeTypes[1].meeting?.[edgeTypes[0].name].L
                if (glyphA === glyphB) {
                   glyph = glyphA
                } else if (!glyphA || !glyphB) {
                   glyph = glyphA || glyphB
                } else {
-                  glyph = null
+                  glyph = undefined
                }
             } else if (edgeTypes.length === 3) {
                if (edgeTypes[0].name === edgeTypes[1].name) {
-                  glyph = edgeTypes[2].meeting[edgeTypes[0].name].T
+                  glyph = edgeTypes[2].meeting?.[edgeTypes[0].name].T
                } else if (edgeTypes[0].name === edgeTypes[2].name) {
-                  glyph = edgeTypes[1].meeting[edgeTypes[0].name].T
+                  glyph = edgeTypes[1].meeting?.[edgeTypes[0].name].T
                } else if (edgeTypes[1].name === edgeTypes[2].name) {
-                  glyph = edgeTypes[0].meeting[edgeTypes[1].name].T
+                  glyph = edgeTypes[0].meeting?.[edgeTypes[1].name].T
                } else {
                   // If each edge has a different type, don't show a glyph.
-                  glyph = null
+                  glyph = undefined
                }
             } else if (edgeTypes.length >= 4) {
                let names = new Set(edgeTypes.map((t) => t.name))
                if (names.size === 1) {
-                  glyph = edgeTypes[0].meeting[edgeTypes[0].name].X
+                  glyph = edgeTypes[0].meeting?.[edgeTypes[0].name].X
                } else if (names.size === 2) {
                   let [nameA, nameB] = [...names]
                   let typeA = edgeTypes.find((t) => t.name == nameA) as LineType
                   let typeB = edgeTypes.find((t) => t.name == nameB) as LineType
-                  let glyphA = typeA.meeting[typeB.name].X
-                  let glyphB = typeB.meeting[typeA.name].X
+                  let glyphA = typeA.meeting?.[typeB.name].X
+                  let glyphB = typeB.meeting?.[typeA.name].X
                   if (glyphA === glyphB) {
                      glyph = glyphA
                   } else if (!glyphA || !glyphB) {
                      glyph = glyphA || glyphB
                   } else {
-                     glyph = null
+                     glyph = undefined
                   }
                } else {
-                  glyph = null
+                  glyph = undefined
                }
             }
             let glyphSymbol = [...SymbolKind.s].find((k) => k.fileName == glyph)
@@ -898,7 +901,10 @@
             heldTool.shouldBind = false // The tool is being used temporarily.
          }
          // Actions to perform immediately:
-         if (toolToUse === "rigid") {
+         if (toolToUse === "erase") {
+            let g = closestGrabbable(mouseOnCanvas)
+            if (g) deleteItems([g.object])
+         } else if (toolToUse === "rigid") {
             let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
             if (segment?.isRigid === false) {
                segment.isRigid = true
@@ -2267,6 +2273,7 @@
          </g>
          <!-- Segment glyph highlight layer -->
          <g>
+            <!-- TODO: This is occurrence 1/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
                   {@const port = glyph.glyph.portLocations[0]}
@@ -2291,8 +2298,10 @@
          </g>
          <!-- Segment glyph layer -->
          <g>
+            <!-- TODO: This is occurrence 2/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
+                  <!-- TODO: Inherit "color" more intelligently.-->
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      color="blue"
@@ -2318,24 +2327,39 @@
          <!-- Symbol layer -->
          <g id="symbol layer" />
          <!-- Symbol glyph highlight layer -->
-         <!-- <g>
+         <g>
+            <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
-                  <PointMarker
-                     renderStyle={glyph.style}
-                     position={glyph.position}
-                  />
+                  {@const port = glyph.glyph.portLocations[0]}
+                  <g
+                     class={glyph.style === "hover"
+                        ? "hoverLight"
+                        : "grabLight"}
+                     transform="translate({glyph.position.x - port.x} {glyph
+                        .position.y - port.y})"
+                  >
+                     <use href="#{glyph.glyph.fileName}-highlight" />
+                  </g>
                {/if}
             {/each}
          </g>
+         <!-- Symbol glyph layer -->
          <g>
+            <!-- TODO: This is occurrence 4/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
-                  <PointMarker position={glyph.position} />
+                  {@const port = glyph.glyph.portLocations[0]}
+                  <g
+                     color="blue"
+                     transform="translate({glyph.position.x - port.x} {glyph
+                        .position.y - port.y})"
+                  >
+                     <use href="#{glyph.glyph.fileName}" />
+                  </g>
                {/if}
             {/each}
          </g>
-         -->
          <!-- HUD layer -->
          <g>
             {#if config.showSymbolSnaps.state === "on"}

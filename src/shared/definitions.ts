@@ -14,7 +14,7 @@ import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap } from "./utilities"
 
 export type Vertex = Junction | Port
-export type VertexGlyph = "default" | "plug"
+export type VertexGlyph = null | "auto" | "TODO: name of SVG file"
 export function isVertex(thing: any): thing is Vertex {
    return thing instanceof Junction || thing instanceof Port
 }
@@ -31,7 +31,7 @@ export class Junction extends Point implements Deletable {
    private readonly edges_ = new Set<Edge>()
    constructor(point: Point) {
       super(point.x, point.y)
-      this.glyph = "default"
+      this.glyph = "auto"
       Junction.s.add(this)
    }
    delete(): Set<Junction> {
@@ -126,7 +126,7 @@ export class Port extends Point {
    constructor(symbol: SymbolInstance, point: Point) {
       super(point.x, point.y)
       this.symbol = symbol
-      this.glyph = "default"
+      this.glyph = "auto"
       Port.s.add(this)
    }
    edges(): Set<Edge> {
@@ -150,18 +150,19 @@ export type LineType = {
    // The remaining fields correspond to the contents of the JSON file:
    color: string // hex color
    thickness: number // in pixels
-   dasharray: null | string // in the format of SVG's stroke-dasharray
-   ending: null | string // file path
-   meeting: {
-      // "lineType" should be the file name of another line type (sans file
-      // extension), and "pass/L/T/X" should be the file name of the symbol that
-      // should appear at each meeting type (with extension). The letters L/T/X
-      // refer to the shape of the intersection where the two line types meet.
-      [lineType: string]: {
-         pass: null | string // when the two line types pass over one another
-         L: null | string // when the two line types intersect at an L
-         T: null | string // when the first line type intersects this one at a T
-         X: null | string // when the two line types intersect at an X
+   dasharray?: string // in the format of SVG's stroke-dasharray
+   ending?: string // file path
+   meeting?: {
+      // "lineType" should be the file name (sans file extension) of another
+      // line type, and "crossing/L/T/X" should be the file name (including file
+      // extension) of the glyph that should appear when a meeting of the
+      // respective type occurs. The letters L/T/X refer to the shape of the
+      // intersection where the two line types meet.
+      [lineType: string | symbol]: {
+         crossing?: string // when the first line crosses over this one
+         L?: string // when the two line types intersect at an L
+         T?: string // when the first line type intersects this one at a T
+         X?: string // when the two line types intersect at an X
       }
    }
 }

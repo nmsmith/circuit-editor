@@ -45,4 +45,7 @@
    .hover.stroke {
       stroke: rgb(0, 234, 255);
    }
+   .grab.stroke {
+      stroke: white;
+   }
 </style>
