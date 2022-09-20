@@ -31,8 +31,7 @@
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
    import { DefaultMap } from "~/shared/utilities"
-   import CircuitLine from "~/components/lines/CircuitLine.svelte"
-   import Hopover from "~/components/lines/Hopover.svelte"
+   import CircuitLine from "~/components/CircuitLine.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
@@ -80,7 +79,7 @@
    const standardGap = 30 // standard spacing between circuit elements
    const halfGap = 15
    const slidePad = halfGap / 2 // dist at which close-passing elements collide
-   const hopoverRadius = halfGap / 2
+   const sqSegmentIntersectBuffer = 7.5 ** 2 // grace dist to ignore intersect
    // Zoom-dependent constants
    const sqShortDragDelay = 8 ** 2
    const sqLongDragDelay = 16 ** 2
@@ -99,14 +98,6 @@
       Axis.fromRadians(0.375 * tau), // 135 degrees
    ]
    snapAxes.forEach(rememberAxis)
-   // The toggle order of the glyphs that appear at crossings.
-   const crossingToggleSeq: CrossingType[] = [
-      "no hop",
-      "V right",
-      "H down",
-      "V left",
-      "H up",
-   ]
 
    // ---------------------- Supplementary definitions ------------------------
    type Highlightable = Point | Segment | SymbolInstance
@@ -163,13 +154,14 @@
       segments: Iterable<Segment> = Segment.s
    ): ClosenessResult<Segment> {
       let closest = closestSegmentTo(point, alongAxis, segments)
-      let sqBuffer = hopoverRadius * hopoverRadius
       if (
          closest &&
          closest.closestPart.sqDistanceFrom(point) <
             sqInteractRadius / cameraZoom && // divisor intentionally nonsquared
-         closest.closestPart.sqDistanceFrom(closest.object.start) >= sqBuffer &&
-         closest.closestPart.sqDistanceFrom(closest.object.end) >= sqBuffer
+         closest.closestPart.sqDistanceFrom(closest.object.start) >=
+            sqSegmentIntersectBuffer &&
+         closest.closestPart.sqDistanceFrom(closest.object.end) >=
+            sqSegmentIntersectBuffer
       ) {
          return closest
       }
@@ -236,6 +228,17 @@
       drawAxis: Axis
    ): boolean {
       return junction.edges().size === 1 && junction.axes()[0] === drawAxis
+   }
+   function isMoreHorizontal(subject: Segment, other: Segment) {
+      let rSeg = subject.axis.scalarRejectionFrom(Axis.horizontal)
+      let rOther = other.axis.scalarRejectionFrom(Axis.horizontal)
+      if (Math.abs(rSeg) < Math.abs(rOther)) {
+         return true
+      } else if (Math.abs(rSeg) > Math.abs(rOther)) {
+         return false
+      } else {
+         return rSeg < rOther ? subject : other // tie breaker
+      }
    }
    function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
       if (ofAxes.length === 0) return to
@@ -655,10 +658,10 @@
             let crossPoint = seg1.intersection(seg2)
             if (crossPoint) {
                let ends = [seg1.start, seg1.end, seg2.start, seg2.end]
-               let minDistance = Math.min(
-                  ...ends.map((p) => p.distanceFrom(crossPoint as Point))
+               let minSqDistance = Math.min(
+                  ...ends.map((p) => p.sqDistanceFrom(crossPoint as Point))
                )
-               if (minDistance >= hopoverRadius + 4) {
+               if (minSqDistance >= sqSegmentIntersectBuffer) {
                   crossingMap.getOrCreate(seg1).set(seg2, crossPoint)
                   crossingMap.getOrCreate(seg2).set(seg1, crossPoint)
                }
@@ -727,19 +730,18 @@
    type Section = Geometry.LineSegment<Point>
    type Glyph =
       | {
-           type: "hopover"
-           segment: Segment
-           position: Point
-           start: Point
-           end: Point
-           flip: boolean
-           style: HighlightStyle
-        }
-      | {
-           type: "glyph"
+           type: "vertex glyph"
            glyph: SymbolKind
            position: Point
            style: HighlightStyle
+        }
+      | {
+           type: "crossing glyph"
+           glyph: SymbolKind
+           position: Point
+           rotation: number // in degrees
+           style: HighlightStyle
+           segment: Segment
         }
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
@@ -750,57 +752,75 @@
          if (grabLight.has(thing)) return "grab"
          else if (hoverLight.has(thing)) return "hover"
       }
+      let renderedCrossings = new Set<Point>()
       for (let segment of Segment.s) {
          // This array will collect the segment endpoints, and all of the
-         // points at which the hopovers should be spliced into the segment.
+         // points at which crossing glyphs should be spliced into the segment.
          let points: Point[] = [segment.start, segment.end]
          for (let [other, crossPoint] of crossingMap.read(segment)) {
-            // Determine which segment is the "horizontal" one.
-            let segReject = segment.axis.scalarRejectionFrom(Axis.horizontal)
-            let otherReject = other.axis.scalarRejectionFrom(Axis.horizontal)
-            let hSegment: Segment
-            if (Math.abs(segReject) < Math.abs(otherReject)) {
-               hSegment = segment
-            } else if (Math.abs(segReject) > Math.abs(otherReject)) {
-               hSegment = other
-            } else {
-               hSegment = segReject < otherReject ? segment : other
+            // Determine which segment ("segment" or "other") should render a
+            // crossing glyph, if any. If "segment" should render, we render it
+            // now. If "other" should render, we wait until the iteration of the
+            // outer loop when "other" takes on the role of "segment".
+            let autoGlyph = segment.type.meeting?.[other.type.name].crossing
+            let autoGlyphSymbol = [...crossingGlyphs].find(
+               (k) => k.fileName === autoGlyph
+            )
+            let crossing = segment.crossingTypes.read(other)
+            let render: null | {
+               glyph: SymbolKind
+               facing: "left" | "right"
+            } = null
+            if (crossing.type === "auto" && autoGlyphSymbol) {
+               let otherGlyph = other.type.meeting?.[segment.type.name].crossing
+               // If both segments have auto-glyphs, then the glyph of the
+               // "most horizontal" segment should be shown.
+               if (!otherGlyph || isMoreHorizontal(segment, other)) {
+                  const facing =
+                     segment.start.x < segment.end.x ? "left" : "right"
+                  render = { glyph: autoGlyphSymbol, facing }
+               }
+            } else if (crossing.type === "manual") {
+               let manualGlyph = crossing.glyph
+               let glyphSymbol = [...crossingGlyphs].find(
+                  (k) => k.fileName === manualGlyph
+               )
+               if (glyphSymbol) {
+                  render = { glyph: glyphSymbol, facing: crossing.facing }
+               }
             }
-            // Determine which segment will hop over the other.
-            let type = segment.crossingTypes.read(other)
-            if (
-               (hSegment === segment && (type == "H up" || type == "H down")) ||
-               (hSegment === other && (type == "V left" || type == "V right"))
-            ) {
-               let [start, end] = [
-                  crossPoint.displacedBy(segment.axis.scaledBy(hopoverRadius)),
-                  crossPoint.displacedBy(segment.axis.scaledBy(-hopoverRadius)),
-               ]
-               points.push(start, end)
-               let flip = type === "H down" || type === "V right"
+            if (render && render.glyph.portLocations.length === 2) {
+               let [p1, p2] = render.glyph.portLocations
+               let glyphDir = p2.directionFrom(p1)
+               if (!glyphDir) continue
+               let rotation = segment.end
+                  .directionFrom(segment.start)
+                  ?.rotationFrom(glyphDir)
+               if (!rotation) continue
+               if (render.facing === "right") {
+                  rotation = rotation.add(Rotation.halfTurn)
+               }
+               let midpoint = p1.interpolatedToward(p2, 0.5)
+               let position = crossPoint.displacedBy(
+                  Point.zero.displacementFrom(midpoint).rotatedBy(rotation)
+               )
+               let halfLength = p2.distanceFrom(p1) / 2
+               points.push(
+                  crossPoint.displacedBy(segment.axis.scaledBy(+halfLength)),
+                  crossPoint.displacedBy(segment.axis.scaledBy(-halfLength))
+               )
                glyphsToDraw.add({
-                  type: "hopover",
-                  segment,
-                  position: crossPoint,
-                  start,
-                  end,
-                  flip,
+                  type: "crossing glyph",
+                  glyph: render.glyph,
+                  position,
+                  rotation: rotation.toDegrees(),
                   style: styleOf(segment) || styleOf(crossPoint),
+                  segment,
                })
-            } else if (
-               type === "no hop" &&
-               hoverLight.has(crossPoint) &&
-               pointMarkerGlyph
-            ) {
-               glyphsToDraw.add({
-                  type: "glyph",
-                  glyph: pointMarkerGlyph,
-                  position: crossPoint,
-                  style: styleOf(crossPoint),
-               })
+               renderedCrossings.add(crossPoint)
             }
          }
-         // Compute the sections that need to be drawn.
+         // Compute the sections of this segment that need to be drawn.
          let distanceOf = (p: Point) => p.sqDistanceFrom(segment.start)
          points.sort((a, b) => distanceOf(a) - distanceOf(b))
          let sections: Section[] = []
@@ -811,7 +831,24 @@
          }
          segmentsToDraw.set(segment, sections)
       }
-      // Determine the other glyphs that need to be drawn at vertices.
+      // Draw a point marker at highlighted crossings that have no glyph.
+      for (let map of crossingMap.values()) {
+         for (let crossPoint of map.values()) {
+            if (
+               !renderedCrossings.has(crossPoint) &&
+               hoverLight.has(crossPoint) &&
+               pointMarkerGlyph
+            ) {
+               glyphsToDraw.add({
+                  type: "vertex glyph", // technically not true, but works fine
+                  glyph: pointMarkerGlyph,
+                  position: crossPoint,
+                  style: styleOf(crossPoint),
+               })
+            }
+         }
+      }
+      // Determine what vertex glyphs need to be drawn.
       for (let v of allVertices()) {
          if (v instanceof Junction) {
             // Find the appropriate glyph to display at the Junction.
@@ -864,7 +901,7 @@
             let glyphSymbol = [...vertexGlyphs].find((k) => k.fileName == glyph)
             if (glyph && glyphSymbol) {
                glyphsToDraw.add({
-                  type: "glyph",
+                  type: "vertex glyph",
                   glyph: glyphSymbol,
                   position: v,
                   style: styleOf(v),
@@ -880,7 +917,7 @@
             ) {
                // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
-                  type: "glyph",
+                  type: "vertex glyph",
                   glyph: pointMarkerGlyph,
                   position: v,
                   style: styleOf(v),
@@ -891,8 +928,9 @@
             hoverLight.has(v) &&
             pointMarkerGlyph
          ) {
+            // Highlight ports on hover.
             glyphsToDraw.add({
-               type: "glyph",
+               type: "vertex glyph",
                glyph: pointMarkerGlyph,
                position: v,
                style: styleOf(v),
@@ -1044,38 +1082,7 @@
       return (event.buttons & 0b010) !== 0
    }
    function drawButtonTapped() {
-      let toggle = closestToggleable(mouseOnCanvas)
-      if (!toggle) return
-      if (isVertex(toggle.object)) {
-         if (toggle.object.glyph === "default") {
-            toggle.object.glyph = "plug"
-         } else {
-            toggle.object.glyph = "default"
-            if (toggle.object instanceof Junction)
-               toggle.object.convertToCrossing(
-                  crossingMap,
-                  crossingToggleSeq[0]
-               )
-         }
-      } else if (toggle.object instanceof Segment) {
-         let cutPoint = new Junction(toggle.closestPart)
-         toggle.object.splitAt(cutPoint)
-         cutPoint.glyph = "plug"
-      } else if (toggle.object instanceof Crossing) {
-         // Change the crossing glyph.
-         let { seg1, seg2 } = toggle.object
-         let oldType = seg1.crossingTypes.read(seg2)
-         let i = crossingToggleSeq.indexOf(oldType) + 1
-         if (i < crossingToggleSeq.length) {
-            seg1.crossingTypes.set(seg2, crossingToggleSeq[i])
-            seg2.crossingTypes.set(seg1, crossingToggleSeq[i])
-         } else {
-            convertToJunction(toggle.object)
-         }
-      }
-      Junction.s = Junction.s
-      Segment.s = Segment.s
-      Port.s = Port.s
+      // TODO: This functionality has been disabled.
    }
    function mouseMoved() {
       cameraPosition = computeCameraPosition()
@@ -2299,24 +2306,25 @@
          <g>
             <!-- TODO: This is occurrence 1/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
+               {@const className =
+                  glyph.style === "hover" ? "hoverLight" : "grabLight"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower"}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
-                     class={glyph.style === "hover"
-                        ? "hoverLight"
-                        : "grabLight"}
+                     class={className}
                      transform="translate({glyph.position.x - port.x} {glyph
                         .position.y - port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}-highlight" />
                   </g>
-               {:else if glyph.type === "hopover"}
-                  <Hopover
-                     renderStyle={glyph.style}
-                     start={glyph.start}
-                     end={glyph.end}
-                     flip={glyph.flip}
-                  />
+               {:else if glyph.type === "crossing glyph"}
+                  <g
+                     class={className}
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation})"
+                  >
+                     <use href="#{glyph.glyph.fileName}-highlight" />
+                  </g>
                {/if}
             {/each}
          </g>
@@ -2324,7 +2332,7 @@
          <g>
             <!-- TODO: This is occurrence 2/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "glyph" && layerOf(glyph.position) === "lower"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower"}
                   <!-- TODO: Inherit "color" more intelligently.-->
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
@@ -2334,17 +2342,14 @@
                   >
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
-               {:else if glyph.type === "hopover"}
-                  <Hopover
-                     start={glyph.start}
-                     end={glyph.end}
-                     flip={glyph.flip}
-                     isRigid={Boolean(
-                        (glyph.segment.isRigid &&
-                           !flexSelect?.items.has(glyph.segment)) ||
-                           rigidSelect?.items.has(glyph.segment)
-                     )}
-                  />
+               {:else if glyph.type === "crossing glyph"}
+                  <g
+                     color="blue"
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation})"
+                  >
+                     <use href="#{glyph.glyph.fileName}" />
+                  </g>
                {/if}
             {/each}
          </g>
@@ -2354,7 +2359,7 @@
          <g>
             <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper"}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      class={glyph.style === "hover"
@@ -2372,7 +2377,7 @@
          <g>
             <!-- TODO: This is occurrence 4/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "glyph" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper"}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      color="blue"

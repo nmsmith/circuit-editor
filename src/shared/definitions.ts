@@ -14,7 +14,10 @@ import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap } from "./utilities"
 
 export type Vertex = Junction | Port
-export type VertexGlyph = null | "auto" | "TODO: name of SVG file"
+export type VertexGlyph =
+   | { type: "none" }
+   | { type: "auto" }
+   | { type: "manual"; glyph: string }
 export function isVertex(thing: any): thing is Vertex {
    return thing instanceof Junction || thing instanceof Port
 }
@@ -31,7 +34,7 @@ export class Junction extends Point implements Deletable {
    private readonly edges_ = new Set<Edge>()
    constructor(point: Point) {
       super(point.x, point.y)
-      this.glyph = "auto"
+      this.glyph = { type: "auto" }
       Junction.s.add(this)
    }
    delete(): Set<Junction> {
@@ -72,8 +75,7 @@ export class Junction extends Point implements Deletable {
    // If the junction is an X-junction or a straight line, convert it to a
    // crossing. Thereafter, all references to the junction should be discarded.
    convertToCrossing(
-      currentCrossings: DefaultMap<Segment, Map<Segment, Point>>,
-      crossingType?: CrossingType
+      currentCrossings: DefaultMap<Segment, Map<Segment, Point>>
    ) {
       if (this.edges_.size !== 2 && this.edges_.size !== 4) return
       // Gather all pairs of colinear edges.
@@ -109,11 +111,6 @@ export class Junction extends Point implements Deletable {
          segs[0].delete()
          segs[1].delete()
       }
-      if (crossing.length === 2 && crossingType) {
-         // Set the crossing type of the crossing itself.
-         crossing[0].crossingTypes.set(crossing[1], crossingType)
-         crossing[1].crossingTypes.set(crossing[0], crossingType)
-      }
       this.delete()
    }
 }
@@ -126,7 +123,7 @@ export class Port extends Point {
    constructor(symbol: SymbolInstance, point: Point) {
       super(point.x, point.y)
       this.symbol = symbol
-      this.glyph = "auto"
+      this.glyph = { type: "auto" }
       Port.s.add(this)
    }
    edges(): Set<Edge> {
@@ -171,9 +168,9 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    type: LineType
    isRigid = false
-   readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(
-      () => "H up"
-   )
+   readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(() => {
+      return { type: "auto" }
+   })
    private readonly edgeS: Edge
    private readonly edgeE: Edge
    constructor(type: LineType, start: Vertex, end: Vertex, axis: Axis) {
@@ -229,7 +226,10 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    }
 }
 
-export type CrossingType = "H up" | "H down" | "V left" | "V right" | "no hop"
+export type CrossingType =
+   | { type: "none" }
+   | { type: "auto" }
+   | { type: "manual"; glyph: string; facing: "left" | "right" }
 export class Crossing extends Geometry.LineSegmentCrossing<Segment> {}
 export function convertToJunction(crossing: Crossing) {
    let cutPoint = new Junction(crossing.point)

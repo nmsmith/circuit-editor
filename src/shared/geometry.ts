@@ -157,8 +157,8 @@ export class Point extends Object2D {
    displacedBy(v: Vector): Point {
       return new Point(this.x + v.x, this.y + v.y)
    }
-   interpolatedToward(point: Point, percent: number): Point {
-      return this.displacedBy(point.displacementFrom(this).scaledBy(percent))
+   interpolatedToward(point: Point, fraction: number): Point {
+      return this.displacedBy(point.displacementFrom(this).scaledBy(fraction))
    }
    rotatedAround(p: Point, r: Rotation): Point {
       return p.displacedBy(this.displacementFrom(p).rotatedBy(r))
@@ -185,6 +185,7 @@ export class Rotation {
    readonly x: number
    readonly y: number
    static readonly zero = this.fromRadians(0)
+   static readonly halfTurn = this.fromRadians(0.5 * tau)
 
    protected constructor(x: number, y: number) {
       this.x = x
