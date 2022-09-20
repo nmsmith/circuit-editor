@@ -2226,6 +2226,13 @@
       class="canvas"
       bind:this={canvas}
       style="cursor: {cursor}"
+      on:mouseenter={() => {
+         if (grabbedSymbol) {
+            spawnSymbol(grabbedSymbol.kind, grabbedSymbol.grabOffset)
+            keyInfo.getOrCreate(LMB).pressing = true
+            grabbedSymbol = null
+         }
+      }}
       on:mousedown={(event) => {
          event.preventDefault() // Disable selection of nearby text elements.
          if (leftMouseIsDown(event)) keyPressed(LMB)
@@ -2440,7 +2447,12 @@
       </g>
    </svg>
 
-   <div class="sidebar">
+   <div
+      class="sidebar"
+      on:mouseup={() => {
+         grabbedSymbol = null
+      }}
+   >
       <div class="topThings">
          <div class="projectPane">
             <button
@@ -2525,19 +2537,7 @@
          </div>
          <div class="paneTitle">Symbols</div>
       </div>
-      <div
-         class="symbolPane"
-         on:mouseup={() => {
-            grabbedSymbol = null
-         }}
-         on:mouseleave={() => {
-            if (grabbedSymbol) {
-               spawnSymbol(grabbedSymbol.kind, grabbedSymbol.grabOffset)
-               keyInfo.getOrCreate(LMB).pressing = true
-               grabbedSymbol = null
-            }
-         }}
-      >
+      <div class="symbolPane">
          {#if symbolLoadError}
             <div class="paneMessage">
                Failed to find a "{symbolFolderName}" folder within the project
@@ -2637,13 +2637,15 @@
                   style="background-image: url('{item.icon}')"
                />
                <div>{item.state}</div>
-               <div
-                  class="configTooltip"
-                  style="left: {mouseInClient.x + 8}px; top: {mouseInClient.y +
-                     18}px"
-               >
-                  {item.tooltip}
-               </div>
+               {#if !grabbedSymbol}
+                  <div
+                     class="configTooltip"
+                     style="left: {mouseInClient.x +
+                        8}px; top: {mouseInClient.y + 18}px"
+                  >
+                     {item.tooltip}
+                  </div>
+               {/if}
             </div>
          {/each}
       </div>
@@ -2704,20 +2706,6 @@
       height: 100%;
       margin: 0;
       overflow: hidden;
-   }
-   :global(.hover.stroke) {
-      stroke: rgb(0, 234, 255);
-      fill: none;
-   }
-   :global(.hover.fill) {
-      fill: rgb(0, 234, 255);
-   }
-   :global(.grab.stroke) {
-      stroke: white;
-      fill: none;
-   }
-   :global(.grab.fill) {
-      fill: white;
    }
    .hoverLight {
       color: rgb(0, 234, 255);
@@ -2786,6 +2774,8 @@
       font-size: 15px;
       font-weight: 600;
       background-color: rgb(231, 234, 237);
+      user-select: none;
+      -webkit-user-select: none;
    }
    .projectPane {
       flex-shrink: 0;
@@ -2828,6 +2818,7 @@
       pointer-events: none;
    }
    .grabbedSymbolImage {
+      z-index: 10;
       pointer-events: none;
    }
    .linePane {
@@ -2904,6 +2895,8 @@
       flex-shrink: 0;
       background-color: rgb(231, 234, 237);
       /* box-shadow: 0px 0px 2px 1px #00000088 inset; */
+      user-select: none;
+      -webkit-user-select: none;
    }
    .toolButtons {
       display: grid;
