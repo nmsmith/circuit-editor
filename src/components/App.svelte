@@ -223,6 +223,21 @@
          ? "upper"
          : "lower"
    }
+   $: willBeDeleted = (item?: Segment | SymbolInstance | Glyph): boolean => {
+      if (!item || !eraseSelect) return false
+      if (item instanceof Segment || item instanceof SymbolInstance) {
+         return eraseSelect.items.has(item)
+      } else if (item.type === "vertex glyph") {
+         let m = movableAt(item.vertex)
+         if (m instanceof Junction) {
+            return [...m.edges()].every(([seg]) => eraseSelect?.items.has(seg))
+         } else {
+            return eraseSelect.items.has(m)
+         }
+      } else {
+         return item.segment ? eraseSelect.items.has(item.segment) : false
+      }
+   }
    function shouldExtendTheSegmentAt(
       junction: Junction,
       drawAxis: Axis
@@ -601,10 +616,10 @@
       start: Point
       items: Set<T>
    }
-   let eraseSelect: SelectOperation<Grabbable>
+   let eraseSelect: SelectOperation<Segment | SymbolInstance>
    $: {
       for (let symbol of SymbolInstance.s) {
-         let vis = eraseSelect?.items.has(symbol) ? "hidden" : "visible"
+         let vis = willBeDeleted(symbol) ? "hidden" : "visible"
          symbol.image.style.visibility = vis
          symbol.highlight.style.visibility = vis
       }
@@ -728,21 +743,22 @@
    }
    type HighlightStyle = "hover" | "grab" | undefined
    type Section = Geometry.LineSegment<Point>
-   type Glyph =
-      | {
-           type: "vertex glyph"
-           glyph: SymbolKind
-           position: Point
-           style: HighlightStyle
-        }
-      | {
-           type: "crossing glyph"
-           glyph: SymbolKind
-           position: Point
-           rotation: number // in degrees
-           style: HighlightStyle
-           segment: Segment
-        }
+   type VertexGlyph = {
+      type: "vertex glyph"
+      vertex: Vertex
+      glyph: SymbolKind
+      position: Point
+      style: HighlightStyle
+   }
+   type CrossingGlyph = {
+      type: "crossing glyph"
+      segment?: Segment
+      glyph: SymbolKind
+      position: Point
+      rotation: number // in degrees
+      style: HighlightStyle
+   }
+   type Glyph = VertexGlyph | CrossingGlyph
    let segmentsToDraw: Map<Segment, Section[]>
    let glyphsToDraw: Set<Glyph>
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
@@ -840,9 +856,10 @@
                pointMarkerGlyph
             ) {
                glyphsToDraw.add({
-                  type: "vertex glyph", // technically not true, but works fine
+                  type: "crossing glyph",
                   glyph: pointMarkerGlyph,
                   position: crossPoint,
+                  rotation: 0,
                   style: styleOf(crossPoint),
                })
             }
@@ -902,6 +919,7 @@
             if (glyph && glyphSymbol) {
                glyphsToDraw.add({
                   type: "vertex glyph",
+                  vertex: v,
                   glyph: glyphSymbol,
                   position: v,
                   style: styleOf(v),
@@ -918,6 +936,7 @@
                // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
                   type: "vertex glyph",
+                  vertex: v,
                   glyph: pointMarkerGlyph,
                   position: v,
                   style: styleOf(v),
@@ -931,6 +950,7 @@
             // Highlight ports on hover.
             glyphsToDraw.add({
                type: "vertex glyph",
+               vertex: v,
                glyph: pointMarkerGlyph,
                position: v,
                style: styleOf(v),
@@ -2295,7 +2315,7 @@
          <g id="segment layer">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#each sections as section}
-                  {#if !eraseSelect?.items.has(segment)}
+                  {#if !willBeDeleted(segment)}
                      <CircuitLine
                         type={segment.type}
                         segment={section}
@@ -2315,7 +2335,7 @@
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {@const className =
                   glyph.style === "hover" ? "hoverLight" : "grabLight"}
-               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      class={className}
@@ -2324,7 +2344,7 @@
                   >
                      <use href="#{glyph.glyph.fileName}-highlight" />
                   </g>
-               {:else if glyph.type === "crossing glyph"}
+               {:else if glyph.type === "crossing glyph" && !willBeDeleted(glyph)}
                   <g
                      class={className}
                      transform="translate({glyph.position.x} {glyph.position
@@ -2339,7 +2359,7 @@
          <g>
             <!-- TODO: This is occurrence 2/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
                   <!-- TODO: Inherit "color" more intelligently.-->
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
@@ -2349,7 +2369,7 @@
                   >
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
-               {:else if glyph.type === "crossing glyph"}
+               {:else if glyph.type === "crossing glyph" && !willBeDeleted(glyph)}
                   <g
                      color="blue"
                      transform="translate({glyph.position.x} {glyph.position
@@ -2366,7 +2386,7 @@
          <g>
             <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
-               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      class={glyph.style === "hover"
@@ -2384,7 +2404,7 @@
          <g>
             <!-- TODO: This is occurrence 4/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
-               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper"}
+               {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
                      color="blue"
