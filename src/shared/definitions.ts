@@ -337,7 +337,8 @@ export class SymbolKind {
             e.getAttribute("display") === "none" ||
             e.getAttribute("visibility") === "hidden" ||
             parseFloat(e.getAttribute("opacity") as string) === 0 ||
-            (noStroke && noFill)
+            (noStroke && noFill) ||
+            e.classList.contains("noHighlight")
          ) {
             // The element is invisible, so it shouldn't be used as a highlight.
             e.remove()
