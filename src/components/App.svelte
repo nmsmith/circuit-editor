@@ -244,7 +244,7 @@
    ): boolean {
       return junction.edges().size === 1 && junction.axes()[0] === drawAxis
    }
-   function isMoreHorizontal(subject: Segment, other: Segment) {
+   function isMoreHorizontal(subject: Segment, other: Segment): boolean {
       let rSeg = subject.axis.scalarRejectionFrom(Axis.horizontal)
       let rOther = other.axis.scalarRejectionFrom(Axis.horizontal)
       if (Math.abs(rSeg) < Math.abs(rOther)) {
@@ -252,7 +252,7 @@
       } else if (Math.abs(rSeg) > Math.abs(rOther)) {
          return false
       } else {
-         return rSeg < rOther ? subject : other // tie breaker
+         return rSeg < rOther // tie breaker
       }
    }
    function nearestAxis(to: Axis, ofAxes: Axis[]): Axis {
