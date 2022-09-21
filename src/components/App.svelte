@@ -969,7 +969,7 @@
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
-            (key.tool === "rigid" || key.tool === "flex")
+            (key.tool === "draw" || key.tool === "rigid" || key.tool === "flex")
          ) {
             // Pressing rigid/flex initiates a chain draw.
             chainDraw(key.tool === "rigid")
