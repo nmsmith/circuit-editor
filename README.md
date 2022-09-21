@@ -4,15 +4,18 @@ This app is an editor for electrical & hydraulic circuit diagrams.
 
 It is currently in-development. Some basic features are still missing (such as save and load), so it is not yet "production ready".
 
-# User guide (possibly out-of-date)
+# User guide
+
+This user guide may not be up-to-date. However, it is/was accurate at the time of writing.
 
 ## Opening a project
 
 The app facilitates the drawing of circuit diagrams that contain arbitrary symbols and line segments. Therefore, these resources must be provided to the app before drawing can begin. The app is currently centered around a "project folder", which must contain a subfolder for each kind of resource:
+
 -  The "symbols" folder holds the SVG files for each kind of circuit symbol that the user wishes to place. For example, the user may wish to place electrical resistors or hydraulic valves.
 -  The "lines" folder holds the JSON files for each kind of line that the user wishes to draw with. For example, the user may wish to draw electrical wires or hydraulic lines.
 -  The "vertex glyphs" folder holds the SVG files for each kind of glyph that can appear at the endpoints of lines, or at the ports of symbols. For example, perhaps a circular "node" should appear at a T-intersection of fluid lines.
-- The "crossing glyphs" folder holds the SVG files for each kind of glyph that can appear at the point where two lines cross without intersecting. For example, perhaps a "hop-over" should appear at the point where two hydraulic lines cross.
+-  The "crossing glyphs" folder holds the SVG files for each kind of glyph that can appear at the point where two lines cross without intersecting. For example, perhaps a "hop-over" should appear at the point where two hydraulic lines cross.
 
 To prepare the app for drawing, click on the "choose a project folder" button in the sidebar, and select a folder containing each of the subfolders listed above. The resources within those subfolders will be loaded into the app.
 
@@ -25,12 +28,13 @@ There are currently four tools implemented: draw, erase, warp, and slide.
 A tool can be equipped by pressing its button in the GUI, or by using a keyboard shortcut.
 
 The keyboard shortcuts are:
+
 -  D: draw
 -  E: erase
 -  W: warp
 -  S: slide
 
-It is also possible to switch to another tool *temporarily*. To do so, hold down the key of the desired tool and perform the operations you desire. When the key is released, the editor will automatically switch back to the previous tool.
+It is also possible to switch to another tool _temporarily_. To do so, hold down the key of the desired tool and perform the operations you desire. When the key is released, the editor will automatically switch back to the previous tool.
 
 ### The draw tool
 
@@ -38,9 +42,9 @@ The draw tool allows you to draw line segments, and attach them to symbols. To d
 
 By default, only horizontal and vertical lines can be drawn. To draw in a different direction, hold the Shift key. Once you have chosen a new draw direction, the Shift key can be released.
 
-Whilst drawing, the endpoint of the line being drawn will snap towards other line segments, and to the ports of nearby symbols. If the mouse is released whilst this is happening, the line will attach itself to the target. To *detach* a line from a target, click at the attachment point and drag backward along the line, as if you were "unplugging" it.
+Whilst drawing, the endpoint of the line being drawn will snap towards other line segments, and to the ports of nearby symbols. If the mouse is released whilst this is happening, the line will attach itself to the target. To _detach_ a line from a target, click at the attachment point and drag backward along the line, as if you were "unplugging" it.
 
-TODO: Explain chain-drawing.
+To draw multiple line segments in quick succession, you can tap the draw key ("D") to finalize the current line segment and begin the next.
 
 ### The erase tool
 
