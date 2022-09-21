@@ -2047,9 +2047,10 @@
    function updateRotate() {
       if (!warp) return
       // First, find the magnitude of the rotation to be performed.
-      let startDir = warp.start.directionFrom(warp.centroid)
-      let mouseDir = mouseOnCanvas.directionFrom(warp.centroid)
-      if (!startDir || !mouseDir) return
+      let startDir =
+         warp.start.directionFrom(warp.centroid) || Direction.negativeY
+      let mouseDir =
+         mouseOnCanvas.directionFrom(warp.centroid) || Direction.negativeY
       let mouseRotation = mouseDir.rotationFrom(startDir)
 
       // Then, if the rotation is close to a keyRotation, ease to it.
@@ -2573,9 +2574,11 @@
                      on:mousedown={() => {
                         grabbedSymbol = {
                            kind,
+                           // Grab slightly above the center of the symbol. This
+                           // position works well when the symbol is rotated.
                            grabOffset: new Vector(
                               (cameraZoom * -kind.svgBox.width()) / 2,
-                              (cameraZoom * -kind.svgBox.height()) / 2
+                              (cameraZoom * (-kind.svgBox.height() + 10)) / 2
                            ),
                         }
                      }}
