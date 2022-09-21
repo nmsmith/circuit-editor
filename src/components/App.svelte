@@ -2544,6 +2544,15 @@
                                  )
                               ).then((types) => {
                                  lineTypes = types
+                                 types.forEach((type) => {
+                                    // Bind the hydraulic line by default:
+                                    if (
+                                       type.name === hydraulicLineFileName &&
+                                       !selectedLineType
+                                    ) {
+                                       selectedLineType = type
+                                    }
+                                 })
                               })
                            }
                         })
