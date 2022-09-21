@@ -1,2 +1,5 @@
 directories: { output: "dist-electron" }
 files: ["src/*.cjs", "dist-web/**/*"]
+mac: { target: { target: "default", arch: [
+                  "universal", # "Universal" means x86 and ARM binaries are bundled together.
+               ] } }

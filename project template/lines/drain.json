@@ -1,0 +1,27 @@
+{
+   "color": "#00F",
+   "thickness": 3,
+   "dasharray": "6 6",
+   "meeting": {
+      "hydraulic": {
+         "crossing": "hopover.svg",
+         "T": "node.svg",
+         "X": "node.svg"
+      },
+      "drain": {
+         "crossing": "hopover.svg",
+         "T": "node.svg",
+         "X": "node.svg"
+      },
+      "pilot": {
+         "crossing": "hopover.svg",
+         "T": "node.svg",
+         "X": "node.svg"
+      },
+      "manifold": {
+         "crossing": "port.svg",
+         "T": "plug.svg",
+         "X": "port.svg"
+      }
+   }
+}
