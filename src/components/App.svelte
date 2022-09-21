@@ -60,7 +60,7 @@
    ]
    const hydraulicLineFileName = "hydraulic"
    let canvas: SVGElement | undefined // the root element of this component
-   const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
+   const row1Tools = ["qButton", "warp", "erase", "rigid", "tButton"] as const
    const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
@@ -274,7 +274,8 @@
       return keyInfo.read(Shift).pressing ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
-      if (s.endsWith("Button")) return s[0].toUpperCase()
+      if (s.endsWith("Button") || s === "rigid" || s === "flex")
+         return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
    }
    function copyPositions(): DefaultMap<Movable, Point> {
@@ -442,16 +443,16 @@
    }, [
       [RMB, { type: "pan", pressing: false }],
       ["Space", { type: "pan", pressing: false }],
-      ["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
+      //["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
       ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
       ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
-      ["KeyR", { type: "holdTool", tool: "rigid", pressing: false }],
-      ["KeyT", { type: "holdTool", tool: "tether", pressing: false }],
-      ["KeyA", { type: "holdTool", tool: "aButton", pressing: false }],
+      //["KeyR", { type: "holdTool", tool: "rigid", pressing: false }],
+      //["KeyT", { type: "holdTool", tool: "tether", pressing: false }],
+      //["KeyA", { type: "holdTool", tool: "aButton", pressing: false }],
       ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
       ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
-      ["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
-      ["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
+      //["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
+      //["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
       [LMB, { type: "useTool", pressing: false }],
    ])
 
@@ -537,12 +538,12 @@
          values: onAndOff,
          state: "off" as OnOrOff,
       },
-      placeholder: {
-         tooltip: "Placeholder.",
-         icon: "icons/targetSnap.svg",
-         values: onAndOff,
-         state: "on" as OnOrOff,
-      },
+      // placeholder: {
+      //    tooltip: "Placeholder.",
+      //    icon: "icons/targetSnap.svg",
+      //    values: onAndOff,
+      //    state: "on" as OnOrOff,
+      // },
    }
    function toggleConfig(item: typeof config[keyof typeof config]) {
       let i = item.values.indexOf(item.state as any)
