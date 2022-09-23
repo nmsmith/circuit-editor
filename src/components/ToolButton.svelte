@@ -29,8 +29,8 @@
    .isHeld,
    .button:active {
       box-shadow: 1px 1px 2px 0px #00000077 inset;
-      padding-left: 1px;
-      padding-top: 1px;
+      padding-left: 4px;
+      padding-top: 3px;
    }
    /* .isBound {
       background-color: rgb(214, 212, 169);
@@ -46,6 +46,7 @@
    .label {
       font-family: "Source Sans";
       font-size: 15px;
+      font-weight: 410;
       letter-spacing: 0.5px;
    }
 </style>

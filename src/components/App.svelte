@@ -2761,6 +2761,7 @@
    :global(html, body, table, tr, td) {
       font-family: "Source Sans";
       font-feature-settings: "cv01"; /* Capital I with serif. */
+      font-weight: 390;
       line-height: 1;
    }
    :global(input, button, select, textarea, optgroup, option) {
@@ -2780,6 +2781,7 @@
    }
    p {
       margin: 0;
+      line-height: 1.2;
    }
    button {
       padding: 2px;
@@ -2810,9 +2812,9 @@
    }
    .paneTitle {
       flex-shrink: 0;
-      padding: 5px 4px 4px 4px;
+      padding: 5px 4px 3px 4px;
       font-size: 17px;
-      font-weight: 600;
+      font-weight: 560;
       background-color: rgb(231, 234, 237);
       user-select: none;
       -webkit-user-select: none;
@@ -2850,6 +2852,7 @@
       flex-direction: column;
       align-items: flex-start;
       gap: 5px;
+      font-weight: 400;
    }
    .symbolImage {
       min-height: 20px;
@@ -2883,6 +2886,7 @@
       flex-direction: row;
       align-items: center;
       gap: 4px;
+      font-weight: 400;
    }
    .lineGridItem.selected {
       background-color: white;
@@ -2910,6 +2914,7 @@
       flex-direction: column;
       align-items: center;
       gap: 2px;
+      font-weight: 410;
    }
    .configImage {
       flex: 1;
