@@ -2747,8 +2747,8 @@
       color: white;
    }
    @font-face {
-      font-family: "Inter";
-      src: url("../fonts/Inter.ttf");
+      font-family: "Source Sans";
+      src: url("../fonts/SourceSans3.ttf");
       font-weight: 1 1000;
       font-synthesis: none;
    }
@@ -2759,13 +2759,16 @@
       font-synthesis: none;
    }
    :global(html, body, table, tr, td) {
-      font-family: "Inter";
+      font-family: "Source Sans";
+      font-feature-settings: "cv01"; /* Capital I with serif. */
+      line-height: 1;
    }
    :global(input, button, select, textarea, optgroup, option) {
       font-family: inherit;
       font-size: inherit;
       font-style: inherit;
       font-weight: inherit;
+      line-height: inherit;
    }
    :global(.svgTemplate) {
       position: absolute;
@@ -2773,10 +2776,14 @@
       top: 0;
    }
    div {
-      font-size: 14px;
+      font-size: 15px;
    }
    p {
       margin: 0;
+   }
+   button {
+      padding: 2px;
+      padding-bottom: 1px;
    }
    .spacer {
       height: 8px;
@@ -2803,8 +2810,8 @@
    }
    .paneTitle {
       flex-shrink: 0;
-      padding: 4px;
-      font-size: 15px;
+      padding: 5px 4px 4px 4px;
+      font-size: 17px;
       font-weight: 600;
       background-color: rgb(231, 234, 237);
       user-select: none;
@@ -2815,7 +2822,7 @@
       padding: 4px;
       display: flex;
       flex-direction: column;
-      gap: 4px;
+      gap: 5px;
       background-color: rgb(231, 234, 237);
       border-bottom: 1px solid grey;
    }

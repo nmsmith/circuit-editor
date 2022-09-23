@@ -13,8 +13,7 @@
 </script>
 
 <div class={className} on:mousedown>
-   <div class="capital">{label[0]}</div>
-   <div class="rest">{label.slice(1)}</div>
+   <div class="label">{label}</div>
 </div>
 
 <style>
@@ -24,6 +23,8 @@
       white-space: nowrap;
       user-select: none;
       -webkit-user-select: none;
+      padding: 3px;
+      padding-top: 2px;
    }
    .isHeld,
    .button:active {
@@ -37,16 +38,14 @@
    .isSelected {
       background-color: rgb(255, 250, 120);
    }
-   .capital {
-      display: inline;
-      padding-left: 3px;
-      margin-right: -3px;
-      font: bold 18px "Courier", Courier, monospace;
+   .label::first-letter {
+      font-family: "Courier", Courier, monospace;
+      font-size: 18px;
+      font-weight: bold;
    }
-   .rest {
-      display: inline;
-      font-family: "Fira Code", monospace;
-      font-size: 12px;
-      font-weight: 400;
+   .label {
+      font-family: "Source Sans";
+      font-size: 15px;
+      letter-spacing: 0.5px;
    }
 </style>
