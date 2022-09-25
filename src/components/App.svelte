@@ -40,7 +40,7 @@
    const symbolFolderName = "symbols"
    const vertexGlyphFolderName = "vertex glyphs"
    const crossingGlyphFolderName = "crossing glyphs"
-   const pointMarkerFolderName = "special glyphs"
+   const builtinGlyphFolderName = "built-in glyphs"
    const lineTypeFolderName = "lines"
    const symbolsForBrowserTesting = [
       "limit switch.svg",
@@ -50,7 +50,8 @@
    ]
    const vertexGlyphsForBrowserTesting = ["node.svg", "port.svg", "plug.svg"]
    const crossingGlyphsForBrowserTesting = ["hopover.svg"]
-   const pointMarkerFileName = "point marker.svg"
+   const vertexMarkerFileName = "vertex marker.svg"
+   const crossingMarkerFileName = "crossing marker.svg"
    const lineTypesForBrowserTesting = [
       "hydraulic.json",
       "pilot.json",
@@ -462,7 +463,8 @@
    let symbols = new Set<SymbolKind>()
    let vertexGlyphs = new Set<SymbolKind>()
    let crossingGlyphs = new Set<SymbolKind>()
-   let pointMarkerGlyph: SymbolKind | undefined
+   let vertexMarkerGlyph: SymbolKind | undefined
+   let crossingMarkerGlyph: SymbolKind | undefined
    let lineTypes = new Set<LineType>()
    // If we're not using Electron, use dummy symbols.
    let usingElectron: boolean
@@ -495,9 +497,14 @@
          })
       })
    }
-   loadSymbols(pointMarkerFolderName, [pointMarkerFileName]).then((kinds) => {
-      pointMarkerGlyph = [...kinds][0]
+   loadSymbols(builtinGlyphFolderName, [vertexMarkerFileName]).then((kinds) => {
+      vertexMarkerGlyph = [...kinds][0]
    })
+   loadSymbols(builtinGlyphFolderName, [crossingMarkerFileName]).then(
+      (kinds) => {
+         crossingMarkerGlyph = [...kinds][0]
+      }
+   )
    let symbolLoadError = false
    let lineTypeLoadError = false
 
@@ -848,18 +855,21 @@
          }
          segmentsToDraw.set(segment, sections)
       }
-      // Draw a point marker at highlighted crossings that have no glyph.
+      // Draw a crossing marker at highlighted crossings that have no glyph.
       for (let map of crossingMap.values()) {
          for (let crossPoint of map.values()) {
             if (
                !renderedCrossings.has(crossPoint) &&
                hoverLight.has(crossPoint) &&
-               pointMarkerGlyph
+               crossingMarkerGlyph
             ) {
+               let port = crossingMarkerGlyph.portLocations[0]
                glyphsToDraw.add({
                   type: "crossing glyph",
-                  glyph: pointMarkerGlyph,
-                  position: crossPoint,
+                  glyph: crossingMarkerGlyph,
+                  position: crossPoint.displacedBy(
+                     new Vector(-port.x, -port.y)
+                  ),
                   rotation: 0,
                   style: styleOf(crossPoint),
                })
@@ -926,7 +936,7 @@
                   style: styleOf(v),
                })
             } else if (
-               pointMarkerGlyph &&
+               vertexMarkerGlyph &&
                (hoverLight.has(v) ||
                   grabLight.has(v) ||
                   // If the edges form a straight line
@@ -938,7 +948,7 @@
                glyphsToDraw.add({
                   type: "vertex glyph",
                   vertex: v,
-                  glyph: pointMarkerGlyph,
+                  glyph: vertexMarkerGlyph,
                   position: v,
                   style: styleOf(v),
                })
@@ -946,13 +956,13 @@
          } else if (
             v instanceof Port &&
             hoverLight.has(v) &&
-            pointMarkerGlyph
+            vertexMarkerGlyph
          ) {
             // Highlight ports on hover.
             glyphsToDraw.add({
                type: "vertex glyph",
                vertex: v,
-               glyph: pointMarkerGlyph,
+               glyph: vertexMarkerGlyph,
                position: v,
                style: styleOf(v),
             })
