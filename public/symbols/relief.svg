@@ -1,0 +1,90 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" version="1.1" xmlns:xlink="http://www.w3.org/1999/xlink" preserveAspectRatio="none" x="0px" y="0px" width="62px" height="99px" viewBox="0 0 62 99">
+<defs>
+<g id="portSnap_0_Layer0_0_FILL">
+<path fill="#0AC0BF" fill-opacity="0" stroke="none" d="
+M 3.15 -3.15
+Q 1.85 -4.45 0 -4.45 -1.85 -4.45 -3.15 -3.15 -4.45 -1.85 -4.45 0 -4.45 1.85 -3.15 3.15 -1.85 4.45 0 4.45 1.85 4.45 3.15 3.15 4.45 1.85 4.45 0 4.45 -1.85 3.15 -3.15 Z"/>
+</g>
+
+<g id="Layer0_0_MEMBER_4_FILL">
+<path fill="#FFFFFF" stroke="none" d="
+M -29.05 -30
+L -29.05 30 30.95 30 30.95 -30 -29.05 -30 Z"/>
+</g>
+
+<g id="arrow_0_Layer0_0_FILL">
+<path fill="#000000" stroke="none" d="
+M -29.3 0.1
+L -14.3 4.1 -14.3 0.1 -14.3 -3.9 -29.3 0.1 Z"/>
+</g>
+
+<g id="adjustableArrow_0_Layer0_0_FILL">
+<path fill="#000000" stroke="none" d="
+M 33.9 7.45
+L 20.2 0.2 19.3 4.1 18.45 8 33.9 7.45 Z"/>
+</g>
+
+<path id="standardSpring_0_Layer0_0_1_STROKES" stroke="#000000" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" fill="none" d="
+M 0 -0.05
+L -2.95 -15 -9.2 15 -15.45 -15 -21.7 15 -27.9 -15 -34.1 15 -37.5 -0.3"/>
+
+<path id="Layer0_0_MEMBER_4_1_STROKES" stroke="#000000" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" fill="none" d="
+M -29.05 -30
+L 30.95 -30 30.95 30 -29.05 30 -29.05 -30 Z"/>
+
+<path id="arrow_0_Layer0_0_1_STROKES" stroke="#000000" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" fill="none" d="
+M -14.3 0.1
+L 29.25 0.1"/>
+
+<path id="adjustableArrow_0_Layer0_0_1_STROKES" stroke="#000000" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" fill="none" d="
+M 19.3 4.1
+L -33.9 -7.95"/>
+</defs>
+
+<g id="port1Snap" transform="matrix( 1, 0, 0, 1, 1,31) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#portSnap_0_Layer0_0_FILL"/>
+</g>
+</g>
+
+<g id="port3Snap" transform="matrix( 1, 0, 0, 1, 61,31) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#portSnap_0_Layer0_0_FILL"/>
+</g>
+</g>
+
+<g id="port2Snap" transform="matrix( 1, 0, 0, 1, 16,1) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#portSnap_0_Layer0_0_FILL"/>
+</g>
+</g>
+
+<g id="spring" transform="matrix( 0, -0.999847412109375, -1, 0, 16,60.95) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#standardSpring_0_Layer0_0_1_STROKES"/>
+</g>
+</g>
+
+<g transform="matrix( 1, 0, 0, 0.999847412109375, 30.05,31) ">
+<use xlink:href="#Layer0_0_MEMBER_4_FILL"/>
+
+<use xlink:href="#Layer0_0_MEMBER_4_1_STROKES"/>
+</g>
+
+<g id="arrow" transform="matrix( -1, 0, 0, -0.999847412109375, 30.75,16) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#arrow_0_Layer0_0_FILL"/>
+
+<use xlink:href="#arrow_0_Layer0_0_1_STROKES"/>
+</g>
+</g>
+
+<g transform="matrix( 1, 0, 0, 0.999847412109375, 21.85,81.25) ">
+<g transform="matrix( 1, 0, 0, 1, 0,0) ">
+<use xlink:href="#adjustableArrow_0_Layer0_0_FILL"/>
+
+<use xlink:href="#adjustableArrow_0_Layer0_0_1_STROKES"/>
+</g>
+</g>
+</svg>

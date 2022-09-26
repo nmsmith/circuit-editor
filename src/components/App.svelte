@@ -47,6 +47,7 @@
       "prox sensor.svg",
       "pump.svg",
       "valve.svg",
+      "relief.svg",
       "accumulator.svg",
    ]
    const vertexGlyphsForBrowserTesting = ["node.svg", "port.svg", "plug.svg"]
@@ -2698,11 +2699,13 @@
                      <div class="symbolName">
                         {kind.fileName.replace(".svg", "")}
                      </div>
-                     <img
+                     <svg
                         class="symbolImage"
-                        alt=""
-                        src={assetFilePath(symbolFolderName, kind.fileName)}
-                     />
+                        viewBox="{kind.svgBox.x.low} {kind.svgBox.y
+                           .low} {kind.svgBox.width()} {kind.svgBox.height()}"
+                     >
+                        <use href="#{kind.fileName}" />
+                     </svg>
                   </div>
                {/each}
             </div>
@@ -2818,16 +2821,18 @@
       </div>
    </div>
    {#if grabbedSymbol}
-      <img
+      <svg
          class="grabbedSymbolImage"
-         src={assetFilePath(symbolFolderName, grabbedSymbol.kind.fileName)}
-         alt=""
+         viewBox="{grabbedSymbol.kind.svgBox.x.low} {grabbedSymbol.kind.svgBox.y
+            .low} {grabbedSymbol.kind.svgBox.width()} {grabbedSymbol.kind.svgBox.height()}"
          style="{absolutePosition(
             mouseInClient.displacedBy(grabbedSymbol.grabOffset)
          )}; width: {cameraZoom *
             grabbedSymbol.kind.svgBox.width()}px; height: {cameraZoom *
             grabbedSymbol.kind.svgBox.height()}px;"
-      />
+      >
+         <use href="#{grabbedSymbol.kind.fileName}" /></svg
+      >
    {/if}
 </div>
 
@@ -2961,10 +2966,12 @@
       max-height: 70px;
       max-width: 100%;
       pointer-events: none;
+      overflow: visible;
    }
    .grabbedSymbolImage {
       z-index: 10;
       pointer-events: none;
+      overflow: visible;
    }
    .linePane {
       min-height: 100px;

@@ -256,6 +256,7 @@ export class SymbolKind {
       this.fileName = fileName
       this.svgTemplate = svgElement
       this.svgTemplate.id = fileName
+      this.svgTemplate.setAttribute("overflow", "visible") // don't clip
       this.svgTemplate.classList.add("svgTemplate")
       // Add the template to the main document so its size can be measured.
       document.getElementById("symbol templates")?.appendChild(this.svgTemplate)
@@ -295,6 +296,7 @@ export class SymbolKind {
       // a "highlight" around the original element.
       this.highlightTemplate = this.svgTemplate.cloneNode(true) as SVGElement
       this.highlightTemplate.id = `${fileName}-highlight`
+      this.highlightTemplate.setAttribute("overflow", "visible") // don't clip
       this.highlightTemplate.classList.add("svgTemplate")
       document
          .getElementById("symbol templates")
@@ -355,8 +357,6 @@ export class SymbolKind {
             e.setAttribute("stroke", "currentColor")
          }
       }
-      // When rendering the highlight, ignore its viewbox.
-      this.highlightTemplate.setAttribute("overflow", "visible")
    }
 }
 
