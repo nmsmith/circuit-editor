@@ -249,12 +249,12 @@ export class SymbolKind {
 
    constructor(fileName: string, fileContents: string) {
       let doc = new DOMParser().parseFromString(fileContents, "image/svg+xml")
-      if (!doc?.firstChild || doc.firstChild.nodeName !== "svg") {
-         throw `Failed to parse ${fileName}. Contents:\n${fileContents}`
+      let svgElement = doc.querySelector("svg")
+      if (!(svgElement instanceof SVGElement)) {
+         throw `Failed to locate an SVG element within ${fileName}. Contents:\n${fileContents}`
       }
-
       this.fileName = fileName
-      this.svgTemplate = doc.firstChild as SVGElement
+      this.svgTemplate = svgElement
       this.svgTemplate.id = fileName
       this.svgTemplate.classList.add("svgTemplate")
       // Add the template to the main document so its size can be measured.

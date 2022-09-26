@@ -47,6 +47,7 @@
       "prox sensor.svg",
       "pump.svg",
       "valve.svg",
+      "accumulator.svg",
    ]
    const vertexGlyphsForBrowserTesting = ["node.svg", "port.svg", "plug.svg"]
    const crossingGlyphsForBrowserTesting = ["hopover.svg"]
