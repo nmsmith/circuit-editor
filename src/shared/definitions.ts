@@ -256,7 +256,8 @@ export class SymbolKind {
          return new SymbolKind(fileName, doc, svg)
       } else {
          console.error(
-            `Failed to locate an SVG element within ${fileName}. Contents:\n${fileContents}`
+            `Failed to locate an SVG element within ${fileName}.`,
+            `Contents:\n${fileContents}`
          )
       }
    }
@@ -322,16 +323,8 @@ export class SymbolKind {
       )) {
          // We need to robustly check whether element "e" is actually visible.
          // If it isn't visible, we shouldn't highlight it.
-         let stroke = e.getAttribute("stroke")
-         let so = e.getAttribute("stroke-opacity")
-         let strokeOpacity = so ? parseFloat(so) : 1 // default, per SVG spec
-         let sw = e.getAttribute("stroke-width")
-         let strokeWidth = sw ? parseFloat(sw) : 1 // default, per SVG spec
-         let fill = e.getAttribute("fill")
-         let fo = e.getAttribute("fill-opacity")
-         let fillOpacity = fo ? parseFloat(fo) : 1
          function hasOpacity0(color: string): boolean {
-            let rgba = color.split(",") // I'm not handling rgba() with spaces.
+            let rgba = color.split(",")
             if (rgba.length === 4) {
                return parseFloat(rgba[3]) === 0
             } else if (color[0] === "#") {
@@ -341,18 +334,20 @@ export class SymbolKind {
                return color === "transparent"
             }
          }
+         let style = window.getComputedStyle(e)
          let noStroke =
-            !stroke ||
-            stroke === "none" ||
-            hasOpacity0(stroke) ||
-            strokeOpacity === 0 ||
-            strokeWidth === 0
+            style.stroke === "none" ||
+            hasOpacity0(style.stroke) ||
+            parseFloat(style.strokeOpacity) === 0 ||
+            parseFloat(style.strokeWidth) === 0
          let noFill =
-            fill === "none" || (fill && hasOpacity0(fill)) || fillOpacity === 0
+            style.fill === "none" ||
+            hasOpacity0(style.fill) ||
+            parseFloat(style.fillOpacity) === 0
          if (
-            e.getAttribute("display") === "none" ||
-            e.getAttribute("visibility") === "hidden" ||
-            parseFloat(e.getAttribute("opacity") as string) === 0 ||
+            style.display === "none" ||
+            e.getAttribute("visibility") === "hidden" || // only check own attr.
+            parseFloat(style.opacity) === 0 ||
             (noStroke && noFill) ||
             e.classList.contains("noHighlight")
          ) {
@@ -363,7 +358,7 @@ export class SymbolKind {
             e.setAttribute("fill", "none")
             e.setAttribute(
                "stroke-width",
-               (strokeWidth + highlightThickness).toString()
+               (parseFloat(style.strokeWidth) + highlightThickness).toString()
             )
             // To stop highlights from "poking out" too far, use a round join.
             e.setAttribute("stroke-linejoin", "round")
