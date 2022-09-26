@@ -2758,13 +2758,13 @@
    }
    @font-face {
       font-family: "Source Sans";
-      src: url("../fonts/SourceSans3.ttf");
+      src: url("../fonts/SourceSans3VF.ttf.woff2");
       font-weight: 1 1000;
       font-synthesis: none;
    }
    @font-face {
-      font-family: "Fira Code";
-      src: url("../fonts/FiraCode.ttf");
+      font-family: "Nunito";
+      src: url("../fonts/NunitoVF.ttf");
       font-weight: 1 1000;
       font-synthesis: none;
    }

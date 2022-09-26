@@ -44,9 +44,9 @@
       font-weight: bold;
    }
    .label {
-      font-family: "Source Sans";
-      font-size: 15px;
-      font-weight: 410;
-      letter-spacing: 0.5px;
+      font-family: "Nunito";
+      font-size: 14.5px;
+      font-weight: 470;
+      letter-spacing: 0.4px;
    }
 </style>
