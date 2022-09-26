@@ -289,8 +289,11 @@ export class SymbolKind {
 
       // Locate the ports of the symbol.
       this.portLocations = []
-      for (let element of this.svgTemplate.querySelectorAll("[id]")) {
-         if (element.id.endsWith("Snap")) {
+      for (let element of this.svgTemplate.querySelectorAll(
+         "[id]:not(defs [id])"
+      )) {
+         if (element.id.toLowerCase().includes("snap")) {
+            // Record this port.
             let { x, y, width, height } = element.getBoundingClientRect()
             this.portLocations.push(new Point(x + width / 2, y + height / 2))
          }
