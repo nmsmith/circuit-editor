@@ -240,6 +240,8 @@ export function convertToJunction(crossing: Crossing) {
 // A common abstraction for storing the information required to instantiate
 // and highlight circuit symbols and glyphs.
 export class SymbolKind {
+   private static nextID = 0
+   readonly kindID: string
    readonly fileName: string
    readonly svgTemplate: SVGElement
    readonly highlightTemplate: SVGElement
@@ -253,11 +255,13 @@ export class SymbolKind {
       if (!(svgElement instanceof SVGElement)) {
          throw `Failed to locate an SVG element within ${fileName}. Contents:\n${fileContents}`
       }
+      this.kindID = ":" + SymbolKind.nextID++
       this.fileName = fileName
       this.svgTemplate = svgElement
       this.svgTemplate.id = fileName
       this.svgTemplate.setAttribute("overflow", "visible") // don't clip
       this.svgTemplate.classList.add("svgTemplate")
+      namespaceIDs(this.svgTemplate, this.kindID)
       // Add the template to the main document so its size can be measured.
       document.getElementById("symbol templates")?.appendChild(this.svgTemplate)
 
@@ -298,6 +302,7 @@ export class SymbolKind {
       this.highlightTemplate.id = `${fileName}-highlight`
       this.highlightTemplate.setAttribute("overflow", "visible") // don't clip
       this.highlightTemplate.classList.add("svgTemplate")
+      namespaceIDs(this.highlightTemplate, this.kindID + "h")
       document
          .getElementById("symbol templates")
          ?.appendChild(this.highlightTemplate)
@@ -364,17 +369,17 @@ export const highlightThickness = 5
 
 export class SymbolInstance extends Rectangle implements Deletable {
    static s = new Set<SymbolInstance>()
-   private static nextUUID = 0
+   private static nextID = 0
+   readonly instanceID: string
    readonly kind: SymbolKind
    readonly image: SVGElement
    readonly highlight: SVGElement
-   readonly idSuffix: string
    readonly ports: Port[]
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
       super(position, rotation, kind.collisionBox)
+      this.instanceID = ":" + SymbolInstance.nextID++
       this.kind = kind
-      this.idSuffix = ":" + SymbolInstance.nextUUID++
       this.ports = kind.portLocations.map(
          (p) => new Port(this, this.fromRectCoordinates(p))
       )
@@ -382,34 +387,18 @@ export class SymbolInstance extends Rectangle implements Deletable {
 
       // Create the SVG for this Symbol.
       let svg = kind.svgTemplate.cloneNode(true) as SVGElement
-      this.namespaceIDs(svg)
+      namespaceIDs(svg, this.instanceID)
       this.image = document.createElementNS("http://www.w3.org/2000/svg", "g")
       this.image.appendChild(svg)
       document.getElementById("symbol layer")?.appendChild(this.image)
       // Create the SVG for this Symbol's highlight.
       let highlightSvg = kind.highlightTemplate.cloneNode(true) as SVGElement
-      this.namespaceIDs(highlightSvg, true)
+      namespaceIDs(highlightSvg, this.instanceID)
       this.highlight = document.createElementNS(
          "http://www.w3.org/2000/svg",
          "g"
       )
       this.highlight.appendChild(highlightSvg)
-   }
-   private namespaceIDs(svg: SVGElement, isHighlight?: boolean) {
-      // To prevent the IDs of different instances of a Symbol SVG,
-      // namespace the IDs.
-      let suffix = this.idSuffix + (isHighlight ? "h" : "")
-      for (let element of svg.querySelectorAll("[id]")) {
-         element.setAttribute("id", element.id + suffix)
-      }
-      for (let element of svg.querySelectorAll("use")) {
-         const xlink = "http://www.w3.org/1999/xlink"
-         let ref = element.getAttribute("href")
-         let xRef = element.getAttributeNS(xlink, "href")
-         if (ref && ref[0] === "#") element.setAttribute("href", ref + suffix)
-         else if (xRef && xRef[0] === "#")
-            element.setAttributeNS(xlink, "href", xRef + suffix)
-      }
    }
    refresh() {
       // Add the SVG back to the DOM after a hot reload. (only needed for dev.)
@@ -473,5 +462,21 @@ export class SymbolInstance extends Rectangle implements Deletable {
          new Point(x.high, y.high),
          new Point(x.low, y.high),
       ].map((p) => this.fromRectCoordinates(p))
+   }
+}
+
+function namespaceIDs(svg: SVGElement, suffix: string) {
+   // To prevent the IDs of different instances of a Symbol SVG,
+   // namespace the IDs.
+   for (let element of svg.querySelectorAll("[id]")) {
+      element.setAttribute("id", element.id + suffix)
+   }
+   for (let element of svg.querySelectorAll("use")) {
+      const xlink = "http://www.w3.org/1999/xlink"
+      let ref = element.getAttribute("href")
+      let xRef = element.getAttributeNS(xlink, "href")
+      if (ref && ref[0] === "#") element.setAttribute("href", ref + suffix)
+      else if (xRef && xRef[0] === "#")
+         element.setAttributeNS(xlink, "href", xRef + suffix)
    }
 }
