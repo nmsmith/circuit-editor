@@ -30,7 +30,7 @@
       closestSegmentTo,
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
-   import { DefaultMap } from "~/shared/utilities"
+   import { DefaultMap, ToggleSet } from "~/shared/utilities"
    import CircuitLine from "~/components/CircuitLine.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
@@ -61,8 +61,10 @@
    ]
    const hydraulicLineFileName = "hydraulic"
    let canvas: SVGElement | undefined // the root element of this component
+   // const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
+   // const row2Tools = ["amass", "slide", "draw", "flex", "group"] as const
    const row1Tools = ["qButton", "warp", "erase", "rigid", "tButton"] as const
-   const row2Tools = ["aButton", "slide", "draw", "flex", "gButton"] as const
+   const row2Tools = ["amass", "slide", "draw", "flex", "gButton"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
    // Input constants
@@ -105,6 +107,7 @@
    type Attachable = Vertex | Segment // Something a segment can be attached to.
    type Toggleable = Vertex | Segment | Crossing
    type Grabbable = Junction | Segment | SymbolInstance
+   type Amassable = Grabbable
    type Movable = Junction | SymbolInstance // Things that move when dragged.
    type Pushable = Junction | Segment | SymbolInstance
    function isMovable(thing: any): thing is Movable {
@@ -225,18 +228,18 @@
          : "lower"
    }
    $: willBeDeleted = (item?: Segment | SymbolInstance | Glyph): boolean => {
-      if (!item || !eraseSelect) return false
+      if (!item || !eraseRect) return false
       if (item instanceof Segment || item instanceof SymbolInstance) {
-         return eraseSelect.items.has(item)
+         return eraseRect.items.has(item)
       } else if (item.type === "vertex glyph") {
          let m = movableAt(item.vertex)
          if (m instanceof Junction) {
-            return [...m.edges()].every(([seg]) => eraseSelect?.items.has(seg))
+            return [...m.edges()].every(([seg]) => eraseRect?.items.has(seg))
          } else {
-            return eraseSelect.items.has(m)
+            return eraseRect.items.has(m)
          }
       } else {
-         return item.segment ? eraseSelect.items.has(item.segment) : false
+         return item.segment ? eraseRect.items.has(item.segment) : false
       }
    }
    function shouldExtendTheSegmentAt(
@@ -275,8 +278,7 @@
       return keyInfo.read(Shift).pressing ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
-      if (s.endsWith("Button") || s === "rigid" || s === "flex")
-         return s[0].toUpperCase()
+      if (s.endsWith("Button")) return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
    }
    function copyPositions(): DefaultMap<Movable, Point> {
@@ -434,7 +436,7 @@
    let keyInfo = new DefaultMap<
       string,
       (
-         | { type: "none" | "pan" | "useTool" }
+         | { type: "none" | "pan" | "delete" | "useTool" }
          | { type: "holdTool"; tool: Tool }
       ) & {
          pressing: boolean
@@ -444,12 +446,14 @@
    }, [
       [RMB, { type: "pan", pressing: false }],
       ["Space", { type: "pan", pressing: false }],
+      ["Backspace", { type: "delete", pressing: false }],
+      ["Delete", { type: "delete", pressing: false }],
       //["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
       ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
       ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
       //["KeyR", { type: "holdTool", tool: "rigid", pressing: false }],
       //["KeyT", { type: "holdTool", tool: "tether", pressing: false }],
-      //["KeyA", { type: "holdTool", tool: "aButton", pressing: false }],
+      ["KeyA", { type: "holdTool", tool: "amass", pressing: false }],
       ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
       ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
       //["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
@@ -576,6 +580,7 @@
       canvasDownPosition: Point
       chainDrawFromEnd?: Vertex // Special field for the draw tool.
    } = null
+   let amassed: ToggleSet<Amassable> = new ToggleSet()
 
    let pan: null | { clientDownPosition: Point } = null
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
@@ -615,16 +620,16 @@
       originalDirections: DefaultMap<SymbolInstance, Direction>
       start: Point
    }
-   let multiSelect: null | {
+   let amassRect: null | {
       mode: "new" | "add" | "remove"
       start: Point
       items: Set<Grabbable>
    } = null
-   type SelectOperation<T> = null | {
+   type RectSelectOperation<T> = null | {
       start: Point
       items: Set<T>
    }
-   let eraseSelect: SelectOperation<Segment | SymbolInstance>
+   let eraseRect: RectSelectOperation<Segment | SymbolInstance>
    $: {
       for (let symbol of SymbolInstance.s) {
          let vis = willBeDeleted(symbol) ? "hidden" : "visible"
@@ -632,8 +637,8 @@
          symbol.highlight.style.visibility = vis
       }
    }
-   let rigidSelect: SelectOperation<Segment>
-   let flexSelect: SelectOperation<Segment>
+   let rigidRect: RectSelectOperation<Segment>
+   let flexRect: RectSelectOperation<Segment>
 
    // ---------------------------- Derived state ------------------------------
    $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
@@ -702,7 +707,7 @@
          } else {
             cursor = "default"
          }
-      } else if (multiSelect || eraseSelect || rigidSelect || flexSelect) {
+      } else if (amassRect || eraseRect || rigidRect || flexRect) {
          cursor = "default"
       } else {
          cursor = "cell"
@@ -728,9 +733,16 @@
    }
    let grabLight: Set<Highlightable>
    $: {
-      grabLight = new Set()
+      grabLight = new Set(amassed)
       if (warp) for (let m of warp.movables) grabLight.add(m)
       else if (slide && !draw) grabLight.add(slide.grabbed)
+      else if (amassRect) {
+         if (amassRect.mode === "remove") {
+            for (let item of amassRect.items) grabLight.delete(item)
+         } else {
+            for (let item of amassRect.items) grabLight.add(item)
+         }
+      }
    }
    $: {
       // Dynamically assign the highlight of each Symbol to the required layer.
@@ -977,6 +989,9 @@
       key.pressing = true
       if (key.type === "pan" && !pan) {
          pan = { clientDownPosition: mouseInClient }
+      } else if (key.type === "delete") {
+         deleteItems(amassed)
+         amassed = new ToggleSet()
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
@@ -994,7 +1009,19 @@
             heldTool.shouldBind = false // The tool is being used temporarily.
          }
          // Actions to perform immediately:
-         if (toolToUse === "erase") {
+         if (toolToUse === "amass") {
+            let grab = closestGrabbable(mouseOnCanvas)
+            let shift = keyInfo.read(Shift).pressing
+            let alt = keyInfo.read(Alt).pressing
+            if (grab) {
+               if (shift) amassed.toggle(grab.object)
+               else if (alt) amassed.delete(grab.object)
+               else amassed = new ToggleSet([grab.object])
+               amassed = amassed
+            } else if (!shift && !alt) {
+               amassed = new ToggleSet()
+            }
+         } else if (toolToUse === "erase") {
             let g = closestGrabbable(mouseOnCanvas)
             if (g) deleteItems([g.object])
          } else if (toolToUse === "rigid") {
@@ -1013,6 +1040,16 @@
       }
       keyInfo = keyInfo
    }
+   function command(name: string) {
+      // Unlike for a standard key press, we don't update the state of the key.
+      let key = keyInfo.getOrCreate(name)
+      if (key.type === "holdTool" && key.tool === "amass") {
+         // Select everything in the circuit.
+         amassed = new ToggleSet()
+         for (let segment of Segment.s) amassed.add(segment)
+         for (let symbol of SymbolInstance.s) amassed.add(symbol)
+      }
+   }
    function keyReleased(name: string) {
       let key = keyInfo.getOrCreate(name)
       if (!key.pressing) return // in case we missed a press
@@ -1026,10 +1063,6 @@
          }
       } else if (key.type === "useTool" && toolBeingUsed) {
          switch (toolBeingUsed.tool) {
-            case "warp":
-               endWarp()
-               grabbedSymbol = null
-               break
             case "draw": {
                if (draw) {
                   endDraw()
@@ -1038,17 +1071,24 @@
                }
                break
             }
-            case "erase":
-               endEraseSelect()
-               break
-            case "rigid":
-               endRigidSelect()
+            case "warp":
+               endWarp()
+               grabbedSymbol = null
                break
             case "slide":
                endSlide()
                break
+            case "amass":
+               endAmassRect()
+               break
+            case "erase":
+               endEraseRect()
+               break
+            case "rigid":
+               endRigidRect()
+               break
             case "flex":
-               endFlexSelect()
+               endFlexRect()
                break
          }
          toolBeingUsed = null
@@ -1068,24 +1108,27 @@
          // aborts should be implemented the same way: by invoking "undo".
          // (...and then setting the operation's state to "null")
          switch (toolBeingUsed.tool) {
+            case "draw":
+               abortDraw()
+               break
             case "warp":
                abortWarp()
                grabbedSymbol = null
                break
-            case "draw":
-               abortDraw()
-               break
-            case "erase":
-               abortEraseSelect()
-               break
-            case "rigid":
-               abortRigidSelect()
-               break
             case "slide":
                abortSlide()
                break
+            case "amass":
+               abortAmassRect()
+               break
+            case "erase":
+               abortEraseRect()
+               break
+            case "rigid":
+               abortRigidRect()
+               break
             case "flex":
-               abortFlexSelect()
+               abortFlexRect()
                break
          }
          toolBeingUsed = null
@@ -1123,9 +1166,10 @@
       // funcs may induce changes to derived data that the updates need to see.)
       updateDrawAndSlide()
       updateWarp()
-      updateEraseSelect()
-      updateRigidSelect()
-      updateFlexSelect()
+      updateAmassRect()
+      updateEraseRect()
+      updateRigidRect()
+      updateFlexRect()
       // Check for the initiation of drag-based operations.
       if (toolBeingUsed) {
          let dragVector = mouseOnCanvas
@@ -1159,12 +1203,14 @@
                }
                beginSlide(slideAxis, target.object, target.closestPart)
             }
-         } else if (tool === "erase" && !eraseSelect && shortDrag) {
-            beginEraseSelect(toolBeingUsed.canvasDownPosition)
-         } else if (tool === "rigid" && !rigidSelect && shortDrag) {
-            beginRigidSelect(toolBeingUsed.canvasDownPosition)
-         } else if (tool === "flex" && !flexSelect && shortDrag) {
-            beginFlexSelect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "amass" && !amassRect && shortDrag) {
+            beginAmassRect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "erase" && !eraseRect && shortDrag) {
+            beginEraseRect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "rigid" && !rigidRect && shortDrag) {
+            beginRigidRect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "flex" && !flexRect && shortDrag) {
+            beginFlexRect(toolBeingUsed.canvasDownPosition)
          }
       }
    }
@@ -2103,63 +2149,100 @@
    function abortWarp() {
       endWarp() // TODO: The right way to abort is to "undo" the operation.
    }
-   function beginEraseSelect(start: Point) {
-      eraseSelect = { start, items: new Set() }
+   function beginAmassRect(start: Point) {
+      amassRect = {
+         mode: keyInfo.read(Alt).pressing
+            ? "remove"
+            : keyInfo.read(Shift).pressing
+            ? "add"
+            : "new",
+         start,
+         items: new Set(),
+      }
+      if (amassRect.mode === "new") amassed = new ToggleSet()
    }
-   function beginRigidSelect(start: Point) {
-      rigidSelect = { start, items: new Set() }
+   function beginEraseRect(start: Point) {
+      eraseRect = { start, items: new Set() }
    }
-   function beginFlexSelect(start: Point) {
-      flexSelect = { start, items: new Set() }
+   function beginRigidRect(start: Point) {
+      rigidRect = { start, items: new Set() }
    }
-   function updateEraseSelect() {
-      if (!eraseSelect) return
-      eraseSelect.items = new Set()
-      let range = Range2D.fromCorners(eraseSelect.start, mouseOnCanvas)
+   function beginFlexRect(start: Point) {
+      flexRect = { start, items: new Set() }
+   }
+   function updateAmassRect() {
+      if (!amassRect) return
+      amassRect.items = new Set()
+      let range = Range2D.fromCorners(amassRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) eraseSelect.items.add(segment)
+         if (range.intersects(segment)) amassRect.items.add(segment)
       for (let symbol of SymbolInstance.s)
-         if (range.intersects(symbol)) eraseSelect.items.add(symbol)
+         if (range.intersects(symbol)) amassRect.items.add(symbol)
+      if (amassRect.mode === "remove")
+         for (let junction of Junction.s)
+            if (range.intersects(junction)) amassRect.items.add(junction)
    }
-   function updateRigidSelect() {
-      if (!rigidSelect) return
-      rigidSelect.items = new Set()
-      let range = Range2D.fromCorners(rigidSelect.start, mouseOnCanvas)
+   function updateEraseRect() {
+      if (!eraseRect) return
+      eraseRect.items = new Set()
+      let range = Range2D.fromCorners(eraseRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) rigidSelect.items.add(segment)
+         if (range.intersects(segment)) eraseRect.items.add(segment)
+      for (let symbol of SymbolInstance.s)
+         if (range.intersects(symbol)) eraseRect.items.add(symbol)
    }
-   function updateFlexSelect() {
-      if (!flexSelect) return
-      flexSelect.items = new Set()
-      let range = Range2D.fromCorners(flexSelect.start, mouseOnCanvas)
+   function updateRigidRect() {
+      if (!rigidRect) return
+      rigidRect.items = new Set()
+      let range = Range2D.fromCorners(rigidRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) flexSelect.items.add(segment)
+         if (range.intersects(segment)) rigidRect.items.add(segment)
    }
-   function endEraseSelect() {
-      if (!eraseSelect) return
-      deleteItems(eraseSelect.items)
-      eraseSelect = null
+   function updateFlexRect() {
+      if (!flexRect) return
+      flexRect.items = new Set()
+      let range = Range2D.fromCorners(flexRect.start, mouseOnCanvas)
+      for (let segment of Segment.s)
+         if (range.intersects(segment)) flexRect.items.add(segment)
    }
-   function endRigidSelect() {
-      if (!rigidSelect) return
-      for (let item of rigidSelect.items) item.isRigid = true
+   function endAmassRect() {
+      if (!amassRect) return
+      if (amassRect.mode === "remove") {
+         for (let item of amassRect.items) amassed.delete(item)
+      } else {
+         for (let item of amassRect.items) amassed.add(item)
+      }
+      amassed = amassed
+      amassRect = null
+   }
+   function endEraseRect() {
+      if (!eraseRect) return
+      deleteItems(eraseRect.items)
+      eraseRect = null
+   }
+   function endRigidRect() {
+      if (!rigidRect) return
+      for (let item of rigidRect.items) item.isRigid = true
       Segment.s = Segment.s
-      rigidSelect = null
+      rigidRect = null
    }
-   function endFlexSelect() {
-      if (!flexSelect) return
-      for (let item of flexSelect.items) item.isRigid = false
+   function endFlexRect() {
+      if (!flexRect) return
+      for (let item of flexRect.items) item.isRigid = false
       Segment.s = Segment.s
-      flexSelect = null
+      flexRect = null
    }
-   function abortEraseSelect() {
-      eraseSelect = null
+   function abortAmassRect() {
+      amassRect = null
    }
-   function abortRigidSelect() {
-      rigidSelect = null
+   function abortEraseRect() {
+      eraseRect = null
    }
-   function abortFlexSelect() {
-      flexSelect = null
+   function abortRigidRect() {
+      rigidRect = null
+   }
+   function abortFlexRect() {
+      flexRect = null
    }
    function abortAllButtons() {
       for (let key of keyInfo.keys()) keyAborted(key)
@@ -2193,10 +2276,13 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (!event.repeat && !keyInfo.read(Control).pressing) {
-         // Ignore repeated events from held-down keys, and don't trigger the
-         // key press if Ctrl/Cmd is held.
-         keyPressed(event.code)
+      if (!event.repeat) {
+         // Ignore repeated events from held-down keys.
+         if (keyInfo.read(Control).pressing) {
+            command(event.code)
+         } else {
+            keyPressed(event.code)
+         }
       }
       if (keyInfo.read(Control).pressing && event.code === "KeyA")
          event.preventDefault() // Don't select all text on the page.
@@ -2332,8 +2418,8 @@
                         type={segment.type}
                         segment={section}
                         className={(segment.isRigid &&
-                           !flexSelect?.items.has(segment)) ||
-                        rigidSelect?.items.has(segment)
+                           !flexRect?.items.has(segment)) ||
+                        rigidRect?.items.has(segment)
                            ? "rigid"
                            : ""}
                      />
@@ -2453,24 +2539,29 @@
          </g>
          <g>
             <!-- Selection boxes -->
-            <!-- {#if multiSelect} <RectSelectBox start={multiSelect.start} end={mouseOnCanvas} />{/if} -->
-            {#if eraseSelect}
+            {#if amassRect}
                <RectSelectBox
-                  start={eraseSelect.start}
+                  start={amassRect.start}
+                  end={mouseOnCanvas}
+                  scale={cameraZoom}
+               />{/if}
+            {#if eraseRect}
+               <RectSelectBox
+                  start={eraseRect.start}
                   end={mouseOnCanvas}
                   scale={cameraZoom}
                />
             {/if}
-            {#if rigidSelect}
+            {#if rigidRect}
                <RectSelectBox
-                  start={rigidSelect.start}
+                  start={rigidRect.start}
                   end={mouseOnCanvas}
                   scale={cameraZoom}
                />
             {/if}
-            {#if flexSelect}
+            {#if flexRect}
                <RectSelectBox
-                  start={flexSelect.start}
+                  start={flexRect.start}
                   end={mouseOnCanvas}
                   scale={cameraZoom}
                />
