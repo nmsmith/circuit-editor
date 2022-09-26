@@ -249,15 +249,21 @@ export class SymbolKind {
    readonly collisionBox: Range2D
    readonly portLocations: Point[]
 
-   constructor(fileName: string, fileContents: string) {
+   static new(fileName: string, fileContents: string): SymbolKind | undefined {
       let doc = new DOMParser().parseFromString(fileContents, "image/svg+xml")
-      let svgElement = doc.querySelector("svg")
-      if (!(svgElement instanceof SVGElement)) {
-         throw `Failed to locate an SVG element within ${fileName}. Contents:\n${fileContents}`
+      let svg = doc.querySelector("svg")
+      if (svg instanceof SVGElement) {
+         return new SymbolKind(fileName, doc, svg)
+      } else {
+         console.error(
+            `Failed to locate an SVG element within ${fileName}. Contents:\n${fileContents}`
+         )
       }
+   }
+   private constructor(fileName: string, doc: Document, svg: SVGElement) {
       this.kindID = ":" + SymbolKind.nextID++
       this.fileName = fileName
-      this.svgTemplate = svgElement
+      this.svgTemplate = svg
       this.svgTemplate.id = fileName
       this.svgTemplate.setAttribute("overflow", "visible") // don't clip
       this.svgTemplate.classList.add("svgTemplate")

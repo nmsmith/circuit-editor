@@ -397,7 +397,10 @@
          fileNames.map((fileName) =>
             fetch(assetFilePath(folderName, fileName))
                .then((response) => response.text())
-               .then((text) => s.add(new SymbolKind(fileName, text)))
+               .then((text) => {
+                  let kind = SymbolKind.new(fileName, text)
+                  if (kind) s.add(kind)
+               })
          )
       )
       return s
