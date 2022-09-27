@@ -63,6 +63,12 @@
    ]
    const hydraulicLineFileName = "hydraulic"
    let canvas: SVGElement | undefined // the root element of this component
+   $: {
+      if (canvas) {
+         canvasWidth = canvas.getBoundingClientRect().width
+         canvasHeight = canvas.getBoundingClientRect().height
+      }
+   }
    // const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
    // const row2Tools = ["amass", "slide", "draw", "flex", "group"] as const
    const row1Tools = ["qButton", "warp", "erase", "rigid", "tButton"] as const
@@ -476,6 +482,7 @@
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
+   let [canvasWidth, canvasHeight] = [800, 600]
    let projectFolder: null | string = null
    let symbols = new Set<SymbolKind>()
    let vertexGlyphs = new Set<SymbolKind>()
@@ -660,8 +667,6 @@
    let flexRect: RectSelectOperation<Segment>
 
    // ---------------------------- Derived state ------------------------------
-   $: canvasWidth = canvas ? canvas.getBoundingClientRect().width : 0
-   $: canvasHeight = canvas ? canvas.getBoundingClientRect().height : 0
    $: canvasCenter = new Point(canvasWidth / 2, canvasHeight / 2)
    $: computeCameraPosition = (): Point => {
       // This function is an indirection (a hack) for allowing `cameraPosition`
@@ -2366,6 +2371,12 @@
    }}
    on:blur={() => {
       abortAllButtons()
+   }}
+   on:resize={() => {
+      if (canvas) {
+         canvasWidth = canvas.getBoundingClientRect().width
+         canvasHeight = canvas.getBoundingClientRect().height
+      }
    }}
 />
 
