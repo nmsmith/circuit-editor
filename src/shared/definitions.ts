@@ -269,6 +269,17 @@ export class SymbolKind {
       this.svgTemplate.setAttribute("overflow", "visible") // don't clip
       this.svgTemplate.classList.add("svgTemplate")
       namespaceIDs(this.svgTemplate, this.kindID)
+      // If the SVG doesn't have a width/height, extract them from its viewBox.
+      let hasWH = svg.getAttribute("width") && svg.getAttribute("height")
+      let viewBox = svg.getAttribute("viewBox")
+      if (!hasWH && viewBox) {
+         let [x, y, w, h] = viewBox.split(",")
+         if (!w || !h) [x, y, w, h] = viewBox.split(" ")
+         if (w && h) {
+            svg.setAttribute("width", w.trim() + "px")
+            svg.setAttribute("height", h.trim() + "px")
+         }
+      }
       // Add the template to the main document so its size can be measured.
       document.getElementById("symbol templates")?.appendChild(this.svgTemplate)
 
