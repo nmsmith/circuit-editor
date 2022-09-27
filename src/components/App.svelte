@@ -84,7 +84,8 @@
    const standardGap = 30 // standard spacing between circuit elements
    const halfGap = 15
    const slidePad = halfGap / 2 // dist at which close-passing elements collide
-   const sqSegmentIntersectBuffer = 7.5 ** 2 // grace dist to ignore intersect
+   const sqSegmentCrossingBuffer = 7.5 ** 2 // grace dist to ignore crossing
+   const sqSegmentIntersectBuffer = 4 ** 2 // grace dist to ignore intersect
    // Zoom-dependent constants
    const sqShortDragDelay = 8 ** 2
    const sqLongDragDelay = 16 ** 2
@@ -694,7 +695,7 @@
                let minSqDistance = Math.min(
                   ...ends.map((p) => p.sqDistanceFrom(crossPoint as Point))
                )
-               if (minSqDistance >= sqSegmentIntersectBuffer) {
+               if (minSqDistance >= sqSegmentCrossingBuffer) {
                   crossingMap.getOrCreate(seg1).set(seg2, crossPoint)
                   crossingMap.getOrCreate(seg2).set(seg1, crossPoint)
                }
