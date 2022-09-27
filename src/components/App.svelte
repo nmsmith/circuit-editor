@@ -75,6 +75,8 @@
    const wheelZoomSpeed = 0.14
    const minZoom = 0.1
    const maxZoom = 20
+   const maxDoubleTapInterval = 0.4 // in seconds & per state machine transition
+   const maxDoubleTapMove = 4 // in pixels
    // Math constants
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
@@ -361,18 +363,6 @@
    function mouseWheelIncrements(event: WheelEvent): number {
       return (event as any).wheelDeltaY / 120
    }
-   function executeZoom(magnitude: number) {
-      let newZoom = cameraZoom * 2 ** magnitude
-      newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom))
-      let zoomFactor = newZoom / cameraZoom
-      // Zoom towards the mouse position.
-      cameraZoom = newZoom
-      committedCameraPosition = committedCameraPosition.displacedBy(
-         mouseOnCanvas
-            .displacementFrom(cameraPosition)
-            .scaledBy((zoomFactor - 1) / zoomFactor)
-      )
-   }
    function assetFilePath(folderName: string, fileName: string): string {
       if (usingElectron && projectFolder) {
          return "file://" + path.join(projectFolder, folderName, fileName)
@@ -420,6 +410,12 @@
       )
       return s
    }
+   function now(): number {
+      return performance.now() / 1000
+   }
+   function secondsSince(time: number): number {
+      return now() - time
+   }
 
    // ---------------------- State of input peripherals -----------------------
    let mouseInClient: Point = Point.zero
@@ -457,6 +453,26 @@
       //["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
       [LMB, { type: "useTool", pressing: false }],
    ])
+   let spacebarTap:
+      | { state: "initial" }
+      | {
+           state: "pressed" | "tapped"
+           timeOfAction: number // in seconds
+           placeOfAction: Point // in client coordinates
+        } = {
+      state: "initial",
+   }
+   function spacebarTapIsFresh(): boolean {
+      if (spacebarTap.state === "initial") {
+         return false
+      } else {
+         return (
+            secondsSince(spacebarTap.timeOfAction) < maxDoubleTapInterval &&
+            mouseInClient.distanceFrom(spacebarTap.placeOfAction) <
+               maxDoubleTapMove
+         )
+      }
+   }
 
    // ------------------------- Primary editor state --------------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
@@ -991,6 +1007,22 @@
       let key = keyInfo.getOrCreate(name)
       if (key.pressing) return // in case we missed a release
       key.pressing = true
+      // Update the state of double-tap actions.
+      if (
+         name === "Space" &&
+         spacebarTap.state === "tapped" &&
+         spacebarTapIsFresh()
+      ) {
+         resetCamera()
+         spacebarTap = { state: "initial" }
+      } else {
+         spacebarTap = {
+            state: "pressed",
+            timeOfAction: now(),
+            placeOfAction: mouseInClient,
+         }
+      }
+      // Perform the action associated with the key.
       if (key.type === "pan" && !pan) {
          pan = { clientDownPosition: mouseInClient }
       } else if (key.type === "delete") {
@@ -1058,6 +1090,21 @@
       let key = keyInfo.getOrCreate(name)
       if (!key.pressing) return // in case we missed a press
       key.pressing = false
+      // Update the state of double-tap actions.
+      if (
+         name === "Space" &&
+         spacebarTap.state === "pressed" &&
+         spacebarTapIsFresh()
+      ) {
+         spacebarTap = {
+            state: "tapped",
+            timeOfAction: now(),
+            placeOfAction: mouseInClient,
+         }
+      } else {
+         spacebarTap = { state: "initial" }
+      }
+      // Perform the action associated with the key.
       if (key.type === "pan") {
          endPan()
       } else if (key.type === "holdTool") {
@@ -1226,6 +1273,26 @@
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       toolBeingUsed = { tool: "warp", canvasDownPosition: mouseOnCanvas }
       beginWarp(new Set([symbol]), mouseOnCanvas)
+   }
+   function executeZoom(magnitude: number) {
+      let newZoom = cameraZoom * 2 ** magnitude
+      newZoom = Math.max(minZoom, Math.min(newZoom, maxZoom))
+      let zoomFactor = newZoom / cameraZoom
+      // Zoom towards the mouse position.
+      cameraZoom = newZoom
+      committedCameraPosition = committedCameraPosition.displacedBy(
+         mouseOnCanvas
+            .displacementFrom(cameraPosition)
+            .scaledBy((zoomFactor - 1) / zoomFactor)
+      )
+   }
+   function resetCamera() {
+      // Move the camera to the center of the circuit.
+      committedCameraPosition = Point.median(
+         [...allMovables()].map((m) => m.center())
+      )
+      // Make the zoom level something reasonable.
+      cameraZoom = 0.3
    }
 
    // ---------------------------- Derived events -----------------------------
@@ -2282,8 +2349,7 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (!event.repeat) {
-         // Ignore repeated events from held-down keys.
+      if (!event.repeat /* Ignore repeated events from held-down keys */) {
          if (keyInfo.read(Control).pressing) {
             command(event.code)
          } else {
@@ -2292,6 +2358,7 @@
       }
       if (keyInfo.read(Control).pressing && event.code === "KeyA")
          event.preventDefault() // Don't select all text on the page.
+      if (event.code === "Space") event.preventDefault() // Don't trigger scroll
    }}
    on:keyup={(event) => {
       updateModifierKeys(event)

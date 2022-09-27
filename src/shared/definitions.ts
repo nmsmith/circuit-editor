@@ -37,6 +37,9 @@ export class Junction extends Point implements Deletable {
       this.glyph = { type: "auto" }
       Junction.s.add(this)
    }
+   center(): Point {
+      return this
+   }
    delete(): Set<Junction> {
       Junction.s.delete(this)
       let neighbours = new Set<Junction>()
@@ -188,6 +191,9 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       forgetAxis(this.axis)
       ;(this.axis as Axis) = newAxis
       rememberAxis(this.axis)
+   }
+   center(): Point {
+      return this.start.interpolatedToward(this.end, 0.5)
    }
    delete(): Set<Junction> {
       Segment.s.delete(this)
@@ -421,6 +427,9 @@ export class SymbolInstance extends Rectangle implements Deletable {
       document
          .getElementById("symbol grabLight layer")
          ?.appendChild(this.highlight)
+   }
+   center(): Point {
+      return Point.mean(this.svgCorners())
    }
    delete(): Set<Junction> {
       SymbolInstance.s.delete(this)

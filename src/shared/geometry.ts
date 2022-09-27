@@ -178,6 +178,24 @@ export class Point extends Object2D {
       let [x, y] = [this.x, this.y]
       return new Point(cos * x - sin * y, sin * x + cos * y)
    }
+   // Arithmetic mean.
+   static mean(points: Point[]): Point {
+      if (points.length === 0) return Point.zero
+      let [x, y] = [0, 0]
+      for (let p of points) {
+         x += p.x
+         y += p.y
+      }
+      return new Point(x / points.length, y / points.length)
+   }
+   // Median of the x-coordinates and y-coordinates.
+   static median(points: Point[]): Point {
+      if (points.length === 0) return Point.zero
+      let xs = points.map((p) => p.x).sort((a, b) => a - b)
+      let ys = points.map((p) => p.y).sort((a, b) => a - b)
+      let i = Math.floor(points.length / 2)
+      return new Point(xs[i], ys[i])
+   }
 }
 
 // A Rotation is a _difference_ between two Directions.

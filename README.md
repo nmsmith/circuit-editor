@@ -86,6 +86,10 @@ If you are using a trackpad, you can pan the canvas by performing a panning gest
 
 Panning can also be performed by holding the spacebar and then moving the mouse cursor in the direction you want to pan.
 
+### Resetting the camera
+
+Double-tapping the spacebar will move the camera back to the center of the diagram. You will find this useful if you accidentally pan away from the diagram and cannot find it again.
+
 ## Resource file formats
 
 ### Symbols
