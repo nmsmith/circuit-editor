@@ -178,19 +178,11 @@
          closestNearTo(point, allVertices()) || closestNearTo(point, Segment.s)
       )
    }
-   function closestToggleable(point: Point): ClosenessResult<Toggleable> {
-      return (
-         closestNearTo<Vertex | Crossing>(
-            point,
-            allVertices(),
-            allCrossings()
-         ) || closestNearTo(point, Segment.s)
-      )
-   }
    function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
+      let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
       return (
          closestNearTo(point, Junction.s) ||
-         closestNearTo(point, SymbolInstance.s) ||
+         closestNearTo(point, symbols) ||
          closestNearTo(point, Segment.s)
       )
    }
@@ -199,21 +191,20 @@
    ): ClosenessResult<Attachable | Toggleable | Grabbable> {
       // This additional function is necessary because the individual functions
       // don't compose.
+      let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
       return (
          closestNearTo<Vertex | Crossing>(
             point,
             allVertices(),
             allCrossings()
          ) ||
-         closestNearTo(point, SymbolInstance.s) ||
+         closestNearTo(point, symbols) ||
          closestNearTo(point, Segment.s)
       )
    }
    function closestMovable(point: Point): ClosenessResult<Movable> {
-      return (
-         closestNearTo(point, Junction.s) ||
-         closestNearTo(point, SymbolInstance.s)
-      )
+      let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
+      return closestNearTo(point, Junction.s) || closestNearTo(point, symbols)
    }
    // ✨ A magical easing function for aesthetically-pleasing snapping. The
    // source is displaced from its true position as it approaches the target.
@@ -549,8 +540,14 @@
          values: onAndOff,
          state: "on" as OnOrOff,
       },
+      showSymbols: {
+         tooltip: "Show symbols?",
+         icon: "icons/symbols.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
       showSymbolSnaps: {
-         tooltip: "Display ports and collision boxes?",
+         tooltip: "Show ports and collision boxes?",
          icon: "icons/symbolSnaps.svg",
          values: onAndOff,
          state: "off" as OnOrOff,
@@ -638,9 +635,9 @@
    let eraseRect: RectSelectOperation<Segment | SymbolInstance>
    $: {
       for (let symbol of SymbolInstance.s) {
-         let vis = willBeDeleted(symbol) ? "hidden" : "visible"
-         symbol.image.style.visibility = vis
-         symbol.highlight.style.visibility = vis
+         let display = willBeDeleted(symbol) ? "none" : "initial"
+         symbol.image.style.display = display
+         symbol.highlight.style.display = display
       }
    }
    let rigidRect: RectSelectOperation<Segment>
@@ -754,11 +751,12 @@
       // Dynamically assign the highlight of each Symbol to the required layer.
       // The color of a highlight is inherited from the layer it is assigned to.
       for (let symbol of SymbolInstance.s) {
-         if (hoverLight.has(symbol)) {
+         let show = config.showSymbols.state === "on"
+         if (show && hoverLight.has(symbol)) {
             document
                .getElementById("symbol hoverLight layer")
                ?.appendChild(symbol.highlight)
-         } else if (grabLight.has(symbol)) {
+         } else if (show && grabLight.has(symbol)) {
             document
                .getElementById("symbol grabLight layer")
                ?.appendChild(symbol.highlight)
@@ -2182,8 +2180,9 @@
       let range = Range2D.fromCorners(amassRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
          if (range.intersects(segment)) amassRect.items.add(segment)
-      for (let symbol of SymbolInstance.s)
-         if (range.intersects(symbol)) amassRect.items.add(symbol)
+      if (config.showSymbols.state === "on" || amassRect.mode === "remove")
+         for (let symbol of SymbolInstance.s)
+            if (range.intersects(symbol)) amassRect.items.add(symbol)
       if (amassRect.mode === "remove")
          for (let junction of Junction.s)
             if (range.intersects(junction)) amassRect.items.add(junction)
@@ -2194,8 +2193,9 @@
       let range = Range2D.fromCorners(eraseRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
          if (range.intersects(segment)) eraseRect.items.add(segment)
-      for (let symbol of SymbolInstance.s)
-         if (range.intersects(symbol)) eraseRect.items.add(symbol)
+      if (config.showSymbols.state === "on")
+         for (let symbol of SymbolInstance.s)
+            if (range.intersects(symbol)) eraseRect.items.add(symbol)
    }
    function updateRigidRect() {
       if (!rigidRect) return
@@ -2388,6 +2388,20 @@
       <g
          transform="scale({cameraZoom}) translate({svgTranslate.x} {svgTranslate.y})"
       >
+         <g id="hidden symbol layer">
+            {#if config.showSymbols.state === "off"}
+               {#each [...SymbolInstance.s] as symbol}
+                  {@const c = symbol.svgCorners()}
+                  <polygon
+                     class="hiddenSymbol {grabLight.has(symbol)
+                        ? 'grabLight'
+                        : ''}"
+                     points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
+                        .y} {c[3].x},{c[3].y}"
+                  />
+               {/each}
+            {/if}
+         </g>
          <g id="symbol hoverLight layer" class="hoverLight" />
          <g id="symbol grabLight layer" class="grabLight" />
          <g id="segment hoverLight layer" class="hoverLight">
@@ -2485,7 +2499,12 @@
             {/each}
          </g>
          <!-- Symbol layer -->
-         <g id="symbol layer" />
+         <g
+            id="symbol layer"
+            style="display: {config.showSymbols.state === 'on'
+               ? 'initial'
+               : 'none'}"
+         />
          <!-- Symbol glyph highlight layer -->
          <g>
             <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
@@ -2846,16 +2865,22 @@
 />
 
 <style>
-   :global(html, body, #app) {
-      height: 100%;
-      margin: 0;
-      overflow: hidden;
-   }
    .hoverLight {
       color: rgb(0, 234, 255);
    }
    .grabLight {
       color: white;
+   }
+   .hiddenSymbol {
+      fill: rgba(0, 0, 0, 0.15);
+   }
+   .hiddenSymbol.grabLight {
+      fill: rgba(255, 255, 255, 0.5);
+   }
+   :global(html, body, #app) {
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
    }
    @font-face {
       font-family: "Source Sans";
@@ -3026,7 +3051,7 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 2px;
+      gap: 3px;
       font-weight: 410;
    }
    .configImage {
@@ -3043,7 +3068,7 @@
    }
    .configItem:hover .configTooltip {
       visibility: visible;
-      width: 140px;
+      width: 136px;
       padding: 2px;
       background-color: white;
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);

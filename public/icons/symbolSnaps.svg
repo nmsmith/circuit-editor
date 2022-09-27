@@ -1,19 +1,26 @@
 <?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-<svg width="100%" height="100%" viewBox="0 0 28 28" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-miterlimit:1.5;">
-    <g transform="matrix(1,0,0,1,0,-106)">
-        <rect id="symbolSnaps" x="0" y="106" width="28" height="28" style="fill:none;"/>
-        <clipPath id="_clip1">
-            <rect id="symbolSnaps1" serif:id="symbolSnaps" x="0" y="106" width="28" height="28"/>
-        </clipPath>
-        <g clip-path="url(#_clip1)">
-            <g transform="matrix(1.6,0,0,1.6,2.4,-64.8)">
-                <circle cx="13.5" cy="115.5" r="2.5"/>
+<svg width="100%" height="100%" viewBox="0 0 32 28" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-miterlimit:1.5;">
+    <g transform="matrix(1,0,0,1,-33,-106)">
+        <g id="symbolSnaps" transform="matrix(1.14286,0,0,1,33,0)">
+            <rect x="0" y="106" width="28" height="28" style="fill:none;"/>
+            <clipPath id="_clip1">
+                <rect x="0" y="106" width="28" height="28"/>
+            </clipPath>
+            <g clip-path="url(#_clip1)">
+                <g transform="matrix(1.4,0,0,1.6,5.6,-64.8)">
+                    <circle cx="13.5" cy="115.5" r="2.5" style="fill:rgb(195,0,0);"/>
+                </g>
+                <g transform="matrix(1.4,0,0,1.6,-15.4,-64.8)">
+                    <circle cx="13.5" cy="115.5" r="2.5" style="fill:rgb(195,0,0);"/>
+                </g>
+                <g transform="matrix(1.05,0,0,1.18182,-0.7,-21.8182)">
+                    <rect x="4" y="109" width="20" height="22" style="fill:none;stroke:rgb(193,0,0);stroke-width:1.68px;"/>
+                </g>
             </g>
-            <g transform="matrix(1.6,0,0,1.6,-17.6,-64.8)">
-                <circle cx="13.5" cy="115.5" r="2.5"/>
-            </g>
-            <rect x="4" y="107" width="20" height="26" style="fill:none;stroke:black;stroke-width:2px;"/>
+        </g>
+        <g transform="matrix(1,0,0,1,15,-20)">
+            <path d="M17,120L17,123.5" style="fill:none;stroke:black;stroke-width:2px;"/>
         </g>
     </g>
 </svg>
