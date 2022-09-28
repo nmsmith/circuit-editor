@@ -92,10 +92,92 @@ Double-tapping the spacebar will move the camera back to the center of the diagr
 
 ## Resource file formats
 
+This section describes the file format of each type of resource (e.g. symbols, line types) that can be used to draw circuit diagrams. To use these resources within a project, they must be placed in their appropriate places in the project folder, as described earlier.
+
 ### Symbols
 
-TODO.
+The circuit symbols you place in your project folder must be valid SVG files. When a symbol is loaded, the editor looks in the file for the following information about it:
+
+-  The view box.
+   -  This determines the region that can be interacted with using the mouse.
+-  The collision box.
+   -  This determines how the symbol should snap to other objects.
+-  The location of ports.
+   -  Ports are the parts of a symbol that circuit lines are able to connect to.
+
+The view box of a symbol is automatically configured by the CAD app from which the SVG was exported (e.g. Adobe Illustrator). Typically, the view box corresponds to a "canvas" or an "artboard" within the CAD app.
+
+A collision box can be specified by assigning the ID "collisionBox" to any SVG element. Currently, only rectangular collision boxes are supported. If you specify a non-rectangular shape, it will be approximated by a rectangle. If no collision box is specified, the view box will be used instead.
+
+A port can be specified by assigning an ID containing the letters "snap" to any SVG element (e.g. "snap1" or "theSnapPoint"). The center of such an element will be treated as the port's location. If you do not wish for the port to have a visual appearance, you can make it invisible or transparent.
+
+To assign IDs to SVG elements, you do not need to manually edit your SVG files. Instead, in most CAD apps, when you assign a name to a graphical object (e.g. an ellipse), the corresponding element in the exported SVG will inherit that name as its ID. Therefore, specifying a collision box should be as easy as drawing a rectangle in your CAD app and naming it "collisionBox", and specifying a port should be as easy as drawing an ellipse and using the word "snap" in its name.
 
 ### Line types
 
-TODO.
+The circuit editor allows you to define and draw lines of (almost) arbitrary appearance. Each line type is defined by a JSON file with a particular format. The root object of the JSON file can contain the following fields:
+
+-  color (mandatory): The color of the line, given as a CSS color, e.g. "blue", "#FFFFFF", or "rgb(180, 0, 90)".
+-  thickness (mandatory): The thickness of the line in pixels, given as an integer, e.g. 3.
+-  dasharray (optional): The dash pattern of the line, given in [the standard format](https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/stroke-dasharray) for SVG dash patterns.
+-  meeting (optional): A JSON object describing what glyphs (if any) should appear when this line type meets other line types. The format of this object is described in more detail below.
+
+As an example, you may define a JSON file "drain.json" for a drain line, containing the following:
+
+```
+{
+   "color": "#0000FF",
+   "thickness": 3,
+   "dasharray": "6 6",
+   "meeting": {
+      "drain": {
+         "crossing": "hopover.svg",
+         "T": "node.svg",
+         "X": "node.svg"
+      },
+      "manifold": {
+         "crossing": "port.svg",
+         "T": "plug.svg",
+         "X": "port.svg"
+      }
+   }
+}
+```
+
+This file describes a blue line (#0000FF) with a thickness of 3, and a basic dash pattern. The "meeting" field contains two entries. The first describes the glyphs that should be drawn when a drain line meets another drain line, and the second describes the glyphs that should be drawn when a drain line meets a manifold line.
+
+The "meeting" object consists of a set of key-value pairs. The keys ("drain" and "manifold") must match the file names of other line-type JSON files in the project, excluding their file extension. Thus for our example, the files "drain.json" and "manifold.json" must be included in the same directory as our example file (which happens to be "drain.json" itself).
+
+Each key is paired with a JSON object, which may contain the following fields:
+
+-  crossing (optional): The glyph that should be drawn when the main line type crosses over the key's line type without intersecting it. (This field is typically used to specify a "hop-over" glyph.)
+-  L (optional): The glyph that should be drawn when the main line type intersects the key's line type at an L-junction, i.e. a corner.
+-  T (optional): The glyph that should be drawn when the main line type intersects the key's line type at a T-junction.
+   -  Here, the main line type is the stem of the T, and the key's line type is the crossbar of the T. If you wish to specify the opposite kind of T-junction, you must do so in the key type's JSON file.
+   -  T-junctions involving three line types are not supported.
+-  X (optional): The glyph that should be drawn when the main type intersects the key's line type at an X-junction.
+   -  An X-junction is any junction with four lines coming into it. Neither the angle of the lines, nor the multiplicity of each line type is relevant.
+   -  X-junctions involving three or more line types are not supported.
+
+The particular glyph to be used at one of these meetings is described by a file name, as illustrated in the example. As described earlier in this guide, crossing glyphs (those associated with the "crossing" key) must be placed in the "crossing glyphs" folder, and vertex glyphs (those associated with the "L/T/X" keys) must be placed in the "vertex glyphs" folder. The format of these files is described in the next section.
+
+Most meeting types can be specified in _either_ file of the line types involved. For example, the X-intersection between a "drain" line and a "manifold" line can be specified in either "drain.json" or "manifold.json". The glyph that will be drawn is determined as follows:
+
+-  If a glyph is only specified in one file, then that glyph will be used.
+-  If a glyph is specified in both files, and it is the same glyph, then that glyph will be used.
+-  If a glyph is specified in both files, but they are different glyphs, then no glyph will be used.
+-  If a glyph is specified in neither file, then no glyph will be used.
+
+### Glyphs
+
+A "glyph" is a small symbol that can be placed (automatically or manually) at the point where two lines meet. As described earlier, a glyph is specified by an SVG file placed in a particular subfolder within the project folder.
+
+There are two kinds of glyph:
+
+-  Crossing glyphs, which appear at the points where two lines cross without intersecting.
+-  Vertex glyphs, which appear at L-junctions, T-junctions, and X-junctions.
+
+The file format for glyphs is the same as for symbols (described earlier), with the following caveats:
+
+-  A crossing glyph splices itself into the middle of a line — typically, the line that is "hopping over". Thus it must be a symbol with two ports: one for each side of the cut.
+-  A vertex glyph appears at the point where multiple lines intersect. Thus it must be a symbol with one port, corresponding to the part of the glyph that should be placed at the intersection point.

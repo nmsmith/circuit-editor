@@ -276,9 +276,12 @@ export class SymbolKind {
       this.svgTemplate.classList.add("svgTemplate")
       namespaceIDs(this.svgTemplate, this.kindID)
       // If the SVG doesn't have a width/height, extract them from its viewBox.
-      let hasWH = svg.getAttribute("width") && svg.getAttribute("height")
+      let widthAttr = svg.getAttribute("width")
+      let heightAttr = svg.getAttribute("height")
+      let hasWidth = widthAttr && !widthAttr.endsWith("%")
+      let hasHeight = heightAttr && !heightAttr.endsWith("%")
       let viewBox = svg.getAttribute("viewBox")
-      if (!hasWH && viewBox) {
+      if ((!hasWidth || !hasHeight) && viewBox) {
          let [x, y, w, h] = viewBox.split(",")
          if (!w || !h) [x, y, w, h] = viewBox.split(" ")
          if (w && h) {
