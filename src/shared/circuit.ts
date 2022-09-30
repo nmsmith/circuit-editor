@@ -11,7 +11,7 @@ import {
    Range1D,
 } from "~/shared/geometry"
 import * as Geometry from "~/shared/geometry"
-import { DefaultMap, DefaultWeakMap } from "./utilities"
+import { DefaultMap, DefaultWeakMap, ToggleSet } from "./utilities"
 
 export type Vertex = Junction | Port
 export type VertexGlyph =
@@ -103,6 +103,10 @@ export class Junction extends Point implements Deletable {
          crossing.push(mergedSegment)
          // Merge the state of the old segments into the new one.
          mergedSegment.isRigid = segs[0].isRigid && segs[1].isRigid
+         for (let group of groups) {
+            if (group.items.has(segs[0]) || group.items.has(segs[1]))
+               group.items.add(mergedSegment)
+         }
          // Merge the crossing types of the old segments into the new one.
          let seg0Crossings = currentCrossings.read(segs[0])
          for (let s of Segment.s) {
@@ -200,6 +204,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       forgetAxis(this.axis)
       this.start.removeEdge(this.edgeS)
       this.end.removeEdge(this.edgeE)
+      for (let group of groups) group.items.delete(this)
       let junctions = new Set<Junction>()
       if (this.start instanceof Junction) junctions.add(this.start)
       if (this.end instanceof Junction) junctions.add(this.end)
@@ -213,6 +218,9 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       for (let newSegment of newSegments) {
          // Copy the state of this segment.
          newSegment.isRigid = this.isRigid
+         for (let group of groups) {
+            if (group.items.has(this)) group.items.add(newSegment)
+         }
          // Copy the crossing types associated with this segment.
          for (let s of Segment.s) {
             s.crossingTypes.set(newSegment, s.crossingTypes.read(this))
@@ -231,6 +239,14 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       )
    }
 }
+
+// Groups that circuit elements can belong to.
+export type Groupable = Junction | Segment | SymbolInstance
+export type Group = { name: string; items: ToggleSet<Groupable> }
+export const groups = new Set<Group>()
+// The following "group" is not persisted, but is placed here for consistency:
+export const amassed: Group = { name: "amassed", items: new ToggleSet() }
+groups.add(amassed)
 
 export type CrossingType =
    | { type: "none" }

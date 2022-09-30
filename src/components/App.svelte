@@ -13,7 +13,9 @@
       SymbolInstance,
       convertToJunction,
       LineType,
-   } from "~/shared/definitions"
+      Groupable,
+      amassed,
+   } from "~/shared/circuit"
    import {
       rememberAxis,
       Object2D,
@@ -118,7 +120,6 @@
    type Attachable = Vertex | Segment // Something a segment can be attached to.
    type Toggleable = Vertex | Segment | Crossing
    type Grabbable = Junction | Segment | SymbolInstance
-   type Amassable = Grabbable
    type Movable = Junction | SymbolInstance // Things that move when dragged.
    type Pushable = Junction | Segment | SymbolInstance
    function isMovable(thing: any): thing is Movable {
@@ -423,7 +424,7 @@
       return now() - time
    }
 
-   // ---------------------- State of input peripherals -----------------------
+   // -------------- State of input peripherals (not persisted) ---------------
    let mouseInClient: Point = Point.zero
    const [LMB, RMB, Shift, Alt, Control] = [
       "LMB",
@@ -480,7 +481,7 @@
       }
    }
 
-   // ------------------------- Primary editor state --------------------------
+   // ---------------------- Editor state (not persisted) ---------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let [canvasWidth, canvasHeight] = [800, 600]
    let projectFolder: null | string = null
@@ -533,6 +534,25 @@
    let lineTypeLoadError = false
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
+
+   let selectedLineType: null | LineType = null
+   // The "boundTool" is the tool that will be used when no keyboard keys of
+   // type "holdTool" are being pressed.
+   let boundTool: Tool = "draw"
+   // When a "holdTool" key is pressed, it assigns a "heldTool". When the key
+   // is released, "heldTool" is reset to null.
+   let heldTool: null | { tool: Tool; shouldBind: boolean } = null
+   // If there is a "heldTool", use that. Otherwise, use the "boundTool".
+   $: toolToUse = heldTool ? heldTool.tool : boundTool
+   // The tool of the operation currently in-progress (if any).
+   let toolBeingUsed: null | {
+      tool: Tool
+      canvasDownPosition: Point
+      chainDrawFromEnd?: Vertex // Special field for the draw tool.
+   } = null
+
+   let committedCameraPosition: Point = Point.zero // Position on the canvas.
+   let cameraZoom: number = 1
 
    const onAndOff = ["on", "off"] as const
    type OnOrOff = typeof onAndOff[number]
@@ -588,26 +608,6 @@
       config = config // Inform Svelte of change.
    }
 
-   let committedCameraPosition: Point = Point.zero // Position on the canvas.
-   let cameraZoom: number = 1
-
-   let selectedLineType: null | LineType = null
-   // The "boundTool" is the tool that will be used when no keyboard keys of
-   // type "holdTool" are being pressed.
-   let boundTool: Tool = "draw"
-   // When a "holdTool" key is pressed, it assigns a "heldTool". When the key
-   // is released, "heldTool" is reset to null.
-   let heldTool: null | { tool: Tool; shouldBind: boolean } = null
-   // If there is a "heldTool", use that. Otherwise, use the "boundTool".
-   $: toolToUse = heldTool ? heldTool.tool : boundTool
-   // The tool of the operation currently in-progress (if any).
-   let toolBeingUsed: null | {
-      tool: Tool
-      canvasDownPosition: Point
-      chainDrawFromEnd?: Vertex // Special field for the draw tool.
-   } = null
-   let amassed: ToggleSet<Amassable> = new ToggleSet()
-
    let pan: null | { clientDownPosition: Point } = null
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
@@ -649,7 +649,7 @@
    let amassRect: null | {
       mode: "new" | "add" | "remove"
       start: Point
-      items: Set<Grabbable>
+      items: Set<Groupable>
    } = null
    type RectSelectOperation<T> = null | {
       start: Point
@@ -757,7 +757,7 @@
    }
    let grabLight: Set<Highlightable>
    $: {
-      grabLight = new Set(amassed)
+      grabLight = new Set(amassed.items)
       if (warp) for (let m of warp.movables) grabLight.add(m)
       else if (slide && !draw) grabLight.add(slide.grabbed)
       else if (amassRect) {
@@ -1031,8 +1031,8 @@
       if (key.type === "pan" && !pan) {
          pan = { clientDownPosition: mouseInClient }
       } else if (key.type === "delete") {
-         deleteItems(amassed)
-         amassed = new ToggleSet()
+         deleteItems(amassed.items)
+         amassed.items = amassed.items // Let Svelte know the group has changed.
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
@@ -1055,12 +1055,12 @@
             let shift = keyInfo.read(Shift).pressing
             let alt = keyInfo.read(Alt).pressing
             if (grab) {
-               if (shift) amassed.toggle(grab.object)
-               else if (alt) amassed.delete(grab.object)
-               else amassed = new ToggleSet([grab.object])
-               amassed = amassed
+               if (shift) amassed.items.toggle(grab.object)
+               else if (alt) amassed.items.delete(grab.object)
+               else amassed.items = new ToggleSet([grab.object])
+               amassed.items = amassed.items
             } else if (!shift && !alt) {
-               amassed = new ToggleSet()
+               amassed.items = new ToggleSet()
             }
          } else if (toolToUse === "erase") {
             let g = closestGrabbable(mouseOnCanvas)
@@ -1086,9 +1086,9 @@
       let key = keyInfo.getOrCreate(name)
       if (key.type === "holdTool" && key.tool === "amass") {
          // Select everything in the circuit.
-         amassed = new ToggleSet()
-         for (let segment of Segment.s) amassed.add(segment)
-         for (let symbol of SymbolInstance.s) amassed.add(symbol)
+         amassed.items = new ToggleSet()
+         for (let segment of Segment.s) amassed.items.add(segment)
+         for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
       }
    }
    function keyReleased(name: string) {
@@ -2235,7 +2235,7 @@
          start,
          items: new Set(),
       }
-      if (amassRect.mode === "new") amassed = new ToggleSet()
+      if (amassRect.mode === "new") amassed.items = new ToggleSet()
    }
    function beginEraseRect(start: Point) {
       eraseRect = { start, items: new Set() }
@@ -2286,11 +2286,11 @@
    function endAmassRect() {
       if (!amassRect) return
       if (amassRect.mode === "remove") {
-         for (let item of amassRect.items) amassed.delete(item)
+         for (let item of amassRect.items) amassed.items.delete(item)
       } else {
-         for (let item of amassRect.items) amassed.add(item)
+         for (let item of amassRect.items) amassed.items.add(item)
       }
-      amassed = amassed
+      amassed.items = amassed.items
       amassRect = null
    }
    function endEraseRect() {
@@ -2349,7 +2349,6 @@
    })
 </script>
 
-<!----------------------------- Keyboard events ------------------------------>
 <svelte:window
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {

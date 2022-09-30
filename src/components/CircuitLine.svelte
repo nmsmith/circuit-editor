@@ -1,5 +1,5 @@
 <script lang="ts">
-   import { highlightThickness, LineType } from "~/shared/definitions"
+   import { highlightThickness, LineType } from "~/shared/circuit"
    import type { LineSegment } from "~/shared/geometry"
    export let type: LineType
    export let segment: LineSegment
