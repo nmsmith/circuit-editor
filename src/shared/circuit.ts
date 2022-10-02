@@ -78,7 +78,7 @@ export class Junction extends Point implements Deletable {
    // If the junction is an X-junction or a straight line, convert it to a
    // crossing. Thereafter, all references to the junction should be discarded.
    convertToCrossing(
-      currentCrossings: DefaultMap<Segment, Map<Segment, Point>>
+      currentCrossings: DefaultMap<Segment, Map<Segment, Crossing>>
    ) {
       if (this.edges_.size !== 2 && this.edges_.size !== 4) return
       // Gather all pairs of colinear edges.
@@ -259,6 +259,9 @@ export function convertToJunction(crossing: Crossing) {
    crossing.seg2.splitAt(cutPoint)
 }
 
+export const strokeHighlightThickness = 4
+export const fillHighlightThickness = 5
+
 // A common abstraction for storing the information required to instantiate
 // and highlight circuit symbols and glyphs.
 export class SymbolKind {
@@ -390,11 +393,12 @@ export class SymbolKind {
             // The element is invisible, so it shouldn't be used as a highlight.
             e.remove()
          } else {
+            let w = noFill ? strokeHighlightThickness : fillHighlightThickness
             // Turn the element into a highlight.
             e.setAttribute("fill", "none")
             e.setAttribute(
                "stroke-width",
-               (parseFloat(style.strokeWidth) + highlightThickness).toString()
+               (parseFloat(style.strokeWidth) + w).toString()
             )
             // To stop highlights from "poking out" too far, use a round join.
             e.setAttribute("stroke-linejoin", "round")
@@ -404,8 +408,6 @@ export class SymbolKind {
       }
    }
 }
-
-export const highlightThickness = 5
 
 export class SymbolInstance extends Rectangle implements Deletable {
    static s = new Set<SymbolInstance>()
@@ -444,7 +446,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
       // Add the SVG back to the DOM after a hot reload. (only needed for dev.)
       document.getElementById("symbol layer")?.appendChild(this.image)
       document
-         .getElementById("symbol grabLight layer")
+         .getElementById("symbol amassLight layer")
          ?.appendChild(this.highlight)
    }
    center(): Point {

@@ -116,12 +116,11 @@
    snapAxes.forEach(rememberAxis)
 
    // ---------------------- Supplementary definitions ------------------------
-   type Highlightable = Point | Segment | SymbolInstance
-   type Attachable = Vertex | Segment // Something a segment can be attached to.
-   type Toggleable = Vertex | Segment | Crossing
-   type Grabbable = Junction | Segment | SymbolInstance
-   type Movable = Junction | SymbolInstance // Things that move when dragged.
-   type Pushable = Junction | Segment | SymbolInstance
+   type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
+   type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
+   type Movable = Junction | SymbolInstance // Things that actually move.
+   type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
+   type Attachable = Junction | Port | Segment //Things a segment can attach to.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -139,7 +138,7 @@
    }
    function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
-         for (let [seg2, point] of map) yield new Crossing(seg1, seg2, point)
+         for (let [seg2, crossing] of map) yield crossing
       }
    }
    function* allMovables(): Generator<Movable> {
@@ -195,9 +194,7 @@
          closestNearTo(point, Segment.s)
       )
    }
-   function closestInteractable(
-      point: Point
-   ): ClosenessResult<Attachable | Toggleable | Grabbable> {
+   function closestInteractable(point: Point): ClosenessResult<Interactable> {
       // This additional function is necessary because the individual functions
       // don't compose.
       let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
@@ -565,24 +562,24 @@
          values: stdHalfAndOff,
          state: standardGap as StdHalfOrOff,
       },
-      distanceWarn: {
-         tooltip: "Warn when distances are slightly askew?",
-         icon: "icons/distanceWarn.svg",
-         values: onAndOff,
-         state: "on" as OnOrOff,
-      },
+      // distanceWarn: {
+      //    tooltip: "Warn when distances are slightly askew?",
+      //    icon: "icons/distanceWarn.svg",
+      //    values: onAndOff,
+      //    state: "on" as OnOrOff,
+      // },
       angleSnap: {
          tooltip: "Snap to common angles?",
          icon: "icons/angleSnap.svg",
          values: onAndOff,
          state: "on" as OnOrOff,
       },
-      angleWarn: {
-         tooltip: "Warn when angles are slightly askew?",
-         icon: "icons/angleWarn.svg",
-         values: onAndOff,
-         state: "on" as OnOrOff,
-      },
+      // angleWarn: {
+      //    tooltip: "Warn when angles are slightly askew?",
+      //    icon: "icons/angleWarn.svg",
+      //    values: onAndOff,
+      //    state: "on" as OnOrOff,
+      // },
       showSymbols: {
          tooltip: "Show symbols?",
          icon: "icons/symbols.svg",
@@ -701,7 +698,7 @@
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
       svgTranslate = new Vector(-windowTopLeft.x, -windowTopLeft.y)
    }
-   let crossingMap: DefaultMap<Segment, Map<Segment, Point>>
+   let crossingMap: DefaultMap<Segment, Map<Segment, Crossing>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
       crossingMap = new DefaultMap(() => new Map())
       for (let seg1 of Segment.s) {
@@ -714,8 +711,9 @@
                   ...ends.map((p) => p.sqDistanceFrom(crossPoint as Point))
                )
                if (minSqDistance >= sqSegmentCrossingBuffer) {
-                  crossingMap.getOrCreate(seg1).set(seg2, crossPoint)
-                  crossingMap.getOrCreate(seg2).set(seg1, crossPoint)
+                  let crossing = new Crossing(seg1, seg2, crossPoint)
+                  crossingMap.getOrCreate(seg1).set(seg2, crossing)
+                  crossingMap.getOrCreate(seg2).set(seg1, crossing)
                }
             }
          }
@@ -737,34 +735,29 @@
          cursor = "cell"
       }
    }
-   let hoverLight: Set<Highlightable>
-   $: /* Highlight objects near the mouse cursor. */ {
-      hoverLight = new Set()
+   let touchLight: Set<Interactable>
+   $: {
+      touchLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
          if (draw?.endObject) {
-            hoverLight.add(draw.endObject)
-         } else if (!toolBeingUsed) {
+            touchLight.add(draw.endObject)
+         } else if (toolBeingUsed) {
+            if (warp) for (let m of warp.movables) touchLight.add(m)
+            else if (slide && !draw) touchLight.add(slide.grabbed)
+         } else {
             let thing = closestInteractable(mouseOnCanvas)
-            if (thing) {
-               if (thing.object instanceof Crossing) {
-                  hoverLight.add(thing.closestPart)
-               } else {
-                  hoverLight.add(thing.object)
-               }
-            }
+            if (thing) touchLight.add(thing.object)
          }
       }
    }
-   let grabLight: Set<Highlightable>
+   let amassLight: Set<Interactable>
    $: {
-      grabLight = new Set(amassed.items)
-      if (warp) for (let m of warp.movables) grabLight.add(m)
-      else if (slide && !draw) grabLight.add(slide.grabbed)
-      else if (amassRect) {
+      amassLight = new Set(amassed.items)
+      if (amassRect) {
          if (amassRect.mode === "remove") {
-            for (let item of amassRect.items) grabLight.delete(item)
+            for (let item of amassRect.items) amassLight.delete(item)
          } else {
-            for (let item of amassRect.items) grabLight.add(item)
+            for (let item of amassRect.items) amassLight.add(item)
          }
       }
    }
@@ -773,20 +766,20 @@
       // The color of a highlight is inherited from the layer it is assigned to.
       for (let symbol of SymbolInstance.s) {
          let show = config.showSymbols.state === "on"
-         if (show && hoverLight.has(symbol)) {
+         if (show && touchLight.has(symbol)) {
             document
-               .getElementById("symbol hoverLight layer")
+               .getElementById("symbol touchLight layer")
                ?.appendChild(symbol.highlight)
-         } else if (show && grabLight.has(symbol)) {
+         } else if (show && amassLight.has(symbol)) {
             document
-               .getElementById("symbol grabLight layer")
+               .getElementById("symbol amassLight layer")
                ?.appendChild(symbol.highlight)
          } else {
             symbol.highlight.remove()
          }
       }
    }
-   type HighlightStyle = "hover" | "grab" | undefined
+   type HighlightStyle = "touch" | "amass" | undefined
    type Section = Geometry.LineSegment<Point>
    type VertexGlyph = {
       type: "vertex glyph"
@@ -809,16 +802,16 @@
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
       segmentsToDraw = new Map()
       glyphsToDraw = new Set()
-      function styleOf(thing: Highlightable): HighlightStyle {
-         if (grabLight.has(thing)) return "grab"
-         else if (hoverLight.has(thing)) return "hover"
+      function styleOf(thing: Interactable): HighlightStyle {
+         if (amassLight.has(thing)) return "amass"
+         else if (touchLight.has(thing)) return "touch"
       }
-      let renderedCrossings = new Set<Point>()
+      let renderedCrossings = new Set<Crossing>()
       for (let segment of Segment.s) {
          // This array will collect the segment endpoints, and all of the
          // points at which crossing glyphs should be spliced into the segment.
          let points: Point[] = [segment.start, segment.end]
-         for (let [other, crossPoint] of crossingMap.read(segment)) {
+         for (let [other, crossing] of crossingMap.read(segment)) {
             // Determine which segment ("segment" or "other") should render a
             // crossing glyph, if any. If "segment" should render, we render it
             // now. If "other" should render, we wait until the iteration of the
@@ -827,12 +820,12 @@
             let autoGlyphSymbol = [...crossingGlyphs].find(
                (k) => k.fileName === autoGlyph
             )
-            let crossing = segment.crossingTypes.read(other)
+            let cross = segment.crossingTypes.read(other)
             let render: null | {
                glyph: SymbolKind
                facing: "left" | "right"
             } = null
-            if (crossing.type === "auto" && autoGlyphSymbol) {
+            if (cross.type === "auto" && autoGlyphSymbol) {
                let otherGlyph = other.type.meeting?.[segment.type.name].crossing
                // If both segments have auto-glyphs, then the glyph of the
                // "most horizontal" segment should be shown.
@@ -841,13 +834,13 @@
                      segment.start.x < segment.end.x ? "left" : "right"
                   render = { glyph: autoGlyphSymbol, facing }
                }
-            } else if (crossing.type === "manual") {
-               let manualGlyph = crossing.glyph
+            } else if (cross.type === "manual") {
+               let manualGlyph = cross.glyph
                let glyphSymbol = [...crossingGlyphs].find(
                   (k) => k.fileName === manualGlyph
                )
                if (glyphSymbol) {
-                  render = { glyph: glyphSymbol, facing: crossing.facing }
+                  render = { glyph: glyphSymbol, facing: cross.facing }
                }
             }
             if (render && render.glyph.portLocations.length === 2) {
@@ -862,23 +855,23 @@
                   rotation = rotation.add(Rotation.halfTurn)
                }
                let midpoint = p1.interpolatedToward(p2, 0.5)
-               let position = crossPoint.displacedBy(
+               let position = crossing.point.displacedBy(
                   Point.zero.displacementFrom(midpoint).rotatedBy(rotation)
                )
-               let halfLength = p2.distanceFrom(p1) / 2
+               let halfLen = p2.distanceFrom(p1) / 2
                points.push(
-                  crossPoint.displacedBy(segment.axis.scaledBy(+halfLength)),
-                  crossPoint.displacedBy(segment.axis.scaledBy(-halfLength))
+                  crossing.point.displacedBy(segment.axis.scaledBy(+halfLen)),
+                  crossing.point.displacedBy(segment.axis.scaledBy(-halfLen))
                )
                glyphsToDraw.add({
                   type: "crossing glyph",
                   glyph: render.glyph,
                   position,
                   rotation: rotation.toDegrees(),
-                  style: styleOf(segment) || styleOf(crossPoint),
+                  style: styleOf(segment) || styleOf(crossing),
                   segment,
                })
-               renderedCrossings.add(crossPoint)
+               renderedCrossings.add(crossing)
             }
          }
          // Compute the sections of this segment that need to be drawn.
@@ -894,21 +887,21 @@
       }
       // Draw a crossing marker at highlighted crossings that have no glyph.
       for (let map of crossingMap.values()) {
-         for (let crossPoint of map.values()) {
+         for (let crossing of map.values()) {
             if (
-               !renderedCrossings.has(crossPoint) &&
-               hoverLight.has(crossPoint) &&
+               !renderedCrossings.has(crossing) &&
+               touchLight.has(crossing) &&
                crossingMarkerGlyph
             ) {
                let port = crossingMarkerGlyph.portLocations[0]
                glyphsToDraw.add({
                   type: "crossing glyph",
                   glyph: crossingMarkerGlyph,
-                  position: crossPoint.displacedBy(
+                  position: crossing.point.displacedBy(
                      new Vector(-port.x, -port.y)
                   ),
                   rotation: 0,
-                  style: styleOf(crossPoint),
+                  style: styleOf(crossing),
                })
             }
          }
@@ -974,8 +967,8 @@
                })
             } else if (
                vertexMarkerGlyph &&
-               (hoverLight.has(v) ||
-                  grabLight.has(v) ||
+               (touchLight.has(v) ||
+                  amassLight.has(v) ||
                   // If the edges form a straight line
                   (edgeTypes.length === 2 &&
                      edgeTypes[0].name === edgeTypes[1].name &&
@@ -992,7 +985,7 @@
             }
          } else if (
             v instanceof Port &&
-            hoverLight.has(v) &&
+            touchLight.has(v) &&
             vertexMarkerGlyph
          ) {
             // Highlight ports on hover.
@@ -2470,8 +2463,8 @@
                {#each [...SymbolInstance.s] as symbol}
                   {@const c = symbol.svgCorners()}
                   <polygon
-                     class="hiddenSymbol {grabLight.has(symbol)
-                        ? 'grabLight'
+                     class="hiddenSymbol {amassLight.has(symbol)
+                        ? 'amassLight'
                         : ''}"
                      points="{c[0].x},{c[0].y} {c[1].x},{c[1].y} {c[2].x},{c[2]
                         .y} {c[3].x},{c[3].y}"
@@ -2479,11 +2472,11 @@
                {/each}
             {/if}
          </g>
-         <g id="symbol hoverLight layer" class="hoverLight" />
-         <g id="symbol grabLight layer" class="grabLight" />
-         <g id="segment hoverLight layer" class="hoverLight">
+         <g id="symbol touchLight layer" class="touchLight" />
+         <g id="symbol amassLight layer" class="amassLight" />
+         <g id="segment touchLight layer" class="touchLight">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if hoverLight.has(segment)}
+               {#if touchLight.has(segment)}
                   {#each sections as section}
                      <CircuitLine
                         type={segment.type}
@@ -2494,9 +2487,9 @@
                {/if}
             {/each}
          </g>
-         <g id="segment grabLight layer" class="grabLight">
+         <g id="segment amassLight layer" class="amassLight">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if grabLight.has(segment)}
+               {#if amassLight.has(segment)}
                   {#each sections as section}
                      <CircuitLine
                         type={segment.type}
@@ -2529,7 +2522,7 @@
             <!-- TODO: This is occurrence 1/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {@const className =
-                  glyph.style === "hover" ? "hoverLight" : "grabLight"}
+                  glyph.style === "touch" ? "touchLight" : "amassLight"}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
@@ -2589,9 +2582,9 @@
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.portLocations[0]}
                   <g
-                     class={glyph.style === "hover"
-                        ? "hoverLight"
-                        : "grabLight"}
+                     class={glyph.style === "touch"
+                        ? "touchLight"
+                        : "amassLight"}
                      transform="translate({glyph.position.x - port.x} {glyph
                         .position.y - port.y})"
                   >
@@ -2942,16 +2935,16 @@
 />
 
 <style>
-   .hoverLight {
-      color: rgb(0, 234, 255);
+   .touchLight {
+      color: rgb(60, 240, 255);
    }
-   .grabLight {
+   .amassLight {
       color: white;
    }
    .hiddenSymbol {
       fill: rgba(0, 0, 0, 0.15);
    }
-   .hiddenSymbol.grabLight {
+   .hiddenSymbol.amassLight {
       fill: rgba(255, 255, 255, 0.5);
    }
    :global(html, body, #app) {

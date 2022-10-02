@@ -1,5 +1,5 @@
 <script lang="ts">
-   import { highlightThickness, LineType } from "~/shared/circuit"
+   import { strokeHighlightThickness, LineType } from "~/shared/circuit"
    import type { LineSegment } from "~/shared/geometry"
    export let type: LineType
    export let segment: LineSegment
@@ -11,7 +11,7 @@
    class={highlight ? "" : className}
    stroke={highlight ? "currentColor" : type.color}
    stroke-width={highlight
-      ? type.thickness + highlightThickness
+      ? type.thickness + strokeHighlightThickness
       : type.thickness}
    stroke-dasharray={type.dasharray}
    stroke-linejoin="round"
