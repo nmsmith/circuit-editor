@@ -278,7 +278,8 @@
       return keyInfo.read(Shift).pressing ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
-      if (s.endsWith("Button")) return s[0].toUpperCase()
+      if (s.endsWith("Button") || s === "rigid" || s === "flex")
+         return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
    }
    function copyPositions(): DefaultMap<Movable, Point> {
@@ -1029,10 +1030,11 @@
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
-            (key.tool === "draw" || key.tool === "rigid" || key.tool === "flex")
+            key.tool ===
+               "draw" /*|| key.tool === "rigid" || key.tool === "flex"*/
          ) {
             // Pressing rigid/flex initiates a chain draw.
-            chainDraw(key.tool === "rigid")
+            chainDraw(false /*key.tool === "rigid"*/)
          } else {
             // Hold the tool. If another tool is already held, it is overridden.
             heldTool = { tool: key.tool, shouldBind: true }
@@ -1058,19 +1060,20 @@
          } else if (toolToUse === "erase") {
             let g = closestGrabbable(mouseOnCanvas)
             if (g) deleteItems([g.object])
-         } else if (toolToUse === "rigid") {
-            let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
-            if (segment?.isRigid === false) {
-               segment.isRigid = true
-               Segment.s = Segment.s
-            }
-         } else if (toolToUse === "flex") {
-            let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
-            if (segment?.isRigid) {
-               segment.isRigid = false
-               Segment.s = Segment.s
-            }
          }
+         // else if (toolToUse === "rigid") {
+         //    let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
+         //    if (segment?.isRigid === false) {
+         //       segment.isRigid = true
+         //       Segment.s = Segment.s
+         //    }
+         // } else if (toolToUse === "flex") {
+         //    let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
+         //    if (segment?.isRigid) {
+         //       segment.isRigid = false
+         //       Segment.s = Segment.s
+         //    }
+         // }
       }
       keyInfo = keyInfo
    }
@@ -1133,12 +1136,12 @@
             case "erase":
                endEraseRect()
                break
-            case "rigid":
-               endRigidRect()
-               break
-            case "flex":
-               endFlexRect()
-               break
+            // case "rigid":
+            //    endRigidRect()
+            //    break
+            // case "flex":
+            //    endFlexRect()
+            //    break
          }
          toolBeingUsed = null
       }
@@ -1173,12 +1176,12 @@
             case "erase":
                abortEraseRect()
                break
-            case "rigid":
-               abortRigidRect()
-               break
-            case "flex":
-               abortFlexRect()
-               break
+            // case "rigid":
+            //    abortRigidRect()
+            //    break
+            // case "flex":
+            //    abortFlexRect()
+            //    break
          }
          toolBeingUsed = null
       }
@@ -1256,11 +1259,12 @@
             beginAmassRect(toolBeingUsed.canvasDownPosition)
          } else if (tool === "erase" && !eraseRect && shortDrag) {
             beginEraseRect(toolBeingUsed.canvasDownPosition)
-         } else if (tool === "rigid" && !rigidRect && shortDrag) {
-            beginRigidRect(toolBeingUsed.canvasDownPosition)
-         } else if (tool === "flex" && !flexRect && shortDrag) {
-            beginFlexRect(toolBeingUsed.canvasDownPosition)
          }
+         // else if (tool === "rigid" && !rigidRect && shortDrag) {
+         //    beginRigidRect(toolBeingUsed.canvasDownPosition)
+         // } else if (tool === "flex" && !flexRect && shortDrag) {
+         //    beginFlexRect(toolBeingUsed.canvasDownPosition)
+         // }
       }
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector) {
