@@ -241,8 +241,8 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
 }
 
 // Groups that circuit elements can belong to.
-export type Groupable = Junction | Segment | SymbolInstance
-export type Group = { name: string; items: ToggleSet<Groupable> }
+export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
+export type Group = { name: string; items: ToggleSet<Interactable> }
 export const groups = new Set<Group>()
 // The following "group" is not persisted, but is placed here for consistency:
 export const amassed: Group = { name: "amassed", items: new ToggleSet() }
@@ -259,7 +259,7 @@ export function convertToJunction(crossing: Crossing) {
    crossing.seg2.splitAt(cutPoint)
 }
 
-export const strokeHighlightThickness = 4
+export const strokeHighlightThickness = 5
 export const fillHighlightThickness = 5
 
 // A common abstraction for storing the information required to instantiate

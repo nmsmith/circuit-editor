@@ -2,18 +2,15 @@
    import { onMount } from "svelte"
    import {
       Vertex,
-      isVertex,
       Edge,
       Junction,
       Port,
       Segment,
-      CrossingType,
       Crossing,
       SymbolKind,
       SymbolInstance,
-      convertToJunction,
       LineType,
-      Groupable,
+      Interactable,
       amassed,
    } from "~/shared/circuit"
    import {
@@ -116,7 +113,6 @@
    snapAxes.forEach(rememberAxis)
 
    // ---------------------- Supplementary definitions ------------------------
-   type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
    type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
@@ -126,11 +122,6 @@
    }
    function movableAt(vertex: Vertex): Movable {
       return vertex instanceof Junction ? vertex : vertex.symbol
-   }
-   function movablesOf(grabbable: Grabbable): Set<Movable> {
-      return isMovable(grabbable)
-         ? new Set([grabbable])
-         : new Set([movableAt(grabbable.start), movableAt(grabbable.end)])
    }
    function* allVertices(): Generator<Vertex> {
       for (let v of Junction.s) yield v
@@ -144,11 +135,6 @@
    function* allMovables(): Generator<Movable> {
       for (let m of Junction.s) yield m
       for (let m of SymbolInstance.s) yield m
-   }
-   function* allPushables(): Generator<Pushable> {
-      for (let p of Junction.s) yield p
-      for (let p of Segment.s) yield p
-      for (let p of SymbolInstance.s) yield p
    }
    function closestNearTo<T extends Object2D>(
       point: Point,
@@ -195,8 +181,6 @@
       )
    }
    function closestInteractable(point: Point): ClosenessResult<Interactable> {
-      // This additional function is necessary because the individual functions
-      // don't compose.
       let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
       return (
          closestNearTo<Vertex | Crossing>(
@@ -208,9 +192,20 @@
          closestNearTo(point, Segment.s)
       )
    }
-   function closestMovable(point: Point): ClosenessResult<Movable> {
-      let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
-      return closestNearTo(point, Junction.s) || closestNearTo(point, symbols)
+   function amassTarget(point: Point): ClosenessResult<Interactable> {
+      return closestInteractable(point)
+   }
+   function warpTarget(point: Point): ClosenessResult<Grabbable> {
+      return closestGrabbable(point)
+   }
+   function slideTarget(point: Point): ClosenessResult<Grabbable> {
+      return closestGrabbable(point)
+   }
+   function drawTarget(point: Point): ClosenessResult<Attachable> {
+      return closestAttachable(point)
+   }
+   function eraseTarget(point: Point): ClosenessResult<Grabbable> {
+      return closestGrabbable(point)
    }
    // ✨ A magical easing function for aesthetically-pleasing snapping. The
    // source is displaced from its true position as it approaches the target.
@@ -636,6 +631,7 @@
    type WarpMode = "pan" | "rotate"
    let warp: null | {
       mode: WarpMode
+      grabbed: Grabbable
       movables: Set<Movable>
       centroid: Point
       keyRotations: Set<Rotation>
@@ -647,7 +643,7 @@
    let amassRect: null | {
       mode: "new" | "add" | "remove"
       start: Point
-      items: Set<Groupable>
+      items: Set<Interactable>
    } = null
    type RectSelectOperation<T> = null | {
       start: Point
@@ -725,7 +721,7 @@
       if (slide) {
          cursor = "grabbing"
       } else if (toolToUse === "slide") {
-         if (closestGrabbable(mouseOnCanvas)) {
+         if (slideTarget(mouseOnCanvas)) {
             cursor = slide ? "grabbing" : "grab"
          } else {
             cursor = "default"
@@ -740,14 +736,32 @@
    $: {
       touchLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
-         if (draw?.endObject) {
-            touchLight.add(draw.endObject)
-         } else if (toolBeingUsed) {
-            if (warp) for (let m of warp.movables) touchLight.add(m)
-            else if (slide && !draw) touchLight.add(slide.grabbed)
-         } else {
-            let thing = closestInteractable(mouseOnCanvas)
-            if (thing) touchLight.add(thing.object)
+         let tool = toolBeingUsed?.tool || toolToUse
+         let touchLocation = toolBeingUsed?.canvasDownPosition || mouseOnCanvas
+         let touching: Interactable | undefined
+         if (tool === "amass" && !amassRect) {
+            touching = amassTarget(touchLocation)?.object
+         } else if (tool === "warp") {
+            touching = warp ? warp.grabbed : warpTarget(touchLocation)?.object
+         } else if (tool === "slide") {
+            touching = slide
+               ? slide.grabbed
+               : slideTarget(touchLocation)?.object
+         } else if (draw?.endObject) {
+            touching = draw.endObject
+         } else if (tool === "draw" && !draw) {
+            touching = drawTarget(touchLocation)?.object
+         } else if (tool === "erase" && !eraseRect) {
+            touching = eraseTarget(touchLocation)?.object
+         }
+         if (touching) {
+            // If touching part of an amassment, highlight all of it.
+            // Otherwise, just highlight the thing being touched.
+            if (tool !== "amass" && amassed.items.has(touching as any)) {
+               for (let item of amassed.items) touchLight.add(item)
+            } else {
+               touchLight.add(touching)
+            }
          }
       }
    }
@@ -762,7 +776,7 @@
          }
       }
    }
-   $: {
+   $: /* Apply highlighting to symbols. */ {
       // Dynamically assign the highlight of each Symbol to the required layer.
       // The color of a highlight is inherited from the layer it is assigned to.
       for (let symbol of SymbolInstance.s) {
@@ -804,8 +818,8 @@
       segmentsToDraw = new Map()
       glyphsToDraw = new Set()
       function styleOf(thing: Interactable): HighlightStyle {
-         if (amassLight.has(thing)) return "amass"
-         else if (touchLight.has(thing)) return "touch"
+         if (touchLight.has(thing)) return "touch"
+         else if (amassLight.has(thing)) return "amass"
       }
       let renderedCrossings = new Set<Crossing>()
       for (let segment of Segment.s) {
@@ -986,7 +1000,7 @@
             }
          } else if (
             v instanceof Port &&
-            touchLight.has(v) &&
+            (touchLight.has(v) || amassLight.has(v)) &&
             vertexMarkerGlyph
          ) {
             // Highlight ports on hover.
@@ -1046,7 +1060,7 @@
          }
          // Actions to perform immediately:
          if (toolToUse === "amass") {
-            let grab = closestGrabbable(mouseOnCanvas)
+            let grab = amassTarget(mouseOnCanvas)
             let shift = keyInfo.read(Shift).pressing
             let alt = keyInfo.read(Alt).pressing
             if (grab) {
@@ -1058,7 +1072,7 @@
                amassed.items = new ToggleSet()
             }
          } else if (toolToUse === "erase") {
-            let g = closestGrabbable(mouseOnCanvas)
+            let g = eraseTarget(mouseOnCanvas)
             if (g) deleteItems([g.object])
          }
          // else if (toolToUse === "rigid") {
@@ -1233,11 +1247,11 @@
          if (tool === "draw" && !draw && longDrag) {
             beginDraw(dragVector)
          } else if (tool === "warp" && !warp && shortDrag) {
-            let target = closestGrabbable(toolBeingUsed.canvasDownPosition)
-            if (target) beginWarp(movablesOf(target.object), target.closestPart)
+            let target = warpTarget(toolBeingUsed.canvasDownPosition)
+            if (target) beginWarp(target.object, target.closestPart)
          } else if (tool === "slide" && !slide && longDrag) {
             let dragAxis = Axis.fromVector(dragVector)
-            let target = closestGrabbable(toolBeingUsed.canvasDownPosition)
+            let target = slideTarget(toolBeingUsed.canvasDownPosition)
             if (dragAxis && target) {
                let slideAxis: Axis
                if (target.object instanceof Segment) {
@@ -1274,7 +1288,7 @@
       )
       let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
       toolBeingUsed = { tool: "warp", canvasDownPosition: mouseOnCanvas }
-      beginWarp(new Set([symbol]), mouseOnCanvas)
+      beginWarp(symbol, mouseOnCanvas)
    }
    function executeZoom(magnitude: number) {
       let newZoom = cameraZoom * 2 ** magnitude
@@ -1340,14 +1354,9 @@
          }
          newDraw(selectedLineType, end, drawAxis)
          return
-      } else if (
-         closestInteractable(toolBeingUsed.canvasDownPosition)
-            ?.object instanceof Crossing
-      ) {
-         return // Don't allow draw operations to start at crossings.
       }
       // Otherwise, start the draw operation at the closest attachable.
-      let attach = closestAttachable(toolBeingUsed.canvasDownPosition)
+      let attach = drawTarget(toolBeingUsed.canvasDownPosition)
       // First, determine the axis the draw operation should begin along.
       let dragAxis = Axis.fromVector(dragVector) as Axis
       let regularDrawAxis, specialDrawAxis
@@ -2017,7 +2026,10 @@
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
    }
-   function beginWarp(movables: Set<Movable>, partGrabbed: Point) {
+   function beginWarp(grabbed: Grabbable, partGrabbed: Point) {
+      let movables = isMovable(grabbed)
+         ? new Set([grabbed])
+         : new Set([movableAt(grabbed.start), movableAt(grabbed.end)])
       // Compute the point about which rotation should occur.
       let d = zeroVector
       for (let m of movables) {
@@ -2054,6 +2066,7 @@
       )
       warp = {
          mode: selectedWarpMode(),
+         grabbed,
          movables,
          centroid,
          keyRotations,
@@ -2066,9 +2079,9 @@
    function updateWarp() {
       if (!warp) return
       if (warp.mode !== selectedWarpMode()) {
-         let { movables } = warp
+         let { grabbed } = warp
          endWarp()
-         beginWarp(movables, mouseOnCanvas)
+         beginWarp(grabbed, mouseOnCanvas)
       } else {
          // Revert the operation; it will be redone from scratch.
          for (let m of warp.movables) {
@@ -2322,10 +2335,10 @@
    function abortAllButtons() {
       for (let key of keyInfo.keys()) keyAborted(key)
    }
-   function deleteItems(items: Iterable<Grabbable>) {
+   function deleteItems(items: Iterable<Interactable>) {
       let junctionsToConvert = new Set<Junction>()
       for (let thing of items) {
-         if (thing instanceof Port) continue // Ports are not deletable.
+         if (thing instanceof Port || thing instanceof Crossing) continue
          thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
       }
       for (let junction of junctionsToConvert) {
@@ -2476,11 +2489,11 @@
                {/each}
             {/if}
          </g>
-         <g id="symbol touchLight layer" class="touchLight" />
          <g id="symbol amassLight layer" class="amassLight" />
-         <g id="segment touchLight layer" class="touchLight">
+         <g id="symbol touchLight layer" class="touchLight" />
+         <g id="segment amassLight layer" class="amassLight">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if touchLight.has(segment)}
+               {#if amassLight.has(segment) && !willBeDeleted(segment)}
                   {#each sections as section}
                      <CircuitLine
                         type={segment.type}
@@ -2491,9 +2504,9 @@
                {/if}
             {/each}
          </g>
-         <g id="segment amassLight layer" class="amassLight">
+         <g id="segment touchLight layer" class="touchLight">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if amassLight.has(segment)}
+               {#if touchLight.has(segment) && !willBeDeleted(segment)}
                   {#each sections as section}
                      <CircuitLine
                         type={segment.type}
@@ -2506,8 +2519,8 @@
          </g>
          <g id="segment layer">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#each sections as section}
-                  {#if !willBeDeleted(segment)}
+               {#if !willBeDeleted(segment)}
+                  {#each sections as section}
                      <CircuitLine
                         type={segment.type}
                         segment={section}
@@ -2517,8 +2530,8 @@
                            ? "rigid"
                            : ""}
                      />
-                  {/if}
-               {/each}
+                  {/each}
+               {/if}
             {/each}
          </g>
          <!-- Segment glyph highlight layer -->
