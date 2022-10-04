@@ -635,7 +635,8 @@
       movables: Set<Movable>
       centroid: Point
       keyRotations: Set<Rotation>
-      incidentEdges: Set<Edge>
+      incidentEdges: Set<Edge> // edges incident to movables, but not in-between
+      affectedSegments: Set<Segment> // segments that may be altered by the warp
       originalPositions: DefaultMap<Movable, Point>
       originalDirections: DefaultMap<SymbolInstance, Direction>
       start: Point
@@ -2058,12 +2059,12 @@
             keyRotations.add(dir.rotationFrom(axis.negDirection()))
          }
       }
-      // Gather the incident edges; these are the edges that will be "warped".
+      // Gather the edges that may be affected by a warp.
+      let relevantEdges = [...movables].flatMap((m) => [...m.edges()])
       let incidentEdges = new Set(
-         [...movables].flatMap((movable) =>
-            [...movable.edges()].filter(([_, v]) => !movables.has(movableAt(v)))
-         )
+         relevantEdges.filter(([_, v]) => !movables.has(movableAt(v)))
       )
+      let affectedSegments = new Set(relevantEdges.map(([seg]) => seg))
       warp = {
          mode: selectedWarpMode(),
          grabbed,
@@ -2071,6 +2072,7 @@
          centroid,
          keyRotations,
          incidentEdges,
+         affectedSegments,
          originalPositions: copyPositions(),
          originalDirections: copySymbolDirections(),
          start: partGrabbed,
@@ -2176,7 +2178,7 @@
          for (let movable of warp.movables) movable.moveBy(displacement)
       }
 
-      // Finally, update the axis object associated with each incident edge.
+      // Finally, update the axis of each incident edge.
       for (let [segment] of warp.incidentEdges) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
@@ -2217,8 +2219,8 @@
       // Then, apply the rotation.
       for (let m of warp.movables) m.rotateAround(warp.centroid, easedRotation)
 
-      // Finally, update the axis object associated with each incident edge.
-      for (let [segment] of warp.incidentEdges) {
+      // Finally, update the axis of each edge that may have been rotated.
+      for (let segment of warp.affectedSegments) {
          let axis = Axis.fromVector(segment.end.displacementFrom(segment.start))
          if (!axis) continue
          segment.updateAxis(axis)
