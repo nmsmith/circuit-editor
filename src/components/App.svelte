@@ -1555,6 +1555,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      amassed.items = amassed.items
 
       return endVertex
    }
@@ -2026,11 +2027,45 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      amassed.items = amassed.items
    }
    function beginWarp(grabbed: Grabbable, partGrabbed: Point) {
-      let movables = isMovable(grabbed)
-         ? new Set([grabbed])
-         : new Set([movableAt(grabbed.start), movableAt(grabbed.end)])
+      let movables = new Set<Movable>()
+      if (amassed.items.has(grabbed)) {
+         amassed.items.forEach((item) => add(item))
+      } else if (isNextToAmassed(grabbed)) {
+         amassed.items.forEach((item) => add(item))
+         add(grabbed)
+      } else {
+         add(grabbed)
+      }
+      function add(thing: Interactable) {
+         if (isMovable(thing)) {
+            movables.add(thing)
+         } else if (thing instanceof Segment) {
+            movables.add(movableAt(thing.start))
+            movables.add(movableAt(thing.end))
+         } else {
+            // Ignore ports and crossings.
+         }
+      }
+      function isNextToAmassed(thing: Interactable): boolean {
+         // "Next to" has a meaning specific to the warp operation.
+         function edgeIsAmassed(edge: Edge): boolean {
+            return amassed.items.has(edge[0])
+         }
+         return (
+            ((thing instanceof Junction ||
+               thing instanceof SymbolInstance ||
+               thing instanceof Port) &&
+               [...thing.edges()].some(edgeIsAmassed)) ||
+            (thing instanceof Segment &&
+               (amassed.items.has(movableAt(thing.start)) ||
+                  amassed.items.has(movableAt(thing.end)) ||
+                  [...movableAt(thing.start).edges()].some(edgeIsAmassed) ||
+                  [...movableAt(thing.end).edges()].some(edgeIsAmassed)))
+         )
+      }
       // Compute the point about which rotation should occur.
       let d = zeroVector
       for (let m of movables) {
@@ -2188,6 +2223,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      amassed.items = amassed.items
    }
    function updateRotate() {
       if (!warp) return
@@ -2230,6 +2266,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      amassed.items = amassed.items
    }
    function endWarp() {
       warp = null
@@ -2352,6 +2389,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      amassed.items = amassed.items
    }
 
    // --------------------- Development-time behaviours -----------------------
