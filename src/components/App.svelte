@@ -1573,6 +1573,7 @@
          shouldPushNonConnected: boolean
       ): SlideInstruction[] {
          let instructions: SlideInstruction[] = [] // the final sequence
+         let haveScheduledAmassed = false
          let orthogonalAxis = slideAxis.orthogonal()
          let slideRanges = projectionOfCircuitOnto(slideDir)
          let orthoRanges = projectionOfCircuitOnto(orthogonalAxis, slidePad / 2)
@@ -1675,6 +1676,26 @@
                   proposeTo(movableAt(adjVertex), delay, isPush)
                }
             }
+            // Check whether amassed items should be moved at the same time as
+            // this Movable. Amassed items move rigidly together.
+            if (
+               !haveScheduledAmassed &&
+               (amassed.items.has(movable) ||
+                  [...movable.edges()].some((edge) =>
+                     amassed.items.has(edge[0])
+                  ))
+            ) {
+               for (let item of amassed.items) {
+                  if (item instanceof Port || item instanceof Crossing) continue
+                  if (item instanceof Segment) {
+                     proposeTo(movableAt(item.start), delay, isPush)
+                     proposeTo(movableAt(item.end), delay, isPush)
+                  } else {
+                     proposeTo(item, delay, isPush)
+                  }
+               }
+               haveScheduledAmassed = true
+            }
          }
          function proposeTo(movable: Movable, delay: number, isPush: boolean) {
             let existingProposal = proposals.get(movable)
@@ -1683,6 +1704,7 @@
                   // We've found something that will push the
                   // Movable *sooner*. Decrease its delay.
                   existingProposal.delay = delay
+                  existingProposal.isPush = isPush
                   heap.updateItem(existingProposal)
                }
             } else {
