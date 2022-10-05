@@ -181,3 +181,13 @@ The file format for glyphs is the same as for symbols (described earlier), with 
 
 -  A crossing glyph splices itself into the middle of a line — typically, the line that is "hopping over". Thus it must be a symbol with two ports: one for each side of the cut.
 -  A vertex glyph appears at the point where multiple lines intersect. Thus it must be a symbol with one port, corresponding to the part of the glyph that should be placed at the intersection point.
+
+## Q&A
+
+### How do I create a schematic with selectable variations / configurations?
+
+Sometimes you'd like to be able to switch between a few different configurations of a schematic. For example, a mine truck might come with different options for dumping or ejecting the box, or a machine might have a few different pump options.
+
+To draw these schematics, you'll need to split them into pieces. You'll have one drawing for the parts of the system that stay the same regardless of selected configuration, and a separate drawing for each of the variations. You'll combine these separate drawings when coding the simulation.
+
+To make sure the lines coming out of the variations meet up with the lines of the static part of the system, you should create a symbol (probably in the same shape as the manifold, if any) with ports around the outside for each line. Place one copy of this symbol in the drawing for the static parts of the system, and another copy of the symbol in each of the variations. By snapping to the same ports from the "outside" and the "inside", you'll guarantee that everything lines up nicely.
