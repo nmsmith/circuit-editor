@@ -3,9 +3,11 @@
    export let isSelected: boolean
    export let isHeld: boolean
    export let isBound: boolean
+   export { externalClassName as class }
+   let externalClassName = ""
    let className: string
    $: {
-      className = "button"
+      className = `${externalClassName} button`
       if (isSelected) className += " isSelected"
       if (isHeld) className += " isHeld"
       if (isBound) className += " isBound"
@@ -37,6 +39,9 @@
    } */
    .isSelected {
       background-color: rgb(255, 250, 120);
+   }
+   .erase.isSelected {
+      background-color: rgb(255, 170, 170);
    }
    .label::first-letter {
       font-family: "Courier", Courier, monospace;

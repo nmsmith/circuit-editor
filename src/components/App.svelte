@@ -2980,6 +2980,7 @@
          <div class="toolButtons">
             {#each row1Tools as tool}
                <Button
+                  class={tool}
                   label={labelOfButton(tool)}
                   isSelected={toolToUse === tool}
                   isHeld={heldTool?.tool === tool}
@@ -2994,6 +2995,7 @@
             {/each}
             {#each row2Tools as tool}
                <Button
+                  class={tool}
                   label={labelOfButton(tool)}
                   isSelected={toolToUse === tool}
                   isHeld={heldTool?.tool === tool}
