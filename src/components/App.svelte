@@ -354,12 +354,6 @@
       let offset = p.displacementFrom(cameraPosition).scaledBy(cameraZoom)
       return canvasCenter.displacedBy(offset)
    }
-   function isMouseWheel(event: WheelEvent): boolean {
-      // NOTE: This is a "trick" that only works in Chrome. There is no cross-
-      // browser way to distinguish mouse scrolling from trackpad scrolling.
-      let dy: number = (event as any).wheelDeltaY
-      return event.deltaX === 0 && dy !== 0 && dy % 120 === 0 && !event.ctrlKey
-   }
    function mouseWheelIncrements(event: WheelEvent): number {
       return (event as any).wheelDeltaY / 120
    }
@@ -419,6 +413,8 @@
 
    // -------------- State of input peripherals (not persisted) ---------------
    let mouseInClient: Point = Point.zero
+   let usingTrackpad = false
+   let mouselikeWheelEvents = 0
    const [LMB, RMB, Shift, Alt, Control] = [
       "LMB",
       "RMB",
@@ -2418,6 +2414,23 @@
       updateModifierKeys(event)
       keyReleased(event.code)
    }}
+   on:wheel|capture|passive={(event) => {
+      if (event.deltaX !== 0) {
+         usingTrackpad = true
+         mouselikeWheelEvents = 0
+      } else if (
+         usingTrackpad &&
+         event.wheelDeltaY !== 0 &&
+         event.wheelDeltaY % 120 === 0 &&
+         !event.ctrlKey
+      ) {
+         mouselikeWheelEvents += 1
+         if (mouselikeWheelEvents >= 3) {
+            usingTrackpad = false
+            mouselikeWheelEvents = 0
+         }
+      }
+   }}
    on:blur={() => {
       abortAllButtons()
    }}
@@ -2491,10 +2504,7 @@
       }}
       on:wheel={(event) => {
          event.preventDefault()
-         if (isMouseWheel(event)) {
-            executeZoom(mouseWheelIncrements(event) * wheelZoomSpeed)
-            if (cameraZoom > 0.99 && cameraZoom < 1.01) cameraZoom = 1
-         } else {
+         if (usingTrackpad) {
             if (event.ctrlKey) {
                // Pinch zoom emits a fake "ctrl" modifier.
                executeZoom(-event.deltaY * pinchZoomSpeed)
@@ -2508,6 +2518,9 @@
                // canvas, so we need to trigger the corresponding event.
                mouseMoved()
             }
+         } else {
+            executeZoom(mouseWheelIncrements(event) * wheelZoomSpeed)
+            if (cameraZoom > 0.99 && cameraZoom < 1.01) cameraZoom = 1
          }
       }}
    >
