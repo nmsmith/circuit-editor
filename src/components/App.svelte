@@ -1070,7 +1070,11 @@
             }
          } else if (toolToUse === "erase") {
             let g = eraseTarget(mouseOnCanvas)
-            if (g) deleteItems([g.object])
+            if (g) {
+               deleteItems(
+                  amassed.items.has(g.object) ? amassed.items : [g.object]
+               )
+            }
          }
          // else if (toolToUse === "rigid") {
          //    let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
