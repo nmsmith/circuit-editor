@@ -23,16 +23,17 @@ The symbols that have been loaded will appear in the sidebar. To place a symbol 
 
 ## Using the tools
 
-There are currently four tools implemented: draw, erase, warp, and slide.
+There are currently five tools implemented: draw, erase, warp, slide, and amass.
 
 A tool can be equipped by pressing its button in the GUI, or by using a keyboard shortcut.
 
 The keyboard shortcuts are:
 
--  D: draw
--  E: erase
--  W: warp
--  S: slide
+-  `D`: draw
+-  `E`: erase
+-  `W`: warp
+-  `S`: slide
+-  `A`: amass
 
 It is also possible to switch to another tool _temporarily_. To do so, hold down the key of the desired tool and perform the operations you desire. When the key is released, the editor will automatically switch back to the previous tool.
 
@@ -65,6 +66,21 @@ The slide tool allows you to move an object (or a selection of objects) whilst e
 By default, the moved object(s) will push all objects in their path. However, if the Shift key is held, only objects that are connected via a line segment will be pushed.
 
 A slide operation occurs along a particular axis. For the most part, an object can only be slid along an axes shared by one or more line segment(s) it is attached to. As the object is slid, those line segments will then stretch and/or shrink.
+
+### The amass tool
+
+The amass tool allow you to select (i.e. _amass_) multiple circuit elements, for the purpose of applying operations to them simultaneously. Amassed items are indicated by a bright glow/outline.
+
+The amass tool has similar controls to the "select" and/or "move" tools of popular CAD apps. To amass a single item, click on it. To amass a rectangular region of items, click on an empty part of the canvas and then drag to specify the region.
+
+By default, the previous amassment will be cleared each time you amass new items. If you instead wish to _add_ to the current amassment, hold Shift before beginning the operation. (An exception: Shift-clicking on a single item will _toggle_ it, rather than add it.) If you wish to _remove_ from the current amassment, hold Alt before beginning the operation. To _clear_ the current amassment, click on an empty part of the canvas.
+
+Items remained amassed even after changing to another tool. This gives you the opportunity to manipulate the amassment using multiple tools (such as _warp_ and _slide_) without having to re-select the items after each tool change.
+
+When using one of the movement tools to manipulate the circuit diagram, the amassment—if it exists—moves _rigidly_. In other words, if the movement operation causes an amassed item to move, then _all other_ amassed items will move by exactly the same amount. You may find this behaviour helpful in the following scenarios:
+
+-  You want to move the amassment as a single unit.
+-  You want to move _other_ parts of the circuit, and you want to keep the amassment undisturbed.
 
 ## Configuring snapping behaviour
 
