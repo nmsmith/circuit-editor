@@ -415,6 +415,8 @@
    let mouseInClient: Point = Point.zero
    let usingTrackpad = false
    let mouselikeWheelEvents = 0
+   let timeOfLastWheelEvent = 0
+   let lastYMagnitude = 0
    const [LMB, RMB, Shift, Alt, Control] = [
       "LMB",
       "RMB",
@@ -2441,21 +2443,29 @@
       keyReleased(event.code)
    }}
    on:wheel|capture|passive={(event) => {
-      if (event.deltaX !== 0) {
+      let yMagnitude = Math.abs(event.wheelDeltaY)
+      if (!usingTrackpad && event.deltaX !== 0) {
          usingTrackpad = true
          mouselikeWheelEvents = 0
+         console.log("Switched to trackpad mode.")
       } else if (
          usingTrackpad &&
-         event.wheelDeltaY !== 0 &&
-         event.wheelDeltaY % 120 === 0 &&
+         yMagnitude > 3 && // above min value for trackpad
+         (mouselikeWheelEvents === 0 || yMagnitude === lastYMagnitude) &&
+         secondsSince(timeOfLastWheelEvent) > 0.05 &&
          !event.ctrlKey
       ) {
          mouselikeWheelEvents += 1
          if (mouselikeWheelEvents >= 3) {
             usingTrackpad = false
             mouselikeWheelEvents = 0
+            console.log("Switched to mouse mode.")
          }
+      } else {
+         mouselikeWheelEvents = 0
       }
+      timeOfLastWheelEvent = now()
+      lastYMagnitude = yMagnitude
    }}
    on:blur={() => {
       abortAllButtons()
