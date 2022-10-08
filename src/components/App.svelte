@@ -689,6 +689,7 @@
       }
    }
    $: mouseOnCanvas = computeMouseOnCanvas()
+   $: currentCursor = toolBeingUsed?.tool || toolToUse
    let svgTranslate: Vector
    $: {
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
@@ -713,22 +714,6 @@
                }
             }
          }
-      }
-   }
-   let cursor: "default" | "cell" | "grab" | "grabbing"
-   $: /* Set the appearance of the mouse cursor. */ {
-      if (slide) {
-         cursor = "grabbing"
-      } else if (toolToUse === "slide") {
-         if (slideTarget(mouseOnCanvas)) {
-            cursor = slide ? "grabbing" : "grab"
-         } else {
-            cursor = "default"
-         }
-      } else if (amassRect || eraseRect || rigidRect || flexRect) {
-         cursor = "default"
-      } else {
-         cursor = "cell"
       }
    }
    let touchLight: Set<Interactable>
@@ -2523,9 +2508,8 @@
    }}
 >
    <svg
-      class="canvas"
+      class="canvas cursor-{currentCursor}"
       bind:this={canvas}
-      style="cursor: {cursor}"
       on:mouseenter={() => {
          if (grabbedSymbol) {
             spawnSymbol(grabbedSymbol.kind, grabbedSymbol.grabOffset)
@@ -2990,7 +2974,6 @@
          <div class="toolButtons">
             {#each row1Tools as tool}
                <Button
-                  class={tool}
                   label={labelOfButton(tool)}
                   isSelected={toolToUse === tool}
                   isHeld={heldTool?.tool === tool}
@@ -3005,7 +2988,6 @@
             {/each}
             {#each row2Tools as tool}
                <Button
-                  class={tool}
                   label={labelOfButton(tool)}
                   isSelected={toolToUse === tool}
                   isHeld={heldTool?.tool === tool}
@@ -3271,5 +3253,41 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
+   }
+   .cursor-amass {
+      cursor: default;
+   }
+   .cursor-warp {
+      cursor: -webkit-image-set(
+               url("../cursors/warp 1x.png") 1x,
+               url("../cursors/warp 2x.png") 2x
+            )
+            11 11,
+         default;
+   }
+   .cursor-slide {
+      /* cursor: move; */
+      cursor: -webkit-image-set(
+               url("../cursors/slide 1x.png") 1x,
+               url("../cursors/slide 2x.png") 2x
+            )
+            11 11,
+         default;
+   }
+   .cursor-draw {
+      cursor: -webkit-image-set(
+               url("../cursors/draw 1x.png") 1x,
+               url("../cursors/draw 2x.png") 2x
+            )
+            10 0,
+         default;
+   }
+   .cursor-erase {
+      cursor: -webkit-image-set(
+               url("../cursors/erase 1x.png") 1x,
+               url("../cursors/erase 2x.png") 2x
+            )
+            10 1,
+         default;
    }
 </style>
