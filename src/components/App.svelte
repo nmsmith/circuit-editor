@@ -12,6 +12,10 @@
       LineType,
       Interactable,
       amassed,
+      CircuitJSON,
+      saveToJSON,
+      loadFromJSON,
+      emptyCircuitJSON,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -410,6 +414,38 @@
    function secondsSince(time: number): number {
       return now() - time
    }
+   function loadState(state: CircuitJSON) {
+      loadFromJSON(
+         state,
+         new Map([...symbols].map((s) => [s.fileName, s])),
+         new Map([...lineTypes].map((t) => [t.name, t])),
+         crossingMap
+      )
+      Junction.s = Junction.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
+      Port.s = Port.s
+      amassed.items = amassed.items
+   }
+   function commitState(description: string) {
+      undoStack = undoStack.slice(0, undoIndex + 1) // Forget undone states.
+      undoStack.push({ state: saveToJSON(), description })
+      ++undoIndex
+      undoStack = undoStack // for Svelte
+   }
+   function undo() {
+      if (undoIndex > 0) {
+         --undoIndex
+         loadState(undoStack[undoIndex].state)
+      }
+   }
+   function redo() {
+      let lastIndex = undoStack.length - 1
+      if (undoIndex < lastIndex) {
+         ++undoIndex
+         loadState(undoStack[undoIndex].state)
+      }
+   }
 
    // -------------- State of input peripherals (not persisted) ---------------
    let mouseInClient: Point = Point.zero
@@ -523,6 +559,11 @@
    )
    let symbolLoadError = false
    let lineTypeLoadError = false
+
+   let undoStack: { state: CircuitJSON; description: string }[] = [
+      { state: emptyCircuitJSON, description: "blank canvas" },
+   ]
+   let undoIndex = 0 // Defaults to last item of stack. Decrements on undo.
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
@@ -842,8 +883,8 @@
                   render = { glyph: glyphSymbol, facing: cross.facing }
                }
             }
-            if (render && render.glyph.portLocations.length === 2) {
-               let [p1, p2] = render.glyph.portLocations
+            if (render && render.glyph.ports.length === 2) {
+               let [p1, p2] = render.glyph.ports
                let glyphDir = p2.directionFrom(p1)
                if (!glyphDir) continue
                let rotation = segment.end
@@ -892,7 +933,7 @@
                touchLight.has(crossing) &&
                crossingMarkerGlyph
             ) {
-               let port = crossingMarkerGlyph.portLocations[0]
+               let port = crossingMarkerGlyph.ports[0]
                glyphsToDraw.add({
                   type: "crossing glyph",
                   glyph: crossingMarkerGlyph,
@@ -1079,14 +1120,21 @@
       }
       keyInfo = keyInfo
    }
-   function command(name: string) {
+   function command(name: string): "recognized" | "not recognized" {
       // Unlike for a standard key press, we don't update the state of the key.
-      let key = keyInfo.getOrCreate(name)
-      if (key.type === "holdTool" && key.tool === "amass") {
-         // Select everything in the circuit.
-         amassed.items = new ToggleSet()
-         for (let segment of Segment.s) amassed.items.add(segment)
-         for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
+      if (name === "KeyZ") {
+         keyInfo.read(Shift).pressing ? redo() : undo()
+         return "recognized"
+      } else {
+         let key = keyInfo.getOrCreate(name)
+         if (key.type === "holdTool" && key.tool === "amass") {
+            // Select everything in the circuit.
+            amassed.items = new ToggleSet()
+            for (let segment of Segment.s) amassed.items.add(segment)
+            for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
+            commitState("amass all")
+            return "recognized"
+         } else return "not recognized"
       }
    }
    function keyReleased(name: string) {
@@ -1120,23 +1168,28 @@
             case "draw": {
                if (draw) {
                   endDraw()
+                  commitState("draw segment")
                } else if (!toolBeingUsed.chainDrawFromEnd) {
-                  drawButtonTapped()
+                  //drawButtonTapped()
                }
                break
             }
             case "warp":
                endWarp()
                grabbedSymbol = null
+               commitState("warp")
                break
             case "slide":
                endSlide()
+               commitState("slide")
                break
             case "amass":
                endAmassRect()
+               commitState("amass items")
                break
             case "erase":
                endEraseRect()
+               commitState("erase")
                break
             // case "rigid":
             //    endRigidRect()
@@ -2414,10 +2467,14 @@
       updateModifierKeys(event)
       if (!event.repeat /* Ignore repeated events from held-down keys */) {
          if (keyInfo.read(Control).pressing) {
-            command(event.code)
+            if (command(event.code) === "recognized") event.preventDefault()
          } else {
             keyPressed(event.code)
          }
+      } else {
+         // Block all default behaviour triggered by key repeats — because I
+         // can't be bothered filtering them intelligently.
+         event.preventDefault()
       }
       if (keyInfo.read(Control).pressing && event.code === "KeyA")
          event.preventDefault() // Don't select all text on the page.
@@ -2614,7 +2671,7 @@
                {@const className =
                   glyph.style === "touch" ? "touchLight" : "amassLight"}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
-                  {@const port = glyph.glyph.portLocations[0]}
+                  {@const port = glyph.glyph.ports[0]}
                   <g
                      class={className}
                      transform="translate({glyph.position.x - port.x} {glyph
@@ -2639,7 +2696,7 @@
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
                   <!-- TODO: Inherit "color" more intelligently.-->
-                  {@const port = glyph.glyph.portLocations[0]}
+                  {@const port = glyph.glyph.ports[0]}
                   <g
                      color="blue"
                      transform="translate({glyph.position.x - port.x} {glyph
@@ -2670,7 +2727,7 @@
             <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw].filter((g) => g.style) as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
-                  {@const port = glyph.glyph.portLocations[0]}
+                  {@const port = glyph.glyph.ports[0]}
                   <g
                      class={glyph.style === "touch"
                         ? "touchLight"
@@ -2688,7 +2745,7 @@
             <!-- TODO: This is occurrence 4/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
-                  {@const port = glyph.glyph.portLocations[0]}
+                  {@const port = glyph.glyph.ports[0]}
                   <g
                      color="blue"
                      transform="translate({glyph.position.x - port.x} {glyph
@@ -3017,6 +3074,15 @@
          <use href="#{grabbedSymbol.kind.fileName}" /></svg
       >
    {/if}
+   <div class="undoStack">
+      {#each undoStack as { description }, i}
+         <div
+            style="padding: 2px; {i === undoIndex ? 'background: white;' : ''}"
+         >
+            {description}
+         </div>
+      {/each}
+   </div>
 </div>
 
 <div
@@ -3289,5 +3355,12 @@
             )
             10 1,
          default;
+   }
+   .undoStack {
+      position: absolute;
+      right: 4px;
+      top: 4px;
+      user-select: none;
+      -webkit-user-select: none;
    }
 </style>

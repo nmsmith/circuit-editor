@@ -102,6 +102,10 @@ export class Vector {
    }
    // Express the Vector as a linear combination of the given basis vectors.
    inTermsOfBasis(basis: [Vector, Vector]): [Vector, Vector] {
+      if (basis[0].approxEquals(basis[1], 0.001))
+         console.error(
+            `Cannot construct a basis from two identical vectors: (${basis[0].x}, ${basis[0].y}) and (${basis[0].x}, ${basis[0].y}).`
+         )
       return [
          basis[0].scaledBy(
             (basis[1].x * this.y - basis[1].y * this.x) /
@@ -581,7 +585,7 @@ export class Rectangle extends Object2D {
       this.direction = Rectangle.defaultDirection().rotatedBy(rotation)
       this.range = range
    }
-   protected static defaultDirection(): Direction {
+   static defaultDirection(): Direction {
       return Direction.positiveX
    }
    protected rotation(): Rotation {

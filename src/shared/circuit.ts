@@ -13,6 +13,8 @@ import {
 import * as Geometry from "~/shared/geometry"
 import { DefaultMap, DefaultWeakMap, ToggleSet } from "./utilities"
 
+let nextObjectID = 0
+
 export type Vertex = Junction | Port
 export type VertexGlyph =
    | { type: "none" }
@@ -30,11 +32,13 @@ export type Edge = [Segment, Vertex]
 
 export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
+   readonly objectID: number // for serialization
    glyph: VertexGlyph
    private readonly edges_ = new Set<Edge>()
-   constructor(point: Point) {
+   constructor(point: Point, glyph?: VertexGlyph) {
       super(point.x, point.y)
-      this.glyph = { type: "auto" }
+      this.objectID = nextObjectID++
+      this.glyph = glyph ? glyph : { type: "auto" }
       Junction.s.add(this)
    }
    center(): Point {
@@ -122,14 +126,26 @@ export class Junction extends Point implements Deletable {
    }
 }
 
+export class PortKind extends Point {
+   readonly svgID: string
+   constructor(svgID: string, x: number, y: number) {
+      super(x, y)
+      this.svgID = svgID
+   }
+}
+
 export class Port extends Point {
    static s = new Set<Port>()
+   readonly objectID: number // for serialization
    readonly symbol: SymbolInstance
+   readonly kind: PortKind
    glyph: VertexGlyph
    private readonly edges_ = new Set<Edge>()
-   constructor(symbol: SymbolInstance, point: Point) {
-      super(point.x, point.y)
+   constructor(symbol: SymbolInstance, kind: PortKind, position: Point) {
+      super(position.x, position.y)
+      this.objectID = nextObjectID++
       this.symbol = symbol
+      this.kind = kind
       this.glyph = { type: "auto" }
       Port.s.add(this)
    }
@@ -173,6 +189,7 @@ export type LineType = {
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
+   readonly objectID: number // for serialization
    type: LineType
    isRigid = false
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(() => {
@@ -182,6 +199,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    private readonly edgeE: Edge
    constructor(type: LineType, start: Vertex, end: Vertex, axis: Axis) {
       super(start, end, axis)
+      this.objectID = nextObjectID++
       this.type = type
       this.edgeS = [this, end]
       this.edgeE = [this, start]
@@ -240,14 +258,6 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    }
 }
 
-// Groups that circuit elements can belong to.
-export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
-export type Group = { name: string; items: ToggleSet<Interactable> }
-export const groups = new Set<Group>()
-// The following "group" is not persisted, but is placed here for consistency:
-export const amassed: Group = { name: "amassed", items: new ToggleSet() }
-groups.add(amassed)
-
 export type CrossingType =
    | { type: "none" }
    | { type: "auto" }
@@ -265,14 +275,14 @@ export const fillHighlightThickness = 5
 // A common abstraction for storing the information required to instantiate
 // and highlight circuit symbols and glyphs.
 export class SymbolKind {
-   private static nextID = 0
+   private static nextKindID = 0
    readonly kindID: string
    readonly fileName: string
    readonly svgTemplate: SVGElement
    readonly highlightTemplate: SVGElement
    readonly svgBox: Range2D
    readonly collisionBox: Range2D
-   readonly portLocations: Point[]
+   readonly ports: PortKind[]
 
    static new(fileName: string, fileContents: string): SymbolKind | undefined {
       let doc = new DOMParser().parseFromString(fileContents, "image/svg+xml")
@@ -287,13 +297,12 @@ export class SymbolKind {
       }
    }
    private constructor(fileName: string, doc: Document, svg: SVGElement) {
-      this.kindID = ":" + SymbolKind.nextID++
+      this.kindID = ":" + SymbolKind.nextKindID++
       this.fileName = fileName
       this.svgTemplate = svg
       this.svgTemplate.id = fileName
       this.svgTemplate.setAttribute("overflow", "visible") // don't clip
       this.svgTemplate.classList.add("svgTemplate")
-      namespaceIDs(this.svgTemplate, this.kindID)
       // If the SVG doesn't have a width/height, extract them from its viewBox.
       let widthAttr = svg.getAttribute("width")
       let heightAttr = svg.getAttribute("height")
@@ -334,14 +343,16 @@ export class SymbolKind {
       }
 
       // Locate the ports of the symbol.
-      this.portLocations = []
+      this.ports = []
       for (let element of this.svgTemplate.querySelectorAll(
          "[id]:not(defs [id])"
       )) {
          if (element.id.toLowerCase().includes("snap")) {
             // Record this port.
             let { x, y, width, height } = element.getBoundingClientRect()
-            this.portLocations.push(new Point(x + width / 2, y + height / 2))
+            this.ports.push(
+               new PortKind(element.id, x + width / 2, y + height / 2)
+            )
          }
       }
 
@@ -351,7 +362,6 @@ export class SymbolKind {
       this.highlightTemplate.id = `${fileName}-highlight`
       this.highlightTemplate.setAttribute("overflow", "visible") // don't clip
       this.highlightTemplate.classList.add("svgTemplate")
-      namespaceIDs(this.highlightTemplate, this.kindID + "h")
       document
          .getElementById("symbol templates")
          ?.appendChild(this.highlightTemplate)
@@ -406,12 +416,16 @@ export class SymbolKind {
             e.setAttribute("stroke", "currentColor")
          }
       }
+      // Namespace IDs to avoid conflicts.
+      namespaceIDs(this.svgTemplate, this.kindID)
+      namespaceIDs(this.highlightTemplate, this.kindID + "h")
    }
 }
 
 export class SymbolInstance extends Rectangle implements Deletable {
    static s = new Set<SymbolInstance>()
-   private static nextID = 0
+   readonly objectID: number // for serialization
+   private static nextInstanceID = 0
    readonly instanceID: string
    readonly kind: SymbolKind
    readonly image: SVGElement
@@ -420,10 +434,11 @@ export class SymbolInstance extends Rectangle implements Deletable {
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
       super(position, rotation, kind.collisionBox)
-      this.instanceID = ":" + SymbolInstance.nextID++
+      this.objectID = nextObjectID++
+      this.instanceID = ":" + SymbolInstance.nextInstanceID++
       this.kind = kind
-      this.ports = kind.portLocations.map(
-         (p) => new Port(this, this.fromRectCoordinates(p))
+      this.ports = kind.ports.map(
+         (p) => new Port(this, p, this.fromRectCoordinates(p))
       )
       SymbolInstance.s.add(this)
 
@@ -441,6 +456,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
          "g"
       )
       this.highlight.appendChild(highlightSvg)
+      this.moveTo(position) // Initialize the symbol's DOM elements.
    }
    refresh() {
       // Add the SVG back to the DOM after a hot reload. (only needed for dev.)
@@ -487,7 +503,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
       this.image.setAttribute("transform", translate)
       this.highlight.setAttribute("transform", translate)
       for (let [i, port] of this.ports.entries()) {
-         let p = this.fromRectCoordinates(this.kind.portLocations[i])
+         let p = this.fromRectCoordinates(this.kind.ports[i])
          ;(port.x as number) = p.x
          ;(port.y as number) = p.y
       }
@@ -524,4 +540,252 @@ function namespaceIDs(svg: SVGElement, suffix: string) {
       else if (xRef && xRef[0] === "#")
          element.setAttributeNS(xlink, "href", xRef + suffix)
    }
+}
+
+// Groups that circuit elements can belong to.
+export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
+export type Group = { name: string; items: ToggleSet<Interactable> }
+export const groups = new Set<Group>()
+// The following "group" is not persisted, but is placed here for consistency:
+const amassedGroupName = "amassed"
+export const amassed: Group = { name: amassedGroupName, items: new ToggleSet() }
+groups.add(amassed)
+
+type JunctionJSON = {
+   objectID: number
+   glyph: VertexGlyph
+   position: { x: number; y: number }
+}
+
+type PortJSON = {
+   objectID: number
+   svgID: string // represents a PortKind
+   glyph: VertexGlyph
+}
+
+type SegmentJSON = {
+   objectID: number
+   type: string // must be a LineType.name
+   isRigid: boolean
+   crossingTypes: { segmentID: number; crossing: CrossingType }[]
+   startID: number
+   endID: number
+   axis: { x: number; y: number }
+}
+
+type SymbolJSON = {
+   objectID: number
+   fileName: string // represents a SymbolKind
+   ports: PortJSON[]
+   // Rectangle data
+   position: { x: number; y: number }
+   direction: { x: number; y: number }
+}
+
+type GroupItem =
+   | { type: "crossing"; seg1ID: number; seg2ID: number }
+   | { type: "other"; objectID: number }
+
+type GroupJSON = {
+   name: string
+   items: GroupItem[]
+}
+
+export type CircuitJSON = {
+   junctions: JunctionJSON[]
+   segments: SegmentJSON[]
+   symbols: SymbolJSON[]
+   groups: GroupJSON[]
+}
+
+export const emptyCircuitJSON: CircuitJSON = {
+   junctions: [],
+   segments: [],
+   symbols: [],
+   groups: [],
+}
+
+// Save the current circuit state to a JSON object.
+export function saveToJSON(): CircuitJSON {
+   let junctions = [...Junction.s].map((j) => {
+      return {
+         objectID: j.objectID,
+         glyph: j.glyph,
+         position: { x: j.x, y: j.y },
+      }
+   })
+   let segments = [...Segment.s].map((s) => {
+      let crossingTypes = []
+      for (let other of Segment.s) {
+         let crossing = s.crossingTypes.read(other)
+         if (crossing.type !== "auto") {
+            crossingTypes.push({ segmentID: other.objectID, crossing })
+         }
+      }
+      return {
+         objectID: s.objectID,
+         type: s.type.name,
+         isRigid: s.isRigid,
+         crossingTypes,
+         startID: s.start.objectID,
+         endID: s.end.objectID,
+         axis: { x: s.axis.x, y: s.axis.y },
+      }
+   })
+   let symbols = [...SymbolInstance.s].map((s) => {
+      return {
+         objectID: s.objectID,
+         fileName: s.kind.fileName,
+         ports: s.ports.map((p) => {
+            return { objectID: p.objectID, svgID: p.kind.svgID, glyph: p.glyph }
+         }),
+         position: { x: s.position.x, y: s.position.y },
+         direction: { x: s.direction.x, y: s.direction.y },
+      }
+   })
+   let groups_: GroupJSON[] = [...groups].map((g) => {
+      return {
+         name: g.name,
+         items: [...g.items].map((i) =>
+            i instanceof Crossing
+               ? {
+                    type: "crossing",
+                    seg1ID: i.seg1.objectID,
+                    seg2ID: i.seg2.objectID,
+                 }
+               : { type: "other", objectID: i.objectID }
+         ),
+      }
+   })
+   return { junctions, segments, symbols, groups: groups_ }
+}
+
+// Load the circuit state from a JSON object.
+export function loadFromJSON(
+   circuit: CircuitJSON,
+   symbolKinds: Map<string, SymbolKind>,
+   lineTypes: Map<string, LineType>,
+   crossingMap: DefaultMap<Segment, Map<Segment, Crossing>>
+) {
+   ;[...Segment.s].forEach((s) => s.delete()) // to decrement Axis counters
+   ;[...SymbolInstance.s].forEach((s) => s.delete()) // to remove DOM elements
+   Junction.s = new Set()
+   Port.s = new Set()
+   Segment.s = new Set()
+   SymbolInstance.s = new Set()
+   amassed.items = new ToggleSet()
+   groups.clear()
+   groups.add(amassed)
+   let vertexMap = new Map<number, Vertex>()
+   let segmentMap = new Map<number, Segment>()
+   let symbolMap = new Map<number, SymbolInstance>()
+   circuit.junctions.forEach((j) => {
+      vertexMap.set(
+         j.objectID,
+         new Junction(new Point(j.position.x, j.position.y), j.glyph)
+      )
+   })
+   circuit.symbols.forEach((s) => {
+      let kind = symbolKinds.get(s.fileName)
+      if (kind) {
+         // Load the symbol.
+         let direction = Direction.fromVector(
+            new Vector(s.direction.x, s.direction.y)
+         ) as Direction
+         let newSymbol = new SymbolInstance(
+            kind,
+            new Point(s.position.x, s.position.y),
+            direction.rotationFrom(Rectangle.defaultDirection())
+         )
+         symbolMap.set(s.objectID, newSymbol)
+         // Load the state of the symbol's ports.
+         let portsByID = new Map(newSymbol.ports.map((p) => [p.kind.svgID, p]))
+         s.ports.forEach((p) => {
+            let port = portsByID.get(p.svgID)
+            if (port) {
+               port.glyph = p.glyph
+               vertexMap.set(p.objectID, port)
+            }
+         })
+      } else {
+         console.error(
+            `Failed to load a symbol, because the SymbolKind "${s.fileName}" could not be found.`
+         )
+      }
+   })
+   // Pass 1: Construct the Segment objects.
+   circuit.segments.forEach((s) => {
+      let lineType = lineTypes.get(s.type)
+      let start = vertexMap.get(s.startID)
+      let end = vertexMap.get(s.endID)
+      if (!lineType) {
+         console.error(
+            `Failed to load a segment (ID ${s.objectID}), because the LineType "${s.type}" could not be found.`
+         )
+      }
+      if (!start) {
+         console.error(
+            `Failed to load a segment (ID ${s.objectID}), because failed to locate its vertex (ID ${s.startID}).`
+         )
+      }
+      if (!end) {
+         console.error(
+            `Failed to load a segment (ID ${s.objectID}), because failed to locate its vertex (ID ${s.endID}).`
+         )
+      }
+      if (lineType && start && end) {
+         let newSegment = new Segment(
+            lineType,
+            start,
+            end,
+            Axis.fromVector(new Vector(s.axis.x, s.axis.y)) as Axis
+         )
+         newSegment.isRigid = s.isRigid
+         segmentMap.set(s.objectID, newSegment)
+      }
+   })
+   // Pass 2: Set the crossing type of each segment pair.
+   circuit.segments.forEach((s) => {
+      let s1 = segmentMap.get(s.objectID)
+      if (!s1) return // Segment may have failed to load.
+      for (let crossing of s.crossingTypes) {
+         let s2 = segmentMap.get(crossing.segmentID)
+         if (!s2) continue // Segment may have failed to load.
+         s1.crossingTypes.set(s2, crossing.crossing)
+      }
+   })
+   circuit.groups.forEach((g) => {
+      let items = new ToggleSet<Interactable>()
+      for (let item of g.items) {
+         if (item.type === "crossing") {
+            let seg1 = segmentMap.get(item.seg1ID)
+            let seg2 = segmentMap.get(item.seg2ID)
+            if (seg1 && seg2) {
+               let crossing = crossingMap.read(seg1).get(seg2)
+               if (crossing) items.add(crossing)
+            } else {
+               console.error(
+                  `Failed to assign the crossing of two segments (ID ${item.seg1ID} and ID ${item.seg2ID}) to group "${g.name}" because at least one of these segments does not exist.`
+               )
+            }
+         } else {
+            let object =
+               vertexMap.get(item.objectID) ||
+               segmentMap.get(item.objectID) ||
+               symbolMap.get(item.objectID)
+            if (object) {
+               items.add(object)
+            } else {
+               console.error(
+                  `Failed to assign an object (ID ${item.objectID}) to group "${g.name}" because no object with that ID exists.`
+               )
+            }
+         }
+      }
+      if (g.name === amassedGroupName) {
+         amassed.items = items
+      } else {
+         groups.add({ name: g.name, items })
+      }
+   })
 }
