@@ -463,7 +463,7 @@
    let keyInfo = new DefaultMap<
       string,
       (
-         | { type: "none" | "pan" | "delete" | "useTool" }
+         | { type: "none" | "pan" | "delete" | "useTool" | "abort" }
          | { type: "holdTool"; tool: Tool }
       ) & {
          pressing: boolean
@@ -486,6 +486,7 @@
       //["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
       //["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
       [LMB, { type: "useTool", pressing: false }],
+      ["Escape", { type: "abort", pressing: false }],
    ])
    let spacebarTap:
       | { state: "initial" }
@@ -1041,10 +1042,14 @@
    }
 
    // ---------------------------- Primary events -----------------------------
+   let amassedOnMouseDown = false
+   let erasedOnMouseDown = false
    function keyPressed(name: string) {
       let key = keyInfo.getOrCreate(name)
       if (key.pressing) return // in case we missed a release
       key.pressing = true
+      amassedOnMouseDown = false
+      erasedOnMouseDown = false
       // Update the state of double-tap actions.
       if (
          name === "Space" &&
@@ -1063,9 +1068,10 @@
       // Perform the action associated with the key.
       if (key.type === "pan" && !pan) {
          pan = { clientDownPosition: mouseInClient }
-      } else if (key.type === "delete") {
+      } else if (key.type === "delete" && amassed.items.size > 0) {
          deleteItems(amassed.items)
          amassed.items = amassed.items // Let Svelte know the group has changed.
+         commitState("delete amassed")
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
@@ -1074,6 +1080,7 @@
          ) {
             // Pressing rigid/flex initiates a chain draw.
             chainDraw(false /*key.tool === "rigid"*/)
+            commitState("draw segment")
          } else {
             // Hold the tool. If another tool is already held, it is overridden.
             heldTool = { tool: key.tool, shouldBind: true }
@@ -1093,8 +1100,10 @@
                else if (alt) amassed.items.delete(grab.object)
                else amassed.items = new ToggleSet([grab.object])
                amassed.items = amassed.items
-            } else if (!shift && !alt) {
+               amassedOnMouseDown = true
+            } else if (amassed.items.size > 0 && !shift && !alt) {
                amassed.items = new ToggleSet()
+               amassedOnMouseDown = true
             }
          } else if (toolToUse === "erase") {
             let g = eraseTarget(mouseOnCanvas)
@@ -1102,6 +1111,7 @@
                deleteItems(
                   amassed.items.has(g.object) ? amassed.items : [g.object]
                )
+               erasedOnMouseDown = true
             }
          }
          // else if (toolToUse === "rigid") {
@@ -1117,6 +1127,8 @@
          //       Segment.s = Segment.s
          //    }
          // }
+      } else if (key.type === "abort") {
+         keyAborted(LMB)
       }
       keyInfo = keyInfo
    }
@@ -1165,6 +1177,28 @@
          }
       } else if (key.type === "useTool" && toolBeingUsed) {
          switch (toolBeingUsed.tool) {
+            case "amass":
+               if (amassRect && amassRect.items.size > 0) {
+                  endAmassRect()
+                  commitState("amass region")
+               } else if (amassedOnMouseDown) {
+                  commitState("amass")
+               }
+               endAmassRect()
+               break
+            case "warp":
+               if (warp) {
+                  endWarp()
+                  commitState("warp")
+                  grabbedSymbol = null
+               }
+               break
+            case "slide":
+               if (slide) {
+                  endSlide()
+                  commitState("slide")
+               }
+               break
             case "draw": {
                if (draw) {
                   endDraw()
@@ -1174,22 +1208,14 @@
                }
                break
             }
-            case "warp":
-               endWarp()
-               grabbedSymbol = null
-               commitState("warp")
-               break
-            case "slide":
-               endSlide()
-               commitState("slide")
-               break
-            case "amass":
-               endAmassRect()
-               commitState("amass items")
-               break
             case "erase":
+               if (eraseRect && eraseRect.items.size > 0) {
+                  endEraseRect()
+                  commitState("erase region")
+               } else if (erasedOnMouseDown) {
+                  commitState("erase")
+               }
                endEraseRect()
-               commitState("erase")
                break
             // case "rigid":
             //    endRigidRect()
@@ -1211,25 +1237,23 @@
       } else if (key.type === "holdTool") {
          if (heldTool?.tool === key.tool) heldTool = null
       } else if (key.type === "useTool" && toolBeingUsed) {
-         // TODO: Instead of having an "abort" function for each operation, all
-         // aborts should be implemented the same way: by invoking "undo".
-         // (...and then setting the operation's state to "null")
          switch (toolBeingUsed.tool) {
-            case "draw":
-               abortDraw()
+            case "amass":
+               amassRect = null
                break
             case "warp":
-               abortWarp()
+               warp = null
                grabbedSymbol = null
                break
             case "slide":
-               abortSlide()
+               slide = null
                break
-            case "amass":
-               abortAmassRect()
+            case "draw":
+               draw = null
+               slide = null
                break
             case "erase":
-               abortEraseRect()
+               eraseRect = null
                break
             // case "rigid":
             //    abortRigidRect()
@@ -1239,6 +1263,8 @@
             //    break
          }
          toolBeingUsed = null
+         // Revert any uncommitted state changes.
+         loadState(undoStack[undoIndex].state)
       }
       keyInfo = keyInfo
    }
@@ -1599,11 +1625,6 @@
 
       return endVertex
    }
-   function abortDraw() {
-      abortSlide()
-      if (draw?.segmentIsNew) deleteItems([draw.end])
-      draw = null
-   }
    function chainDraw(rigidifyCurrent: boolean) {
       if (!draw || !toolBeingUsed) return
       draw.segment.isRigid = rigidifyCurrent
@@ -1783,17 +1804,6 @@
       }
    }
    function endSlide() {
-      slide = null
-   }
-   function abortSlide() {
-      if (!slide) return
-      // TODO: This approach doesn't work if Shift is pressed during the
-      // movement, since this resets slide.originalPositions. The "right" way
-      // to cancel the slide will be to invoke the UNDO operation, once it is
-      // implemented.
-
-      // Move all the circuit elements back to their original positions.
-      for (let m of allMovables()) m.moveTo(slide.originalPositions.read(m))
       slide = null
    }
    function updateDrawAndSlide() {
@@ -2333,9 +2343,6 @@
    function endWarp() {
       warp = null
    }
-   function abortWarp() {
-      endWarp() // TODO: The right way to abort is to "undo" the operation.
-   }
    function beginAmassRect(start: Point) {
       amassRect = {
          mode: keyInfo.read(Alt).pressing
@@ -2346,7 +2353,6 @@
          start,
          items: new Set(),
       }
-      if (amassRect.mode === "new") amassed.items = new ToggleSet()
    }
    function beginEraseRect(start: Point) {
       eraseRect = { start, items: new Set() }
@@ -2419,18 +2425,6 @@
       if (!flexRect) return
       for (let item of flexRect.items) item.isRigid = false
       Segment.s = Segment.s
-      flexRect = null
-   }
-   function abortAmassRect() {
-      amassRect = null
-   }
-   function abortEraseRect() {
-      eraseRect = null
-   }
-   function abortRigidRect() {
-      rigidRect = null
-   }
-   function abortFlexRect() {
       flexRect = null
    }
    function abortAllButtons() {
