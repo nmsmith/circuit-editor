@@ -415,6 +415,7 @@
       return now() - time
    }
    function loadState(state: CircuitJSON) {
+      resetOperationVariables()
       loadFromJSON(
          state,
          new Map([...symbols].map((s) => [s.fileName, s])),
@@ -700,6 +701,19 @@
    }
    let rigidRect: RectSelectOperation<Segment>
    let flexRect: RectSelectOperation<Segment>
+
+   function resetOperationVariables() {
+      endPan() // Don't revert this, just end it.
+      grabbedSymbol = null
+      toolBeingUsed = null
+      draw = null
+      slide = null
+      warp = null
+      amassRect = null
+      eraseRect = null
+      rigidRect = null
+      flexRect = null
+   }
 
    // ---------------------------- Derived state ------------------------------
    $: canvasCenter = new Point(canvasWidth / 2, canvasHeight / 2)
@@ -1233,37 +1247,11 @@
       if (!key.pressing) return // in case we missed a press
       key.pressing = false
       if (key.type === "pan") {
-         endPan() // Never abort this.
+         endPan() // Don't revert this, just end it.
       } else if (key.type === "holdTool") {
          if (heldTool?.tool === key.tool) heldTool = null
       } else if (key.type === "useTool" && toolBeingUsed) {
-         switch (toolBeingUsed.tool) {
-            case "amass":
-               amassRect = null
-               break
-            case "warp":
-               warp = null
-               grabbedSymbol = null
-               break
-            case "slide":
-               slide = null
-               break
-            case "draw":
-               draw = null
-               slide = null
-               break
-            case "erase":
-               eraseRect = null
-               break
-            // case "rigid":
-            //    abortRigidRect()
-            //    break
-            // case "flex":
-            //    abortFlexRect()
-            //    break
-         }
-         toolBeingUsed = null
-         // Revert any uncommitted state changes.
+         // Revert uncommitted state changes.
          loadState(undoStack[undoIndex].state)
       }
       keyInfo = keyInfo
