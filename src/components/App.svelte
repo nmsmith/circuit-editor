@@ -359,7 +359,7 @@
       return canvasCenter.displacedBy(offset)
    }
    function mouseWheelIncrements(event: WheelEvent): number {
-      return (event as any).wheelDeltaY / 120
+      return (event as any).wheelDeltaY / (120 * window.devicePixelRatio)
    }
    function assetFilePath(folderName: string, fileName: string): string {
       if (usingElectron && projectFolder) {
@@ -2563,14 +2563,14 @@
       }}
       on:wheel={(event) => {
          event.preventDefault()
+         let dx = event.deltaX / window.devicePixelRatio
+         let dy = event.deltaY / window.devicePixelRatio
          if (usingTrackpad) {
             if (event.ctrlKey) {
                // Pinch zoom emits a fake "ctrl" modifier.
-               executeZoom(-event.deltaY * pinchZoomSpeed)
+               executeZoom(-dy * pinchZoomSpeed)
             } else {
-               let movement = new Vector(event.deltaX, event.deltaY).scaledBy(
-                  panSpeed / cameraZoom
-               )
+               let movement = new Vector(dx, dy).scaledBy(panSpeed / cameraZoom)
                committedCameraPosition =
                   committedCameraPosition.displacedBy(movement)
                // Moving the camera moves the position of the mouse on the
