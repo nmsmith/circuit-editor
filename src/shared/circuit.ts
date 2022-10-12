@@ -605,6 +605,11 @@ export const emptyCircuitJSON: CircuitJSON = {
    groups: [],
 }
 
+export type EditHistory = {
+   stack: { state: CircuitJSON; description: string }[]
+   index: number
+}
+
 // Save the current circuit state to a JSON object.
 export function saveToJSON(): CircuitJSON {
    let junctions = [...Junction.s].map((j) => {

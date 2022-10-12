@@ -11,4 +11,8 @@ contextBridge.exposeInMainWorld("path", {
 contextBridge.exposeInMainWorld("fileSystem", {
    openDirectory: () => ipcRenderer.invoke("openDirectory"),
    getFileNames: (directory) => ipcRenderer.invoke("getFileNames", directory),
+   saveEditHistory: (filePath, history) =>
+      ipcRenderer.invoke("saveEditHistory", filePath, history),
+   loadEditHistory: (filePath) =>
+      ipcRenderer.invoke("loadEditHistory", filePath),
 })

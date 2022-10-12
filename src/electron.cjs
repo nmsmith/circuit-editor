@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron")
-const { readdir } = require("node:fs/promises")
+const { readdir, readFile, writeFile } = require("node:fs/promises")
 const path = require("node:path")
 
 let webSecurity
@@ -36,6 +36,24 @@ const createWindow = () => {
          return await readdir(directory)
       } catch {
          return null
+      }
+   })
+   ipcMain.handle("saveEditHistory", async (event, filePath, history) => {
+      try {
+         await writeFile(filePath, JSON.stringify(history))
+         return { outcome: "success" }
+      } catch (error) {
+         return { outcome: "failure", error }
+      }
+   })
+   ipcMain.handle("loadEditHistory", async (event, filePath) => {
+      try {
+         return {
+            outcome: "success",
+            history: JSON.parse(await readFile(filePath, "utf8")),
+         }
+      } catch (error) {
+         return { outcome: "failure", error }
       }
    })
    if (process.env.NODE_ENV === "development") {

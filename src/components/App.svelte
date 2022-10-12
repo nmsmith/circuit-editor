@@ -16,6 +16,7 @@
       saveToJSON,
       loadFromJSON,
       emptyCircuitJSON,
+      EditHistory,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -40,6 +41,9 @@
    import Heap from "heap"
 
    // ------------------------------ Constants --------------------------------
+   const historyStackSizeLimit = 200
+   const autosaveFileName = "autosave.json"
+   const autosaveFrequency = seconds(2)
    const symbolFolderName = "symbols"
    const vertexGlyphFolderName = "vertex glyphs"
    const crossingGlyphFolderName = "crossing glyphs"
@@ -84,7 +88,7 @@
    const wheelZoomSpeed = 0.14
    const minZoom = 0.1
    const maxZoom = 20
-   const maxDoubleTapInterval = 0.4 // in seconds & per state machine transition
+   const maxDoubleTapInterval = seconds(0.4) // per state machine transition
    const maxDoubleTapMove = 4 // in pixels
    // Math constants
    const tau = 2 * Math.PI
@@ -408,10 +412,15 @@
       )
       return s
    }
-   function now(): number {
-      return performance.now() / 1000
+   type Time = number & {} // in milliseconds (since whenever)
+   type Duration = number & {} // in milliseconds
+   function now(): Time {
+      return performance.now()
    }
-   function secondsSince(time: number): number {
+   function seconds(n: number): Duration {
+      return n * 1000
+   }
+   function timeSince(time: Time): Duration {
       return now() - time
    }
    function loadState(state: CircuitJSON) {
@@ -429,30 +438,37 @@
       amassed.items = amassed.items
    }
    function commitState(description: string) {
-      undoStack = undoStack.slice(0, undoIndex + 1) // Forget undone states.
-      undoStack.push({ state: saveToJSON(), description })
-      ++undoIndex
-      undoStack = undoStack // for Svelte
-   }
-   function undo() {
-      if (undoIndex > 0) {
-         --undoIndex
-         loadState(undoStack[undoIndex].state)
+      history.stack.length = history.index + 1 // Forget undone states.
+      history.stack.push({ state: saveToJSON(), description })
+      if (history.stack.length > historyStackSizeLimit) {
+         history.stack = history.stack.slice(1) // drop the oldest state
+      } else {
+         ++history.index
       }
+      changedSinceLastSave = true
+      history.stack = history.stack // for Svelte
    }
-   function redo() {
-      let lastIndex = undoStack.length - 1
-      if (undoIndex < lastIndex) {
-         ++undoIndex
-         loadState(undoStack[undoIndex].state)
+   function executeUndo() {
+      if (history.index > 0) {
+         --history.index
+         loadState(history.stack[history.index].state)
       }
+      changedSinceLastSave = true
+   }
+   function executeRedo() {
+      let lastIndex = history.stack.length - 1
+      if (history.index < lastIndex) {
+         ++history.index
+         loadState(history.stack[history.index].state)
+      }
+      changedSinceLastSave = true
    }
 
    // -------------- State of input peripherals (not persisted) ---------------
    let mouseInClient: Point = Point.zero
    let usingTrackpad = false
    let mouselikeWheelEvents = 0
-   let timeOfLastWheelEvent = 0
+   let timeOfLastWheelEvent: Time = now()
    let lastYMagnitude = 0
    const [LMB, RMB, Shift, Alt, Control] = [
       "LMB",
@@ -493,7 +509,7 @@
       | { state: "initial" }
       | {
            state: "pressed" | "tapped"
-           timeOfAction: number // in seconds
+           timeOfAction: Time
            placeOfAction: Point // in client coordinates
         } = {
       state: "initial",
@@ -503,7 +519,7 @@
          return false
       } else {
          return (
-            secondsSince(spacebarTap.timeOfAction) < maxDoubleTapInterval &&
+            timeSince(spacebarTap.timeOfAction) < maxDoubleTapInterval &&
             mouseInClient.distanceFrom(spacebarTap.placeOfAction) <
                maxDoubleTapMove
          )
@@ -562,10 +578,27 @@
    let symbolLoadError = false
    let lineTypeLoadError = false
 
-   let undoStack: { state: CircuitJSON; description: string }[] = [
-      { state: emptyCircuitJSON, description: "blank canvas" },
-   ]
-   let undoIndex = 0 // Defaults to last item of stack. Decrements on undo.
+   let history: EditHistory = {
+      stack: [{ state: emptyCircuitJSON, description: "blank canvas" }],
+      index: 0, // Defaults to last item of stack. Decrements on undo.
+   }
+   let changedSinceLastSave = false
+   async function autosave() {
+      if (!projectFolder || !changedSinceLastSave) return
+      let save = await fileSystem.saveEditHistory(
+         path.join(projectFolder, autosaveFileName),
+         history
+      )
+      if (save.outcome === "success") {
+         console.log("Autosaved.")
+         changedSinceLastSave = false
+      } else {
+         console.error(`Autosave failed. Reason:\n${save.error.message}`)
+      }
+   }
+   let intervalI = setInterval(autosave, autosaveFrequency) as unknown as number
+   // A hack to clear old intervals during hot reloading:
+   for (let i = 0; i < intervalI; ++i) clearInterval(i)
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
@@ -1149,7 +1182,7 @@
    function command(name: string): "recognized" | "not recognized" {
       // Unlike for a standard key press, we don't update the state of the key.
       if (name === "KeyZ") {
-         keyInfo.read(Shift).pressing ? redo() : undo()
+         keyInfo.read(Shift).pressing ? executeRedo() : executeUndo()
          return "recognized"
       } else {
          let key = keyInfo.getOrCreate(name)
@@ -1252,7 +1285,7 @@
          if (heldTool?.tool === key.tool) heldTool = null
       } else if (key.type === "useTool" && toolBeingUsed) {
          // Revert uncommitted state changes.
-         loadState(undoStack[undoIndex].state)
+         loadState(history.stack[history.index].state)
       }
       keyInfo = keyInfo
    }
@@ -2476,7 +2509,7 @@
          usingTrackpad &&
          yMagnitude > 3 && // above min value for trackpad
          (mouselikeWheelEvents === 0 || yMagnitude === lastYMagnitude) &&
-         secondsSince(timeOfLastWheelEvent) > 0.05 &&
+         timeSince(timeOfLastWheelEvent) > seconds(0.05) &&
          !event.ctrlKey
       ) {
          mouselikeWheelEvents += 1
@@ -2806,83 +2839,93 @@
                on:click={async () => {
                   if (!usingElectron) return
                   let response = await fileSystem.openDirectory()
-                  if (response) {
-                     projectFolder = response
-                     fileSystem
-                        .getFileNames(
-                           path.join(projectFolder, symbolFolderName)
-                        )
-                        .then((fileNames) => {
-                           symbolLoadError = !fileNames
-                           if (fileNames) {
-                              loadSymbols(
-                                 symbolFolderName,
-                                 fileNames.filter(
-                                    (f) => path.extname(f) === ".svg"
-                                 )
-                              ).then((kinds) => {
-                                 symbols = kinds
+                  if (!response) return
+                  projectFolder = response
+                  let load1 = fileSystem
+                     .getFileNames(path.join(projectFolder, symbolFolderName))
+                     .then(async (fileNames) => {
+                        symbolLoadError = !fileNames
+                        if (fileNames) {
+                           await loadSymbols(
+                              symbolFolderName,
+                              fileNames.filter(
+                                 (f) => path.extname(f) === ".svg"
+                              )
+                           ).then((kinds) => {
+                              symbols = kinds
+                           })
+                        }
+                     })
+                  let load2 = fileSystem
+                     .getFileNames(
+                        path.join(projectFolder, vertexGlyphFolderName)
+                     )
+                     .then(async (fileNames) => {
+                        if (fileNames) {
+                           await loadSymbols(
+                              vertexGlyphFolderName,
+                              fileNames.filter(
+                                 (f) => path.extname(f) === ".svg"
+                              )
+                           ).then((kinds) => {
+                              vertexGlyphs = kinds
+                           })
+                        }
+                     })
+                  let load3 = fileSystem
+                     .getFileNames(
+                        path.join(projectFolder, crossingGlyphFolderName)
+                     )
+                     .then(async (fileNames) => {
+                        if (fileNames) {
+                           await loadSymbols(
+                              crossingGlyphFolderName,
+                              fileNames.filter(
+                                 (f) => path.extname(f) === ".svg"
+                              )
+                           ).then((kinds) => {
+                              crossingGlyphs = kinds
+                           })
+                        }
+                     })
+                  let load4 = fileSystem
+                     .getFileNames(path.join(projectFolder, lineTypeFolderName))
+                     .then(async (fileNames) => {
+                        lineTypeLoadError = !fileNames
+                        if (fileNames) {
+                           await loadLineTypes(
+                              fileNames.filter(
+                                 (f) => path.extname(f) === ".json"
+                              )
+                           ).then((types) => {
+                              lineTypes = types
+                              types.forEach((type) => {
+                                 // Bind the hydraulic line by default:
+                                 if (
+                                    type.name === hydraulicLineFileName &&
+                                    !selectedLineType
+                                 ) {
+                                    selectedLineType = type
+                                 }
                               })
-                           }
-                        })
-                     fileSystem
-                        .getFileNames(
-                           path.join(projectFolder, vertexGlyphFolderName)
-                        )
-                        .then((fileNames) => {
-                           if (fileNames) {
-                              loadSymbols(
-                                 vertexGlyphFolderName,
-                                 fileNames.filter(
-                                    (f) => path.extname(f) === ".svg"
-                                 )
-                              ).then((kinds) => {
-                                 vertexGlyphs = kinds
-                              })
-                           }
-                        })
-                     fileSystem
-                        .getFileNames(
-                           path.join(projectFolder, crossingGlyphFolderName)
-                        )
-                        .then((fileNames) => {
-                           if (fileNames) {
-                              loadSymbols(
-                                 crossingGlyphFolderName,
-                                 fileNames.filter(
-                                    (f) => path.extname(f) === ".svg"
-                                 )
-                              ).then((kinds) => {
-                                 crossingGlyphs = kinds
-                              })
-                           }
-                        })
-                     fileSystem
-                        .getFileNames(
-                           path.join(projectFolder, lineTypeFolderName)
-                        )
-                        .then((fileNames) => {
-                           lineTypeLoadError = !fileNames
-                           if (fileNames) {
-                              loadLineTypes(
-                                 fileNames.filter(
-                                    (f) => path.extname(f) === ".json"
-                                 )
-                              ).then((types) => {
-                                 lineTypes = types
-                                 types.forEach((type) => {
-                                    // Bind the hydraulic line by default:
-                                    if (
-                                       type.name === hydraulicLineFileName &&
-                                       !selectedLineType
-                                    ) {
-                                       selectedLineType = type
-                                    }
-                                 })
-                              })
-                           }
-                        })
-                  }
+                           })
+                        }
+                     })
+                  let loadHistory = fileSystem.loadEditHistory(
+                     path.join(projectFolder, autosaveFileName)
+                  )
+                  Promise.all([loadHistory, load1, load2, load3, load4]).then(
+                     ([historyLoad]) => {
+                        if (historyLoad.outcome === "success") {
+                           history = historyLoad.history
+                           loadState(history.stack[history.index].state)
+                        } else {
+                           console.error(
+                              `Failed to load autosave. Reason:\n${historyLoad.error.message}`
+                           )
+                        }
+                     }
+                  )
                }}>Choose a project folder</button
             >
             {#if projectFolder}
@@ -3056,10 +3099,12 @@
          <use href="#{grabbedSymbol.kind.fileName}" /></svg
       >
    {/if}
-   <div class="undoStack">
-      {#each undoStack as { description }, i}
+   <div class="history">
+      {#each history.stack as { description }, i}
          <div
-            style="padding: 2px; {i === undoIndex ? 'background: white;' : ''}"
+            style="padding: 2px; {i === history.index
+               ? 'background: white;'
+               : ''}"
          >
             {description}
          </div>
@@ -3338,7 +3383,7 @@
             10 1,
          default;
    }
-   .undoStack {
+   .history {
       position: absolute;
       right: 4px;
       top: 4px;
