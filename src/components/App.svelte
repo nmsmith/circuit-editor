@@ -1772,10 +1772,13 @@
                   ))
             ) {
                for (let item of amassed.items) {
+                  if (item === draw?.end) continue // this is moved elsewhere
                   if (item instanceof Port || item instanceof Crossing) continue
                   if (item instanceof Segment) {
-                     proposeTo(movableAt(item.start), delay, isPush)
-                     proposeTo(movableAt(item.end), delay, isPush)
+                     if (item.start !== draw?.end)
+                        proposeTo(movableAt(item.start), delay, isPush)
+                     if (item.end !== draw?.end)
+                        proposeTo(movableAt(item.end), delay, isPush)
                   } else {
                      proposeTo(item, delay, isPush)
                   }
