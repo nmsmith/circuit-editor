@@ -1179,7 +1179,10 @@
       }
       keyInfo = keyInfo
    }
-   function command(name: string): "recognized" | "not recognized" {
+   function command(
+      name: string,
+      repeat: boolean = false
+   ): "recognized" | "not recognized" {
       // Unlike for a standard key press, we don't update the state of the key.
       if (name === "KeyZ") {
          keyInfo.read(Shift).pressing ? executeRedo() : executeUndo()
@@ -1187,11 +1190,13 @@
       } else {
          let key = keyInfo.getOrCreate(name)
          if (key.type === "holdTool" && key.tool === "amass") {
-            // Select everything in the circuit.
-            amassed.items = new ToggleSet()
-            for (let segment of Segment.s) amassed.items.add(segment)
-            for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
-            commitState("amass all")
+            if (!repeat) {
+               // Select everything in the circuit.
+               amassed.items = new ToggleSet()
+               for (let segment of Segment.s) amassed.items.add(segment)
+               for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
+               commitState("amass all")
+            }
             return "recognized"
          } else return "not recognized"
       }
@@ -2483,16 +2488,11 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (!event.repeat /* Ignore repeated events from held-down keys */) {
-         if (keyInfo.read(Control).pressing) {
-            if (command(event.code) === "recognized") event.preventDefault()
-         } else {
-            keyPressed(event.code)
-         }
-      } else {
-         // Block all default behaviour triggered by key repeats — because I
-         // can't be bothered filtering them intelligently.
-         event.preventDefault()
+      if (keyInfo.read(Control).pressing) {
+         if (command(event.code, event.repeat) === "recognized")
+            event.preventDefault()
+      } else if (!event.repeat /* Ignore auto-repeated key presses */) {
+         keyPressed(event.code)
       }
       if (keyInfo.read(Control).pressing && event.code === "KeyA")
          event.preventDefault() // Don't select all text on the page.
@@ -3102,16 +3102,18 @@
          <use href="#{grabbedSymbol.kind.fileName}" /></svg
       >
    {/if}
-   <div class="history">
-      {#each history.stack as { description }, i}
-         <div
-            style="padding: 2px; {i === history.index
-               ? 'background: white;'
-               : ''}"
-         >
-            {description}
-         </div>
-      {/each}
+   <div class="historyPane">
+      <div>
+         {#each history.stack as { description }, i}
+            <div
+               style="padding: 2px; {i === history.index
+                  ? 'background: white;'
+                  : ''}"
+            >
+               {description}
+            </div>
+         {/each}
+      </div>
    </div>
 </div>
 
@@ -3188,10 +3190,10 @@
       left: 0;
       width: 287px;
       height: 100%;
+      background-color: rgb(193, 195, 199);
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
       display: flex;
       flex-direction: column;
-      background-color: rgb(193, 195, 199);
    }
    .topThings,
    .linePaneTitle,
@@ -3386,10 +3388,18 @@
             10 1,
          default;
    }
-   .history {
+   .historyPane {
       position: absolute;
-      right: 4px;
-      top: 4px;
+      top: 0;
+      right: 0;
+      width: 100px;
+      height: 250px;
+      background-color: rgb(193, 195, 199);
+      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
+      padding: 4px;
+      overflow-y: scroll;
+      display: flex;
+      flex-direction: column-reverse; /* keeps scroll bar at bottom of content*/
       user-select: none;
       -webkit-user-select: none;
    }
