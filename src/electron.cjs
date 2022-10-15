@@ -1,5 +1,5 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron")
-const { readdir, readFile, writeFile } = require("node:fs/promises")
+const { readdir } = require("node:fs/promises")
 const path = require("node:path")
 
 let webSecurity
@@ -18,10 +18,10 @@ const createWindow = () => {
       width: 800,
       height: 600,
       webPreferences: {
-         // nodeIntegration: true,
-         // contextIsolation: false,
-         sandbox: false, // Allow the preload script to have access to Node.
-         preload: path.join(__dirname, "preload.cjs"),
+         sandbox: false,
+         contextIsolation: false,
+         nodeIntegration: true,
+         nodeIntegrationInWorker: true,
          webSecurity,
       },
    })
@@ -30,31 +30,6 @@ const createWindow = () => {
          properties: ["openDirectory"],
       })
       return filePaths.length > 0 ? filePaths[0] : null
-   })
-   ipcMain.handle("getFileNames", async (event, directory) => {
-      try {
-         return await readdir(directory)
-      } catch {
-         return null
-      }
-   })
-   ipcMain.handle("saveEditHistory", async (event, filePath, history) => {
-      try {
-         await writeFile(filePath, JSON.stringify(history))
-         return { outcome: "success" }
-      } catch (error) {
-         return { outcome: "failure", error }
-      }
-   })
-   ipcMain.handle("loadEditHistory", async (event, filePath) => {
-      try {
-         return {
-            outcome: "success",
-            history: JSON.parse(await readFile(filePath, "utf8")),
-         }
-      } catch (error) {
-         return { outcome: "failure", error }
-      }
    })
    if (process.env.NODE_ENV === "development") {
       // Load the Vite dev server page.

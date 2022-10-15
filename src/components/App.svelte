@@ -16,7 +16,6 @@
       saveToJSON,
       loadFromJSON,
       emptyCircuitJSON,
-      EditHistory,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -39,11 +38,26 @@
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
+   import * as Comlink from "comlink"
+
+   // The following imports only succeed for the Electron version of this app.
+   let usingElectron: boolean
+   let path: Path
+   let fs: FS
+   let electron: Electron
+   try {
+      path = require("node:path")
+      fs = require("node:fs/promises")
+      electron = require("electron")
+      usingElectron = true
+   } catch (e) {
+      usingElectron = false
+   }
+   function openDirectory(): Promise<string | null> {
+      return electron.ipcRenderer.invoke("openDirectory")
+   }
 
    // ------------------------------ Constants --------------------------------
-   const historyStackSizeLimit = 200
-   const autosaveFileName = "autosave.json"
-   const autosaveFrequency = seconds(2)
    const symbolFolderName = "symbols"
    const vertexGlyphFolderName = "vertex glyphs"
    const crossingGlyphFolderName = "crossing glyphs"
@@ -121,6 +135,9 @@
    snapAxes.forEach(rememberAxis)
 
    // ---------------------- Supplementary definitions ------------------------
+   function asAny(x: any): any {
+      return x
+   }
    type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
@@ -365,6 +382,81 @@
    function mouseWheelIncrements(event: WheelEvent): number {
       return (event as any).wheelDeltaY / (120 * window.devicePixelRatio)
    }
+   async function openProjectFolder() {
+      if (!usingElectron || !worker) return
+      let response = await openDirectory()
+      if (!response) return
+      projectFolder = response
+      let load1 = getFileNames(path.join(projectFolder, symbolFolderName)).then(
+         async (fileNames) => {
+            symbolLoadError = !fileNames
+            if (fileNames) {
+               await loadSymbols(
+                  symbolFolderName,
+                  fileNames.filter((f) => path.extname(f) === ".svg")
+               ).then((kinds) => {
+                  symbols = kinds
+               })
+            }
+         }
+      )
+      let load2 = getFileNames(
+         path.join(projectFolder, vertexGlyphFolderName)
+      ).then(async (fileNames) => {
+         if (fileNames) {
+            await loadSymbols(
+               vertexGlyphFolderName,
+               fileNames.filter((f) => path.extname(f) === ".svg")
+            ).then((kinds) => {
+               vertexGlyphs = kinds
+            })
+         }
+      })
+      let load3 = getFileNames(
+         path.join(projectFolder, crossingGlyphFolderName)
+      ).then(async (fileNames) => {
+         if (fileNames) {
+            await loadSymbols(
+               crossingGlyphFolderName,
+               fileNames.filter((f) => path.extname(f) === ".svg")
+            ).then((kinds) => {
+               crossingGlyphs = kinds
+            })
+         }
+      })
+      let load4 = getFileNames(
+         path.join(projectFolder, lineTypeFolderName)
+      ).then(async (fileNames) => {
+         lineTypeLoadError = !fileNames
+         if (fileNames) {
+            await loadLineTypes(
+               fileNames.filter((f) => path.extname(f) === ".json")
+            ).then((types) => {
+               lineTypes = types
+               types.forEach((type) => {
+                  // Bind the hydraulic line by default:
+                  if (type.name === hydraulicLineFileName && !selectedLineType)
+                     selectedLineType = type
+               })
+            })
+         }
+      })
+      postMessage({ function: "loadProjectHistory", projectFolder })
+      // history = historyLoad.history
+      //          loadState(history.stack[history.index].state)
+      let loadHistory = worker.loadProjectHistory(projectFolder)
+      Promise.all([loadHistory, load1, load2, load3, load4]).then(
+         ([historyLoad]) => {
+         }
+      )
+   }
+   async function getFileNames(directory: string) {
+      try {
+         return await fs.readdir(directory)
+      } catch {
+         return null
+      }
+   }
    function assetFilePath(folderName: string, fileName: string): string {
       if (usingElectron && projectFolder) {
          return "file://" + path.join(projectFolder, folderName, fileName)
@@ -436,32 +528,6 @@
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
       amassed.items = amassed.items
-   }
-   function commitState(description: string) {
-      history.stack.length = history.index + 1 // Forget undone states.
-      history.stack.push({ state: saveToJSON(), description })
-      if (history.stack.length > historyStackSizeLimit) {
-         history.stack = history.stack.slice(1) // drop the oldest state
-      } else {
-         ++history.index
-      }
-      changedSinceLastSave = true
-      history.stack = history.stack // for Svelte
-   }
-   function executeUndo() {
-      if (history.index > 0) {
-         --history.index
-         loadState(history.stack[history.index].state)
-      }
-      changedSinceLastSave = true
-   }
-   function executeRedo() {
-      let lastIndex = history.stack.length - 1
-      if (history.index < lastIndex) {
-         ++history.index
-         loadState(history.stack[history.index].state)
-      }
-      changedSinceLastSave = true
    }
 
    // -------------- State of input peripherals (not persisted) ---------------
@@ -536,13 +602,8 @@
    let vertexMarkerGlyph: SymbolKind | undefined
    let crossingMarkerGlyph: SymbolKind | undefined
    let lineTypes = new Set<LineType>()
-   // If we're not using Electron, use dummy symbols.
-   let usingElectron: boolean
-   try {
-      fileSystem
-      usingElectron = true
-   } catch {
-      usingElectron = false
+   // If we're not using Electron, load test symbols.
+   if (!usingElectron) {
       loadSymbols(symbolFolderName, symbolsForBrowserTesting).then((kinds) => {
          symbols = kinds
       })
@@ -578,27 +639,57 @@
    let symbolLoadError = false
    let lineTypeLoadError = false
 
-   let history: EditHistory = {
-      stack: [{ state: emptyCircuitJSON, description: "blank canvas" }],
-      index: 0, // Defaults to last item of stack. Decrements on undo.
-   }
-   let changedSinceLastSave = false
-   async function autosave() {
-      if (!projectFolder || !changedSinceLastSave) return
-      let save = await fileSystem.saveEditHistory(
-         path.join(projectFolder, autosaveFileName),
-         history
+   let worker: null | Comlink.Remote<any>
+   if (usingElectron) {
+      worker = Comlink.wrap(
+         new Worker(
+            new URL("../saveLoadWorker.ts", import.meta.url), // per Vite docs
+            { type: "module" }
+         )
       )
-      if (save.outcome === "success") {
-         console.log("Autosaved.")
-         changedSinceLastSave = false
-      } else {
-         console.error(`Autosave failed. Reason:\n${save.error.message}`)
-      }
+      worker.blah()
    }
-   let intervalI = setInterval(autosave, autosaveFrequency) as unknown as number
-   // A hack to clear old intervals during hot reloading:
-   for (let i = 0; i < intervalI; ++i) clearInterval(i)
+   // Whenever a change is made to this data structure, a corresponding change
+   // must be made to the "twin" data structure within the Web Worker.
+   let history: {
+      readonly stackSizeLimit: number
+      stack: { state: CircuitJSON; description: string }[]
+      index: number // Defaults to last item of stack. Decrements on undo.
+      timestamp: number // Counts the number of updates to the history.
+      timestampOfLastSave: number
+   } = {
+      stackSizeLimit: 200,
+      stack: [{ state: emptyCircuitJSON, description: "blank canvas" }],
+      index: 0,
+      timestamp: 0,
+      timestampOfLastSave: 0,
+   }
+   function commitState(description: string) {
+      history.stack.length = history.index + 1 // Forget undone states.
+      history.stack.push({ state: saveToJSON(), description })
+      if (history.stack.length > history.stackSizeLimit) {
+         history.stack = history.stack.slice(1) // drop the oldest state
+      } else {
+         ++history.index
+      }
+      history.timestamp += 1
+      history.stack = history.stack // for Svelte
+   }
+   function executeUndo() {
+      if (history.index > 0) {
+         --history.index
+         loadState(history.stack[history.index].state)
+      }
+      history.timestamp += 1
+   }
+   function executeRedo() {
+      let lastIndex = history.stack.length - 1
+      if (history.index < lastIndex) {
+         ++history.index
+         loadState(history.stack[history.index].state)
+      }
+      history.timestamp += 1
+   }
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
@@ -1118,7 +1209,7 @@
       } else if (key.type === "delete" && amassed.items.size > 0) {
          deleteItems(amassed.items)
          amassed.items = amassed.items // Let Svelte know the group has changed.
-         commitState("delete amassed")
+         commitState("erase amassed")
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
@@ -2503,7 +2594,7 @@
       keyReleased(event.code)
    }}
    on:wheel|capture|passive={(event) => {
-      let yMagnitude = Math.abs(event.wheelDeltaY)
+      let yMagnitude = Math.abs(asAny(event).wheelDeltaY)
       if (!usingTrackpad && event.deltaX !== 0) {
          usingTrackpad = true
          mouselikeWheelEvents = 0
@@ -2838,98 +2929,7 @@
    >
       <div class="topThings">
          <div class="projectPane">
-            <button
-               on:click={async () => {
-                  if (!usingElectron) return
-                  let response = await fileSystem.openDirectory()
-                  if (!response) return
-                  projectFolder = response
-                  let load1 = fileSystem
-                     .getFileNames(path.join(projectFolder, symbolFolderName))
-                     .then(async (fileNames) => {
-                        symbolLoadError = !fileNames
-                        if (fileNames) {
-                           await loadSymbols(
-                              symbolFolderName,
-                              fileNames.filter(
-                                 (f) => path.extname(f) === ".svg"
-                              )
-                           ).then((kinds) => {
-                              symbols = kinds
-                           })
-                        }
-                     })
-                  let load2 = fileSystem
-                     .getFileNames(
-                        path.join(projectFolder, vertexGlyphFolderName)
-                     )
-                     .then(async (fileNames) => {
-                        if (fileNames) {
-                           await loadSymbols(
-                              vertexGlyphFolderName,
-                              fileNames.filter(
-                                 (f) => path.extname(f) === ".svg"
-                              )
-                           ).then((kinds) => {
-                              vertexGlyphs = kinds
-                           })
-                        }
-                     })
-                  let load3 = fileSystem
-                     .getFileNames(
-                        path.join(projectFolder, crossingGlyphFolderName)
-                     )
-                     .then(async (fileNames) => {
-                        if (fileNames) {
-                           await loadSymbols(
-                              crossingGlyphFolderName,
-                              fileNames.filter(
-                                 (f) => path.extname(f) === ".svg"
-                              )
-                           ).then((kinds) => {
-                              crossingGlyphs = kinds
-                           })
-                        }
-                     })
-                  let load4 = fileSystem
-                     .getFileNames(path.join(projectFolder, lineTypeFolderName))
-                     .then(async (fileNames) => {
-                        lineTypeLoadError = !fileNames
-                        if (fileNames) {
-                           await loadLineTypes(
-                              fileNames.filter(
-                                 (f) => path.extname(f) === ".json"
-                              )
-                           ).then((types) => {
-                              lineTypes = types
-                              types.forEach((type) => {
-                                 // Bind the hydraulic line by default:
-                                 if (
-                                    type.name === hydraulicLineFileName &&
-                                    !selectedLineType
-                                 ) {
-                                    selectedLineType = type
-                                 }
-                              })
-                           })
-                        }
-                     })
-                  let loadHistory = fileSystem.loadEditHistory(
-                     path.join(projectFolder, autosaveFileName)
-                  )
-                  Promise.all([loadHistory, load1, load2, load3, load4]).then(
-                     ([historyLoad]) => {
-                        if (historyLoad.outcome === "success") {
-                           history = historyLoad.history
-                           loadState(history.stack[history.index].state)
-                        } else {
-                           console.error(
-                              `Failed to load autosave. Reason:\n${historyLoad.error.message}`
-                           )
-                        }
-                     }
-                  )
-               }}>Choose a project folder</button
+            <button on:click={openProjectFolder}>Choose a project folder</button
             >
             {#if projectFolder}
                <div><b>Project name:</b> {path.basename(projectFolder)}</div>

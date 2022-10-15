@@ -13,11 +13,13 @@
    },
    "dependencies": {
       "@types/heap": "^0.2.31",
+      "comlink": "^4.3.1",
       "heap": "^0.2.7"
    },
    "devDependencies": {
       "@sveltejs/vite-plugin-svelte": "^1.0.1",
       "@tsconfig/svelte": "^2.0.1",
+      "@types/node": "^18.11.0",
       "@typescript-eslint/eslint-plugin": "^5.21.0",
       "@typescript-eslint/parser": "^5.21.0",
       "concurrently": "^7.3.0",
