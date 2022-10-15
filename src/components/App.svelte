@@ -39,6 +39,7 @@
    import Button from "~/components/ToolButton.svelte"
    import Heap from "heap"
    import * as Comlink from "comlink"
+   import type { WorkerInterface, CircuitHistory } from "~/saveLoadWorker"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -58,6 +59,8 @@
    }
 
    // ------------------------------ Constants --------------------------------
+   const autosaveFrequency = seconds(60)
+   const autosaveFileName = "autosave.json.gz"
    const symbolFolderName = "symbols"
    const vertexGlyphFolderName = "vertex glyphs"
    const crossingGlyphFolderName = "crossing glyphs"
@@ -441,12 +444,20 @@
             })
          }
       })
-      postMessage({ function: "loadProjectHistory", projectFolder })
-      // history = historyLoad.history
-      //          loadState(history.stack[history.index].state)
-      let loadHistory = worker.loadProjectHistory(projectFolder)
+      let loadHistory = worker.loadHistory(
+         path.join(projectFolder, autosaveFileName)
+      )
       Promise.all([loadHistory, load1, load2, load3, load4]).then(
-         ([historyLoad]) => {
+         ([historyLoading]) => {
+            if (historyLoading.outcome === "success") {
+               history = historyLoading.history
+               loadState(history.stack[history.index].state)
+            } else {
+               console.error(
+                  `Failed to load the project's history. Reason:\n${historyLoading.error.message}`
+               )
+               history = emptyHistory()
+            }
          }
       )
    }
@@ -639,7 +650,8 @@
    let symbolLoadError = false
    let lineTypeLoadError = false
 
-   let worker: null | Comlink.Remote<any>
+   // Initialize the Web Worker that handles saving and loading.
+   let worker: null | Comlink.Remote<WorkerInterface>
    if (usingElectron) {
       worker = Comlink.wrap(
          new Worker(
@@ -647,26 +659,24 @@
             { type: "module" }
          )
       )
-      worker.blah()
    }
-   // Whenever a change is made to this data structure, a corresponding change
-   // must be made to the "twin" data structure within the Web Worker.
-   let history: {
-      readonly stackSizeLimit: number
-      stack: { state: CircuitJSON; description: string }[]
-      index: number // Defaults to last item of stack. Decrements on undo.
-      timestamp: number // Counts the number of updates to the history.
-      timestampOfLastSave: number
-   } = {
-      stackSizeLimit: 200,
-      stack: [{ state: emptyCircuitJSON, description: "blank canvas" }],
-      index: 0,
-      timestamp: 0,
-      timestampOfLastSave: 0,
+   // Whenever a change is made to this data structure, a corresponding
+   // change must be made to the "twin" data structure within the Web Worker.
+   let history: CircuitHistory<CircuitJSON> = emptyHistory()
+
+   function emptyHistory(): CircuitHistory<CircuitJSON> {
+      return {
+         stackSizeLimit: 200,
+         stack: [{ state: emptyCircuitJSON, description: "blank canvas" }],
+         index: 0,
+         timestamp: 0,
+         timestampOfLastSave: 0,
+      }
    }
    function commitState(description: string) {
       history.stack.length = history.index + 1 // Forget undone states.
-      history.stack.push({ state: saveToJSON(), description })
+      let state = saveToJSON()
+      history.stack.push({ state, description })
       if (history.stack.length > history.stackSizeLimit) {
          history.stack = history.stack.slice(1) // drop the oldest state
       } else {
@@ -674,6 +684,7 @@
       }
       history.timestamp += 1
       history.stack = history.stack // for Svelte
+      worker?.commitState(state, description)
    }
    function executeUndo() {
       if (history.index > 0) {
@@ -681,6 +692,7 @@
          loadState(history.stack[history.index].state)
       }
       history.timestamp += 1
+      worker?.executeUndo()
    }
    function executeRedo() {
       let lastIndex = history.stack.length - 1
@@ -689,7 +701,25 @@
          loadState(history.stack[history.index].state)
       }
       history.timestamp += 1
+      worker?.executeRedo()
    }
+   async function autosave() {
+      if (!projectFolder || !worker) return
+      if (history.timestampOfLastSave === history.timestamp) return
+
+      let save = await worker.saveHistory(
+         path.join(projectFolder, autosaveFileName)
+      )
+      if (save.outcome === "success") {
+         console.log("Autosaved.")
+         history.timestampOfLastSave = save.timestampOfSave
+      } else {
+         console.error(`Autosave failed. Reason:\n${save.error.message}`)
+      }
+   }
+   let intervalI = setInterval(autosave, autosaveFrequency) as unknown as number
+   // A hack to clear old intervals during hot reloading:
+   for (let i = 0; i < intervalI; ++i) clearInterval(i)
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
