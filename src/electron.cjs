@@ -25,6 +25,9 @@ const createWindow = () => {
          webSecurity,
       },
    })
+   ipcMain.handle("quit", () => {
+      app.quit()
+   })
    ipcMain.handle("openDirectory", async () => {
       let { filePaths } = await dialog.showOpenDialog(window, {
          properties: ["openDirectory"],

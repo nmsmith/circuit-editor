@@ -2657,6 +2657,30 @@
          canvasHeight = canvas.getBoundingClientRect().height
       }
    }}
+   on:beforeunload={async (event) => {
+      if (
+         projectFolder &&
+         worker &&
+         history.timestampOfLastSave !== history.timestamp
+      ) {
+         // Cancel the page closing so that a save operation can be performed.
+         event.preventDefault()
+         event.returnValue = "" // Chrome requires this for some reason.
+         let save = await worker.saveHistory(
+            path.join(projectFolder, autosaveFileName)
+         )
+         if (
+            save.outcome === "success" ||
+            confirm(
+               `Failed to save the project.\nReason: ${save.error.message}\nQuit anyway?`
+            )
+         ) {
+            history.timestampOfLastSave = history.timestamp
+            // Now try closing the page again.
+            electron.ipcRenderer.invoke("quit")
+         }
+      }
+   }}
 />
 
 <div
