@@ -547,8 +547,9 @@
    let mouselikeWheelEvents = 0
    let timeOfLastWheelEvent: Time = now()
    let lastYMagnitude = 0
-   const [LMB, RMB, Shift, Alt, Control] = [
+   const [LMB, MMB, RMB, Shift, Alt, Control] = [
       "LMB",
+      "MMB",
       "RMB",
       "Shift",
       "Alt",
@@ -565,7 +566,7 @@
    >(() => {
       return { type: "none", pressing: false }
    }, [
-      [RMB, { type: "pan", pressing: false }],
+      [MMB, { type: "pan", pressing: false }],
       ["Space", { type: "pan", pressing: false }],
       ["Backspace", { type: "delete", pressing: false }],
       ["Delete", { type: "delete", pressing: false }],
@@ -1428,9 +1429,13 @@
       if (warp && warp.mode !== selectedWarpMode()) updateWarp()
    }
    let waitedOneFrameLMB = false
+   let waitedOneFrameMMB = false
    let waitedOneFrameRMB = false
    function leftMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b001) !== 0
+   }
+   function middleMouseIsDown(event: MouseEvent) {
+      return (event.buttons & 0b100) !== 0
    }
    function rightMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b010) !== 0
@@ -2693,20 +2698,20 @@
    on:mousemove|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
       if (!leftMouseIsDown(event) && keyInfo.read(LMB).pressing) {
-         if (waitedOneFrameLMB) {
-            keyAborted(LMB)
-         } else {
-            waitedOneFrameLMB = true
-         }
+         if (waitedOneFrameLMB) keyAborted(LMB)
+         else waitedOneFrameLMB = true
       } else {
          waitedOneFrameLMB = false
       }
+      if (!middleMouseIsDown(event) && keyInfo.read(MMB).pressing) {
+         if (waitedOneFrameMMB) keyAborted(MMB)
+         else waitedOneFrameMMB = true
+      } else {
+         waitedOneFrameMMB = false
+      }
       if (!rightMouseIsDown(event) && keyInfo.read(RMB).pressing) {
-         if (waitedOneFrameRMB) {
-            keyAborted(RMB)
-         } else {
-            waitedOneFrameRMB = true
-         }
+         if (waitedOneFrameRMB) keyAborted(RMB)
+         else waitedOneFrameRMB = true
       } else {
          waitedOneFrameRMB = false
       }
@@ -2718,6 +2723,7 @@
    on:mouseup|capture={(event) => {
       mouseInClient = new Point(event.clientX, event.clientY)
       if (!leftMouseIsDown(event)) keyReleased(LMB)
+      if (!middleMouseIsDown(event)) keyReleased(MMB)
       if (!rightMouseIsDown(event)) keyReleased(RMB)
    }}
    on:wheel|capture|nonpassive={(event) => {
@@ -2740,6 +2746,7 @@
       on:mousedown={(event) => {
          event.preventDefault() // Disable selection of nearby text elements.
          if (leftMouseIsDown(event)) keyPressed(LMB)
+         if (middleMouseIsDown(event)) keyPressed(MMB)
          if (rightMouseIsDown(event)) keyPressed(RMB)
       }}
       on:wheel={(event) => {

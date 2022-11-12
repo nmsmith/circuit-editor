@@ -90,7 +90,7 @@ To aid you in creating clean and precise diagrams, many operations will snap the
 
 ### Using a mouse
 
-To pan the canvas using a mouse, hold down the right mouse button and then move the mouse in the direction you want to pan.
+To pan the canvas using a mouse, hold down the middle mouse button and then move the mouse in the direction you want to pan.
 
 To zoom the canvas using a mouse, place the mouse cursor at the location you wish to zoom toward, and then rotate the scroll wheel.
 
