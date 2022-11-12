@@ -353,6 +353,8 @@ export class SymbolKind {
             this.ports.push(
                new PortKind(element.id, x + width / 2, y + height / 2)
             )
+            // Remove it from the DOM - it shouldn't be rendered.
+            element.remove()
          }
       }
 
