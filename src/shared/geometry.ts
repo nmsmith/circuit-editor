@@ -650,7 +650,7 @@ export function closestTo<T extends Object2D>(
       for (let object of set) {
          let closestPart = object.partClosestTo(point)
          let sqDistance = closestPart.sqDistanceFrom(point)
-         if (!closest || sqDistance < closest.sqDistance) {
+         if (!closest || sqDistance <= closest.sqDistance) {
             closest = { object, sqDistance, closestPart }
          }
       }
@@ -671,7 +671,7 @@ export function closestSegmentTo<S extends LineSegment>(
       let closestPart = segment.intersection(new Line(point, alongAxis))
       if (!closestPart) continue
       let sqDistance = closestPart.sqDistanceFrom(point)
-      if (!closest || sqDistance < closest.sqDistance) {
+      if (!closest || sqDistance <= closest.sqDistance) {
          closest = { object: segment, sqDistance, closestPart }
       }
    }
