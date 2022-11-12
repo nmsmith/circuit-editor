@@ -2630,7 +2630,11 @@
    }}
    on:wheel|capture|passive={(event) => {
       let yMagnitude = Math.abs(asAny(event).wheelDeltaY)
-      if (!usingTrackpad && event.deltaX !== 0) {
+      if (
+         !usingTrackpad &&
+         event.deltaX !== 0 &&
+         !keyInfo.read(Shift).pressing
+      ) {
          usingTrackpad = true
          mouselikeWheelEvents = 0
          console.log("Switched to trackpad mode.")
