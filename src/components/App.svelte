@@ -93,10 +93,8 @@
          canvasHeight = canvas.getBoundingClientRect().height
       }
    }
-   // const row1Tools = ["query", "warp", "erase", "rigid", "tether"] as const
-   // const row2Tools = ["amass", "slide", "draw", "flex", "group"] as const
-   const row1Tools = ["qButton", "warp", "erase", "rigid", "tButton"] as const
-   const row2Tools = ["amass", "slide", "draw", "flex", "gButton"] as const
+   const row1Tools = ["qButton", "warp", "erase", "rButton", "tButton"] as const
+   const row2Tools = ["amass", "slide", "draw", "freeze", "gButton"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
    // Input constants
@@ -235,6 +233,9 @@
    function eraseTarget(point: Point): ClosenessResult<Grabbable> {
       return closestGrabbable(point)
    }
+   function freezeTarget(point: Point): ClosenessResult<Segment> {
+      return closestNearTo(point, Segment.s)
+   }
    // ✨ A magical easing function for aesthetically-pleasing snapping. The
    // source is displaced from its true position as it approaches the target.
    function easeFn(distance: number): number {
@@ -305,8 +306,7 @@
       return keyInfo.read(Shift).pressing ? "rotate" : "pan"
    }
    function labelOfButton(s: string): string {
-      if (s.endsWith("Button") || s === "rigid" || s === "flex")
-         return s[0].toUpperCase()
+      if (s.endsWith("Button")) return s[0].toUpperCase()
       else return s[0].toUpperCase() + s.slice(1)
    }
    function copyPositions(): DefaultMap<Movable, Point> {
@@ -577,12 +577,12 @@
       //["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
       ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
       ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
-      //["KeyR", { type: "holdTool", tool: "rigid", pressing: false }],
-      //["KeyT", { type: "holdTool", tool: "tether", pressing: false }],
+      //["KeyR", { type: "holdTool", tool: "rButton", pressing: false }],
+      // ["KeyT", { type: "holdTool", tool: "tButton", pressing: false }],
       ["KeyA", { type: "holdTool", tool: "amass", pressing: false }],
       ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
       ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
-      //["KeyF", { type: "holdTool", tool: "flex", pressing: false }],
+      ["KeyF", { type: "holdTool", tool: "freeze", pressing: false }],
       //["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
       [LMB, { type: "useTool", pressing: false }],
       ["Escape", { type: "abort", pressing: false }],
@@ -846,11 +846,10 @@
       start: Point
       items: Set<Interactable>
    } = null
-   type RectSelectOperation<T> = null | {
+   let eraseRect: null | {
       start: Point
-      items: Set<T>
-   }
-   let eraseRect: RectSelectOperation<Segment | SymbolInstance>
+      items: Set<Segment | SymbolInstance>
+   } = null
    $: {
       for (let symbol of SymbolInstance.s) {
          let display = willBeDeleted(symbol) ? "none" : "initial"
@@ -858,8 +857,11 @@
          symbol.highlight.style.display = display
       }
    }
-   let rigidRect: RectSelectOperation<Segment>
-   let flexRect: RectSelectOperation<Segment>
+   let freezeRect: null | {
+      mode: "add" | "remove"
+      start: Point
+      items: Set<Segment>
+   }
 
    function resetOperationVariables() {
       endPan() // Don't revert this, just end it.
@@ -870,8 +872,7 @@
       warp = null
       amassRect = null
       eraseRect = null
-      rigidRect = null
-      flexRect = null
+      freezeRect = null
    }
 
    // ---------------------------- Derived state ------------------------------
@@ -931,6 +932,18 @@
          }
       }
    }
+   let freezeLight: Set<Segment>
+   $: {
+      freezeLight = new Set()
+      for (let s of Segment.s) if (s.isFrozen) freezeLight.add(s)
+      if (freezeRect) {
+         if (freezeRect.mode === "remove") {
+            for (let item of freezeRect.items) freezeLight.delete(item)
+         } else {
+            for (let item of freezeRect.items) freezeLight.add(item)
+         }
+      }
+   }
    let touchLight: Set<Interactable>
    $: {
       touchLight = new Set()
@@ -952,6 +965,8 @@
             touching = drawTarget(touchLocation)?.object
          } else if (tool === "erase" && !eraseRect) {
             touching = eraseTarget(touchLocation)?.object
+         } else if (tool === "freeze" && !freezeRect) {
+            touching = freezeTarget(touchLocation)?.object
          }
          if (touching) {
             // If touching part of an amassment, highlight all of it.
@@ -1218,12 +1233,14 @@
    // ---------------------------- Primary events -----------------------------
    let amassedOnMouseDown = false
    let erasedOnMouseDown = false
+   let frozeOnMouseDown: false | "freeze" | "unfreeze" = false
    function keyPressed(name: string) {
       let key = keyInfo.getOrCreate(name)
       if (key.pressing) return // in case we missed a release
       key.pressing = true
       amassedOnMouseDown = false
       erasedOnMouseDown = false
+      frozeOnMouseDown = false
       // Update the state of double-tap actions.
       if (
          name === "Space" &&
@@ -1249,11 +1266,10 @@
       } else if (key.type === "holdTool") {
          if (
             toolBeingUsed?.tool === "draw" &&
-            key.tool ===
-               "draw" /*|| key.tool === "rigid" || key.tool === "flex"*/
+            (key.tool === "draw" || key.tool === "freeze")
          ) {
-            // Pressing rigid/flex initiates a chain draw.
-            chainDraw(false /*key.tool === "rigid"*/)
+            // Pressing draw/freeze initiates a chain draw.
+            chainDraw(key.tool === "freeze")
             commitState("draw segment")
          } else {
             // Hold the tool. If another tool is already held, it is overridden.
@@ -1266,13 +1282,13 @@
          }
          // Actions to perform immediately:
          if (toolToUse === "amass") {
-            let grab = amassTarget(mouseOnCanvas)
+            let target = amassTarget(mouseOnCanvas)
             let shift = keyInfo.read(Shift).pressing
             let alt = keyInfo.read(Alt).pressing
-            if (grab) {
-               if (shift) amassed.items.toggle(grab.object)
-               else if (alt) amassed.items.delete(grab.object)
-               else amassed.items = new ToggleSet([grab.object])
+            if (target) {
+               if (shift) amassed.items.toggle(target.object)
+               else if (alt) amassed.items.delete(target.object)
+               else amassed.items = new ToggleSet([target.object])
                amassed.items = amassed.items
                amassedOnMouseDown = true
             } else if (amassed.items.size > 0 && !shift && !alt) {
@@ -1280,27 +1296,23 @@
                amassedOnMouseDown = true
             }
          } else if (toolToUse === "erase") {
-            let g = eraseTarget(mouseOnCanvas)
-            if (g) {
-               deleteItems(
-                  amassed.items.has(g.object) ? amassed.items : [g.object]
-               )
+            let target = eraseTarget(mouseOnCanvas)
+            if (target) {
+               if (amassed.items.has(target.object)) {
+                  deleteItems(amassed.items)
+               } else {
+                  deleteItems([target.object])
+               }
                erasedOnMouseDown = true
             }
+         } else if (toolToUse === "freeze") {
+            let target = freezeTarget(mouseOnCanvas)
+            if (target) {
+               target.object.isFrozen = !target.object.isFrozen
+               frozeOnMouseDown = target.object.isFrozen ? "freeze" : "unfreeze"
+               Segment.s = Segment.s
+            }
          }
-         // else if (toolToUse === "rigid") {
-         //    let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
-         //    if (segment?.isRigid === false) {
-         //       segment.isRigid = true
-         //       Segment.s = Segment.s
-         //    }
-         // } else if (toolToUse === "flex") {
-         //    let segment = closestNearTo(mouseOnCanvas, Segment.s)?.object
-         //    if (segment?.isRigid) {
-         //       segment.isRigid = false
-         //       Segment.s = Segment.s
-         //    }
-         // }
       } else if (key.type === "abort") {
          keyAborted(LMB)
       }
@@ -1396,12 +1408,19 @@
                }
                endEraseRect()
                break
-            // case "rigid":
-            //    endRigidRect()
-            //    break
-            // case "flex":
-            //    endFlexRect()
-            //    break
+            case "freeze":
+               if (freezeRect && freezeRect.items.size > 0) {
+                  let message =
+                     freezeRect.mode === "add"
+                        ? "freeze region"
+                        : "unfreeze region"
+                  endFreezeRect()
+                  commitState(message)
+               } else if (frozeOnMouseDown) {
+                  commitState(frozeOnMouseDown)
+               }
+               endFreezeRect()
+               break
          }
          toolBeingUsed = null
       }
@@ -1455,8 +1474,7 @@
       updateWarp()
       updateAmassRect()
       updateEraseRect()
-      updateRigidRect()
-      updateFlexRect()
+      updateFreezeRect()
       // Check for the initiation of drag-based operations.
       if (toolBeingUsed) {
          let dragVector = mouseOnCanvas
@@ -1494,12 +1512,9 @@
             beginAmassRect(toolBeingUsed.canvasDownPosition)
          } else if (tool === "erase" && !eraseRect && shortDrag) {
             beginEraseRect(toolBeingUsed.canvasDownPosition)
+         } else if (tool === "freeze" && !freezeRect && shortDrag) {
+            beginFreezeRect(toolBeingUsed.canvasDownPosition)
          }
-         // else if (tool === "rigid" && !rigidRect && shortDrag) {
-         //    beginRigidRect(toolBeingUsed.canvasDownPosition)
-         // } else if (tool === "flex" && !flexRect && shortDrag) {
-         //    beginFlexRect(toolBeingUsed.canvasDownPosition)
-         // }
       }
    }
    function spawnSymbol(kind: SymbolKind, grabOffset: Vector) {
@@ -1788,9 +1803,9 @@
 
       return endVertex
    }
-   function chainDraw(rigidifyCurrent: boolean) {
+   function chainDraw(freezeCurrent: boolean) {
       if (!draw || !toolBeingUsed) return
-      draw.segment.isRigid = rigidifyCurrent
+      draw.segment.isFrozen = freezeCurrent
       // Start a new draw operation at the current draw endpoint.
       toolBeingUsed.canvasDownPosition = mouseOnCanvas
       toolBeingUsed.chainDrawFromEnd = endDraw(true)
@@ -1885,7 +1900,7 @@
                   adjVertex === segment.end ? segment.start : segment.end
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
-               let canStretch = segment.axis === slideAxis && !segment.isRigid
+               let canStretch = segment.axis === slideAxis && !segment.isFrozen
                if (
                   canStretch &&
                   adjDir.approxEquals(slideDir, 0.1) &&
@@ -1910,7 +1925,7 @@
             // movement to it.
             if (movable instanceof Junction && movable.host()) {
                let host = movable.host() as Segment
-               let canStretch = host.axis === slideAxis && !host.isRigid
+               let canStretch = host.axis === slideAxis && !host.isFrozen
                if (!canStretch) {
                   proposeTo(movableAt(host.start), delay, isPush)
                   proposeTo(movableAt(host.end), delay, isPush)
@@ -2535,11 +2550,12 @@
    function beginEraseRect(start: Point) {
       eraseRect = { start, items: new Set() }
    }
-   function beginRigidRect(start: Point) {
-      rigidRect = { start, items: new Set() }
-   }
-   function beginFlexRect(start: Point) {
-      flexRect = { start, items: new Set() }
+   function beginFreezeRect(start: Point) {
+      freezeRect = {
+         mode: keyInfo.read(Alt).pressing ? "remove" : "add",
+         start,
+         items: new Set(),
+      }
    }
    function updateAmassRect() {
       if (!amassRect) return
@@ -2564,19 +2580,12 @@
          for (let symbol of SymbolInstance.s)
             if (range.intersects(symbol)) eraseRect.items.add(symbol)
    }
-   function updateRigidRect() {
-      if (!rigidRect) return
-      rigidRect.items = new Set()
-      let range = Range2D.fromCorners(rigidRect.start, mouseOnCanvas)
+   function updateFreezeRect() {
+      if (!freezeRect) return
+      freezeRect.items = new Set()
+      let range = Range2D.fromCorners(freezeRect.start, mouseOnCanvas)
       for (let segment of Segment.s)
-         if (range.intersects(segment)) rigidRect.items.add(segment)
-   }
-   function updateFlexRect() {
-      if (!flexRect) return
-      flexRect.items = new Set()
-      let range = Range2D.fromCorners(flexRect.start, mouseOnCanvas)
-      for (let segment of Segment.s)
-         if (range.intersects(segment)) flexRect.items.add(segment)
+         if (range.intersects(segment)) freezeRect.items.add(segment)
    }
    function endAmassRect() {
       if (!amassRect) return
@@ -2593,17 +2602,15 @@
       deleteItems(eraseRect.items)
       eraseRect = null
    }
-   function endRigidRect() {
-      if (!rigidRect) return
-      for (let item of rigidRect.items) item.isRigid = true
+   function endFreezeRect() {
+      if (!freezeRect) return
+      if (freezeRect.mode === "remove") {
+         for (let item of freezeRect.items) item.isFrozen = false
+      } else {
+         for (let item of freezeRect.items) item.isFrozen = true
+      }
       Segment.s = Segment.s
-      rigidRect = null
-   }
-   function endFlexRect() {
-      if (!flexRect) return
-      for (let item of flexRect.items) item.isRigid = false
-      Segment.s = Segment.s
-      flexRect = null
+      freezeRect = null
    }
    function abortAllButtons() {
       for (let key of keyInfo.keys()) keyAborted(key)
@@ -2818,6 +2825,19 @@
          </g>
          <g id="symbol amassLight layer" class="amassLight" />
          <g id="symbol touchLight layer" class="touchLight" />
+         <g id="segment freezeLight layer" class="freezeLight">
+            {#each [...segmentsToDraw] as [segment, sections]}
+               {#if freezeLight.has(segment) && !willBeDeleted(segment)}
+                  {#each sections as section}
+                     <CircuitLine
+                        type={segment.type}
+                        segment={section}
+                        render="freeze"
+                     />
+                  {/each}
+               {/if}
+            {/each}
+         </g>
          <g id="segment amassLight layer" class="amassLight">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if amassLight.has(segment) && !willBeDeleted(segment)}
@@ -2825,7 +2845,7 @@
                      <CircuitLine
                         type={segment.type}
                         segment={section}
-                        highlight={true}
+                        render="highlight"
                      />
                   {/each}
                {/if}
@@ -2838,7 +2858,7 @@
                      <CircuitLine
                         type={segment.type}
                         segment={section}
-                        highlight={true}
+                        render="highlight"
                      />
                   {/each}
                {/if}
@@ -2848,15 +2868,7 @@
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if !willBeDeleted(segment)}
                   {#each sections as section}
-                     <CircuitLine
-                        type={segment.type}
-                        segment={section}
-                        className={(segment.isRigid &&
-                           !flexRect?.items.has(segment)) ||
-                        rigidRect?.items.has(segment)
-                           ? "rigid"
-                           : ""}
-                     />
+                     <CircuitLine type={segment.type} segment={section} />
                   {/each}
                {/if}
             {/each}
@@ -2991,16 +3003,9 @@
                   scale={cameraZoom}
                />
             {/if}
-            {#if rigidRect}
+            {#if freezeRect}
                <RectSelectBox
-                  start={rigidRect.start}
-                  end={mouseOnCanvas}
-                  scale={cameraZoom}
-               />
-            {/if}
-            {#if flexRect}
-               <RectSelectBox
-                  start={flexRect.start}
+                  start={freezeRect.start}
                   end={mouseOnCanvas}
                   scale={cameraZoom}
                />
@@ -3216,6 +3221,9 @@
    }
    .amassLight {
       color: white;
+   }
+   .freezeLight {
+      color: rgb(0, 150, 255);
    }
    .hiddenSymbol {
       fill: rgba(0, 0, 0, 0.15);
@@ -3480,7 +3488,7 @@
       position: absolute;
       top: 0;
       right: 0;
-      width: 100px;
+      width: 105px;
       height: 250px;
       background-color: rgb(193, 195, 199);
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);

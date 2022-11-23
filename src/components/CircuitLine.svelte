@@ -3,16 +3,17 @@
    import type { LineSegment } from "~/shared/geometry"
    export let type: LineType
    export let segment: LineSegment
-   export let highlight: boolean = false
-   export let className: string = ""
+   export let render: "segment" | "highlight" | "freeze" = "segment"
+   const freezeThickness = 13
 </script>
 
 <line
-   class={highlight ? "" : className}
-   stroke={highlight ? "currentColor" : type.color}
-   stroke-width={highlight
+   stroke={render === "segment" ? type.color : "currentColor"}
+   stroke-width={render === "segment"
+      ? type.thickness
+      : render === "highlight"
       ? type.thickness + strokeHighlightThickness
-      : type.thickness}
+      : type.thickness + freezeThickness}
    stroke-dasharray={type.dasharray}
    stroke-linejoin="round"
    stroke-linecap="round"
@@ -21,9 +22,3 @@
    x2={segment.end.x}
    y2={segment.end.y}
 />
-
-<style>
-   .rigid {
-      stroke: rgb(113, 68, 29);
-   }
-</style>

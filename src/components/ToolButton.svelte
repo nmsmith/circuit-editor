@@ -45,8 +45,8 @@
    }
    .label {
       font-family: "Nunito";
-      font-size: 14.5px;
+      font-size: 14.2px;
       font-weight: 470;
-      letter-spacing: 0.4px;
+      letter-spacing: 0.3px;
    }
 </style>

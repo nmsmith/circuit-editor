@@ -127,7 +127,7 @@ export class Junction extends Point implements Deletable {
             ...segs[1].attachments,
          ])
          mergedSegment.attachments.forEach((a) => a.attachTo(mergedSegment))
-         mergedSegment.isRigid = segs[0].isRigid && segs[1].isRigid
+         mergedSegment.isFrozen = segs[0].isFrozen && segs[1].isFrozen
          for (let group of groups) {
             if (group.items.has(segs[0]) || group.items.has(segs[1]))
                group.items.add(mergedSegment)
@@ -214,7 +214,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    readonly objectID: number // for serialization
    type: LineType
    attachments = new Set<Junction>() // should only be modified from Junction class
-   isRigid = false
+   isFrozen = false
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(() => {
       return { type: "auto" }
    })
@@ -259,7 +259,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       // at Junction.convertToCrossing().
       for (let newSegment of newSegments) {
          // Copy the state of this segment.
-         newSegment.isRigid = this.isRigid
+         newSegment.isFrozen = this.isFrozen
          for (let group of groups) {
             if (group.items.has(this)) group.items.add(newSegment)
          }
@@ -604,7 +604,7 @@ type SegmentJSON = {
    objectID: number
    type: string // must be a LineType.name
    attachments: number[]
-   isRigid: boolean
+   isFrozen: boolean
    crossingTypes: { segmentID: number; crossing: CrossingType }[]
    startID: number
    endID: number
@@ -664,7 +664,7 @@ export function saveToJSON(): CircuitJSON {
          objectID: s.objectID,
          type: s.type.name,
          attachments: [...s.attachments].map((j) => j.objectID),
-         isRigid: s.isRigid,
+         isFrozen: s.isFrozen,
          crossingTypes,
          startID: s.start.objectID,
          endID: s.end.objectID,
@@ -789,7 +789,7 @@ export function loadFromJSON(
                ;(j as Junction).attachTo(newSegment)
             }
          }
-         newSegment.isRigid = s.isRigid
+         newSegment.isFrozen = s.isFrozen
          segmentMap.set(s.objectID, newSegment)
       }
    })
