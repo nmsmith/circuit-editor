@@ -35,6 +35,7 @@ export class Junction extends Point implements Deletable {
    readonly objectID: number // for serialization
    glyph: VertexGlyph
    private readonly edges_ = new Set<Edge>()
+   private host_: Segment | null = null
    constructor(point: Point, glyph?: VertexGlyph) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
@@ -52,6 +53,7 @@ export class Junction extends Point implements Deletable {
          if (other instanceof Junction) neighbours.add(other)
       }
       this.edges_.clear()
+      this.detach()
       return neighbours
    }
    moveTo(point: Point) {
@@ -79,6 +81,19 @@ export class Junction extends Point implements Deletable {
       this.edges_.delete(edge)
       if (this.edges_.size === 0) this.delete()
    }
+   attachTo(host: Segment) {
+      this.host_ = host
+      host.attachments.add(this)
+   }
+   host(): Segment | null {
+      return this.host_
+   }
+   detach() {
+      if (this.host_) {
+         this.host_.attachments.delete(this)
+         this.host_ = null
+      }
+   }
    // If the junction is an X-junction or a straight line, convert it to a
    // crossing. Thereafter, all references to the junction should be discarded.
    convertToCrossing(
@@ -91,6 +106,7 @@ export class Junction extends Point implements Deletable {
       let pairs = new Set<[Segment, Segment]>()
       for (let pair of ax.values()) {
          if (pair.length !== 2) return
+         if (pair[0].type !== pair[1].type) return // can't merge diff types
          pairs.add([pair[0], pair[1]])
       }
       // Merge each pair of segments into a single segment.
@@ -99,13 +115,18 @@ export class Junction extends Point implements Deletable {
       let crossing = []
       for (let segs of pairs) {
          let mergedSegment = new Segment(
-            segs[0].type, // Arbitrarily choose the first segment's type.
+            segs[0].type,
             this === segs[0].start ? segs[0].end : segs[0].start,
             this === segs[1].start ? segs[1].end : segs[1].start,
             segs[0].axis
          )
          crossing.push(mergedSegment)
          // Merge the state of the old segments into the new one.
+         mergedSegment.attachments = new Set([
+            ...segs[0].attachments,
+            ...segs[1].attachments,
+         ])
+         mergedSegment.attachments.forEach((a) => a.attachTo(mergedSegment))
          mergedSegment.isRigid = segs[0].isRigid && segs[1].isRigid
          for (let group of groups) {
             if (group.items.has(segs[0]) || group.items.has(segs[1]))
@@ -179,6 +200,7 @@ export type LineType = {
       // respective type occurs. The letters L/T/X refer to the shape of the
       // intersection where the two line types meet.
       [lineType: string | symbol]: {
+         attaches?: boolean
          crossing?: string // when the first line crosses over this one
          L?: string // when the two line types intersect at an L
          T?: string // when the first line type intersects this one at a T
@@ -191,6 +213,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly objectID: number // for serialization
    type: LineType
+   attachments = new Set<Junction>() // should only be modified from Junction class
    isRigid = false
    readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(() => {
       return { type: "auto" }
@@ -222,6 +245,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       forgetAxis(this.axis)
       this.start.removeEdge(this.edgeS)
       this.end.removeEdge(this.edgeE)
+      this.attachments.forEach((a) => a.detach())
       for (let group of groups) group.items.delete(this)
       let junctions = new Set<Junction>()
       if (this.start instanceof Junction) junctions.add(this.start)
@@ -245,6 +269,17 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
             newSegment.crossingTypes.set(s, this.crossingTypes.read(s))
          }
       }
+      // Migrate each attachment to the segment that it is closest to.
+      for (let attachment of this.attachments) {
+         let segmentsWithDistance = newSegments.map((segment) => {
+            return { segment, d: segment.sqDistanceFrom(attachment) }
+         })
+         let closest = segmentsWithDistance.reduce((prev, curr) =>
+            curr.d < prev.d ? curr : prev
+         )
+         if (closest) attachment.attachTo(closest.segment)
+      }
+      this.attachments.clear()
       this.delete()
    }
    // Split the segment at the given point, which is assumed to lie on the
@@ -568,6 +603,7 @@ type PortJSON = {
 type SegmentJSON = {
    objectID: number
    type: string // must be a LineType.name
+   attachments: number[]
    isRigid: boolean
    crossingTypes: { segmentID: number; crossing: CrossingType }[]
    startID: number
@@ -627,6 +663,7 @@ export function saveToJSON(): CircuitJSON {
       return {
          objectID: s.objectID,
          type: s.type.name,
+         attachments: [...s.attachments].map((j) => j.objectID),
          isRigid: s.isRigid,
          crossingTypes,
          startID: s.start.objectID,
@@ -742,6 +779,16 @@ export function loadFromJSON(
             end,
             Axis.fromVector(new Vector(s.axis.x, s.axis.y)) as Axis
          )
+         for (let id of s.attachments) {
+            let j = vertexMap.get(id)
+            if (!j) {
+               console.error(
+                  `Failed to find a junction (ID ${id}) attached to a segment (ID ${s.objectID}).`
+               )
+            } else {
+               ;(j as Junction).attachTo(newSegment)
+            }
+         }
          newSegment.isRigid = s.isRigid
          segmentMap.set(s.objectID, newSegment)
       }

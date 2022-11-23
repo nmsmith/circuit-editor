@@ -18,9 +18,13 @@
          "X": "node.svg"
       },
       "manifold": {
+         "attaches": true,
          "crossing": "port.svg",
          "T": "plug.svg",
          "X": "port.svg"
+      },
+      "reservoir": {
+         "attaches": true
       }
    }
 }

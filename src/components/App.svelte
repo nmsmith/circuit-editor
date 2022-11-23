@@ -269,7 +269,11 @@
       junction: Junction,
       drawAxis: Axis
    ): boolean {
-      return junction.edges().size === 1 && junction.axes()[0] === drawAxis
+      return (
+         junction.edges().size === 1 &&
+         !junction.host() &&
+         junction.axes()[0] === drawAxis
+      )
    }
    function isMoreHorizontal(subject: Segment, other: Segment): boolean {
       let rSeg = subject.axis.scalarRejectionFrom(Axis.horizontal)
@@ -1182,7 +1186,8 @@
                   // If the edges form a straight line
                   (edgeTypes.length === 2 &&
                      edgeTypes[0].name === edgeTypes[1].name &&
-                     v.axes().length === 1))
+                     v.axes().length === 1 &&
+                     !v.host()))
             ) {
                // Mark the Junction to make it clear that it exists.
                glyphsToDraw.add({
@@ -1440,9 +1445,6 @@
    function rightMouseIsDown(event: MouseEvent) {
       return (event.buttons & 0b010) !== 0
    }
-   function drawButtonTapped() {
-      // TODO: This functionality has been disabled.
-   }
    function mouseMoved() {
       cameraPosition = computeCameraPosition()
       mouseOnCanvas = computeMouseOnCanvas() // hack: immediately update the var
@@ -1611,9 +1613,12 @@
             segment.replaceWith(move, other)
             continueDraw(move, jMove)
          } else {
-            // Create a T-junction.
             let junction = new Junction(attach.closestPart)
-            segment.splitAt(junction)
+            if (selectedLineType.meeting?.[segment.type.name].attaches) {
+               junction.attachTo(segment) // attach to target (don't split)
+            } else {
+               segment.splitAt(junction) // split target, making a T-junction
+            }
             newDraw(selectedLineType, junction, regularDrawAxis)
          }
       } else if (attach) {
@@ -1682,6 +1687,9 @@
          )
          drawSegment.replaceWith(segment)
       }
+      // Drop any attachments (retaining them would be complicated).
+      segment.attachments.forEach((a) => a.detach())
+      // Initialize the draw operation.
       draw = {
          mode,
          segment,
@@ -1742,8 +1750,11 @@
       let endVertex: Vertex | undefined
       if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
          if (endObject instanceof Segment) {
-            // Turn the intersected Segment into a T-junction.
-            endObject.splitAt(draw.end)
+            if (segment.type.meeting?.[endObject.type.name].attaches) {
+               draw.end.attachTo(endObject) // attach to target (don't split)
+            } else {
+               endObject.splitAt(draw.end) // split target, making a T-junction
+            }
             endVertex = draw.end
          } else if (endObject) {
             // Check whether there is an existing segment incident to the
@@ -1891,6 +1902,18 @@
                   continue
                } else {
                   proposeTo(movableAt(adjVertex), delay, isPush)
+                  for (let attachment of segment.attachments)
+                     proposeTo(attachment, delay, isPush)
+               }
+            }
+            // If the Movable is a Junction with a host, propagate the
+            // movement to it.
+            if (movable instanceof Junction && movable.host()) {
+               let host = movable.host() as Segment
+               let canStretch = host.axis === slideAxis && !host.isRigid
+               if (!canStretch) {
+                  proposeTo(movableAt(host.start), delay, isPush)
+                  proposeTo(movableAt(host.end), delay, isPush)
                }
             }
             // Check whether amassed items should be moved at the same time as
