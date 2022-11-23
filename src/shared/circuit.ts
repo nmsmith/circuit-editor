@@ -207,6 +207,7 @@ export type LineType = {
          X?: string // when the two line types intersect at an X
       }
    }
+   attachToAll?: boolean // whether to always attach to target (ie. never split)
 }
 
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {

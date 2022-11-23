@@ -91,6 +91,7 @@
       name: tether,
       color: "black",
       thickness: 1,
+      attachToAll: true,
    }
    let canvas: SVGElement | undefined // the root element of this component
    $: {
@@ -1637,7 +1638,8 @@
             continueDraw(move, jMove)
          } else {
             let junction = new Junction(attach.closestPart)
-            if (selectedLineType.meeting?.[segment.type.name].attaches) {
+            let meeting = selectedLineType.meeting?.[segment.type.name]
+            if (selectedLineType.attachToAll || meeting?.attaches) {
                junction.attachTo(segment) // attach to target (don't split)
             } else {
                segment.splitAt(junction) // split target, making a T-junction
@@ -1773,7 +1775,8 @@
       let endVertex: Vertex | undefined
       if (segment.sqLength() >= sqMinSegmentLength && isAcceptable()) {
          if (endObject instanceof Segment) {
-            if (segment.type.meeting?.[endObject.type.name].attaches) {
+            let meeting = segment.type.meeting?.[endObject.type.name]
+            if (segment.type.attachToAll || meeting?.attaches) {
                draw.end.attachTo(endObject) // attach to target (don't split)
             } else {
                endObject.splitAt(draw.end) // split target, making a T-junction
