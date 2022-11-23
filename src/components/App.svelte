@@ -1917,16 +1917,21 @@
                   adjDir.approxEquals(slideDir, 0.1) &&
                   config.distanceSnap.state !== "off"
                ) {
-                  // Allow the edge to contract to the standard length.
-                  let contraction = Math.max(
-                     0,
-                     segment.length() - config.distanceSnap.state
-                  )
-                  proposeTo(movableAt(adjVertex), delay + contraction, true)
+                  // Allow the edge to contract toward a minimum length.
+                  let length = segment.length()
+                  let d = Math.max(0, length - config.distanceSnap.state)
+                  proposeTo(movableAt(adjVertex), delay + d, true)
+                  // Push attachments as the endpoint approaches them.
+                  for (let attachment of segment.attachments) {
+                     let distance = attachment.distanceFrom(nearVertex)
+                     let e = Math.max(0, distance - config.distanceSnap.state)
+                     proposeTo(attachment, delay + e, true)
+                  }
                } else if (canStretch) {
                   // The segment can stretch indefinitely.
                   continue
                } else {
+                  // Push the endpoint and attachments immediately.
                   proposeTo(movableAt(adjVertex), delay, isPush)
                   for (let attachment of segment.attachments)
                      proposeTo(attachment, delay, isPush)
@@ -1937,7 +1942,21 @@
             if (movable instanceof Junction && movable.host()) {
                let host = movable.host() as Segment
                let canStretch = host.axis === slideAxis && !host.isFrozen
-               if (!canStretch) {
+               if (canStretch) {
+                  // Prevent the attachment from sliding past the host endpoint.
+                  let hostDir = host.end.directionFrom(movable)
+                  let endpoint = hostDir?.approxEquals(slideDir, 0.1)
+                     ? host.end
+                     : host.start
+                  let distance = endpoint.distanceFrom(movable)
+                  let distanceSnap =
+                     config.distanceSnap.state === "off"
+                        ? slidePad // to prevent attachment overlapping endpoint
+                        : config.distanceSnap.state
+                  let e = Math.max(0, distance - distanceSnap)
+                  proposeTo(movableAt(endpoint), delay + e, true)
+               } else {
+                  // Push the host immediately.
                   proposeTo(movableAt(host.start), delay, isPush)
                   proposeTo(movableAt(host.end), delay, isPush)
                }
