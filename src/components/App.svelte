@@ -86,6 +86,12 @@
       "reservoir.json",
    ]
    const hydraulicLineFileName = "hydraulic"
+   const tether = "tether"
+   const tetherLineType: LineType = {
+      name: tether,
+      color: "black",
+      thickness: 1,
+   }
    let canvas: SVGElement | undefined // the root element of this component
    $: {
       if (canvas) {
@@ -440,6 +446,7 @@
                fileNames.filter((f) => path.extname(f) === ".json")
             ).then((types) => {
                lineTypes = types
+               lineTypes.add(tetherLineType)
                types.forEach((type) => {
                   // Bind the hydraulic line by default:
                   if (type.name === hydraulicLineFileName && !selectedLineType)
@@ -636,6 +643,7 @@
       })
       loadLineTypes(lineTypesForBrowserTesting).then((types) => {
          lineTypes = types
+         lineTypes.add(tetherLineType)
          types.forEach((type) => {
             // Bind the hydraulic line by default:
             if (type.name === hydraulicLineFileName && !selectedLineType) {
@@ -788,12 +796,12 @@
          values: onAndOff,
          state: "off" as OnOrOff,
       },
-      // placeholder: {
-      //    tooltip: "Placeholder.",
-      //    icon: "icons/targetSnap.svg",
-      //    values: onAndOff,
-      //    state: "on" as OnOrOff,
-      // },
+      showTethers: {
+         tooltip: "Show tethers?",
+         icon: "icons/tethers.svg",
+         values: onAndOff,
+         state: "on" as OnOrOff,
+      },
    }
    function toggleConfig(item: typeof config[keyof typeof config]) {
       let i = item.values.indexOf(item.state as any)
@@ -2866,7 +2874,7 @@
          </g>
          <g id="segment layer">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if !willBeDeleted(segment)}
+               {#if !willBeDeleted(segment) && !(segment.type.name == tether && config.showTethers.state == "off")}
                   {#each sections as section}
                      <CircuitLine type={segment.type} segment={section} />
                   {/each}

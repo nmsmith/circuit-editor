@@ -189,7 +189,7 @@ export class Port extends Point {
 export type LineType = {
    name: string // name of the JSON file (sans extension)
    // The remaining fields correspond to the contents of the JSON file:
-   color: string // hex color
+   color: string // CSS color
    thickness: number // in pixels
    dasharray?: string // in the format of SVG's stroke-dasharray
    ending?: string // file path

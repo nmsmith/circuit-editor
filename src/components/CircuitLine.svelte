@@ -4,7 +4,7 @@
    export let type: LineType
    export let segment: LineSegment
    export let render: "segment" | "highlight" | "freeze" = "segment"
-   const freezeThickness = 13
+   const freezeThickness = 12
 </script>
 
 <line

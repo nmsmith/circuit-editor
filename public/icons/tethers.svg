@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg width="100%" height="100%" viewBox="0 0 28 28" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xml:space="preserve" xmlns:serif="http://www.serif.com/" style="fill-rule:evenodd;clip-rule:evenodd;stroke-linecap:round;stroke-miterlimit:1.5;">
+    <g transform="matrix(1,0,0,1,-70,-70)">
+        <g id="tethers-2" serif:id="tethers 2" transform="matrix(0.933333,0,0,0.933333,69.0667,39.2)">
+            <rect x="1" y="33" width="30" height="30" style="fill:none;"/>
+            <g transform="matrix(1.07143,0,0,1.07143,-74,-42)">
+                <path d="M72,96C72,96 74.35,85.892 83,84C90.975,82.255 94.504,78.603 96,72" style="fill:none;stroke:black;stroke-width:1.5px;"/>
+            </g>
+        </g>
+    </g>
+</svg>
