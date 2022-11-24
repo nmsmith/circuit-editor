@@ -1794,6 +1794,9 @@
       } else {
          slideAxis = orthoAxis
       }
+      if (Math.abs(slideAxis.scalarRejectionFrom(drawAxis)) < 0.1) {
+         slideAxis = orthoAxis // reject very acute angles
+      }
       beginSlide(slideAxis, thingToMove, draw.segment.start)
    }
    function endDraw(willChainDraw: boolean = false): Vertex | undefined {
