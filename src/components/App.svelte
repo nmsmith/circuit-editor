@@ -848,6 +848,7 @@
       keyRotations: Set<Rotation>
       incidentEdges: Set<Edge> // edges incident to movables, but not in-between
       affectedSegments: Set<Segment> // segments that may be altered by the warp
+      rigidBecauseFrozen: Set<Segment>
       originalPositions: DefaultMap<Movable, Point>
       originalDirections: DefaultMap<SymbolInstance, Direction>
       start: Point
@@ -1275,6 +1276,8 @@
                rigidlyMovedBecauseFrozen.add(segment)
             }
          }
+      } else if (warp) {
+         rigidlyMovedBecauseFrozen = warp.rigidBecauseFrozen
       }
    }
 
@@ -2384,6 +2387,8 @@
    }
    function beginWarp(grabbed: Grabbable, partGrabbed: Point) {
       let movables = new Set<Movable>()
+      let rigidBecauseFrozen = new Set<Segment>()
+      // Gather all the Movables that should be warped.
       if (amassed.items.has(grabbed)) {
          amassed.items.forEach((item) => add(item))
       } else if (isNextToAmassed(grabbed)) {
@@ -2394,12 +2399,32 @@
       }
       function add(thing: Interactable) {
          if (isMovable(thing)) {
-            movables.add(thing)
+            addMovable(thing)
          } else if (thing instanceof Segment) {
-            movables.add(movableAt(thing.start))
-            movables.add(movableAt(thing.end))
+            addMovable(movableAt(thing.start))
+            addMovable(movableAt(thing.end))
          } else {
             // Ignore ports and crossings.
+         }
+      }
+      // Add Movables via a depth-first search.
+      function addMovable(m: Movable) {
+         if (movables.has(m)) return // avoid infinite loops
+         movables.add(m)
+         if (m instanceof Junction && m.host()) {
+            // Hosts must move with their attachments.
+            let host = m.host() as Segment
+            addMovable(movableAt(host.start))
+            addMovable(movableAt(host.end))
+         }
+         for (let [segment, v] of m.edges()) {
+            if (segment.isFrozen || segment.attachments.size > 0) {
+               // Treat the segment as rigid.
+               addMovable(movableAt(v))
+               // Attachments must move with their hosts.
+               for (let a of segment.attachments) addMovable(a)
+               if (segment.isFrozen) rigidBecauseFrozen.add(segment)
+            }
          }
       }
       function isNextToAmassed(thing: Interactable): boolean {
@@ -2448,11 +2473,11 @@
          }
       }
       // Gather the edges that may be affected by a warp.
-      let relevantEdges = [...movables].flatMap((m) => [...m.edges()])
+      let affectedEdges = [...movables].flatMap((m) => [...m.edges()])
       let incidentEdges = new Set(
-         relevantEdges.filter(([_, v]) => !movables.has(movableAt(v)))
+         affectedEdges.filter(([_, v]) => !movables.has(movableAt(v)))
       )
-      let affectedSegments = new Set(relevantEdges.map(([seg]) => seg))
+      let affectedSegments = new Set(affectedEdges.map(([seg]) => seg))
       warp = {
          mode: selectedWarpMode(),
          grabbed,
@@ -2461,6 +2486,7 @@
          keyRotations,
          incidentEdges,
          affectedSegments,
+         rigidBecauseFrozen,
          originalPositions: copyPositions(),
          originalDirections: copySymbolDirections(),
          start: partGrabbed,
