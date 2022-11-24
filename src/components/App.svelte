@@ -836,6 +836,8 @@
       posInstructions: SlideInstruction[]
       negInstructions: SlideInstruction[]
       contactPositions: number[]
+      rigidBecauseFrozen: Set<Segment>
+      immediatelyMoved: Set<Segment>
    } = null
    type WarpMode = "pan" | "rotate"
    let warp: null | {
@@ -944,7 +946,11 @@
    let freezeLight: Set<Segment>
    $: {
       freezeLight = new Set()
-      for (let s of Segment.s) if (s.isFrozen) freezeLight.add(s)
+      if (toolToUse === "freeze") {
+         for (let s of Segment.s) if (s.isFrozen) freezeLight.add(s)
+      } else {
+         for (let s of rigidlyMovedBecauseFrozen) freezeLight.add(s)
+      }
       if (freezeRect) {
          if (freezeRect.mode === "remove") {
             for (let item of freezeRect.items) freezeLight.delete(item)
@@ -1250,6 +1256,23 @@
                   "An attachment has become separated from its host." +
                      " (A red error line has been rendered.)"
                )
+            }
+         }
+      }
+   }
+   let rigidlyMovedBecauseFrozen: Set<Segment>
+   $: {
+      rigidlyMovedBecauseFrozen = new Set()
+      if (slide) {
+         for (let segment of Segment.s) {
+            if (!slide.rigidBecauseFrozen.has(segment)) continue
+            let [s, e] = [movableAt(segment.start), movableAt(segment.end)]
+            if (
+               s.sqDistanceFrom(slide.originalPositions.read(s)) > 0 ||
+               e.sqDistanceFrom(slide.originalPositions.read(e)) > 0 ||
+               slide.immediatelyMoved.has(segment)
+            ) {
+               rigidlyMovedBecauseFrozen.add(segment)
             }
          }
       }
@@ -1841,8 +1864,11 @@
       function generateInstructions(
          slideDir: Direction,
          shouldPushNonConnected: boolean
-      ): SlideInstruction[] {
-         let instructions: SlideInstruction[] = [] // the final sequence
+      ): [SlideInstruction[], Map<Segment, number>] {
+         // The final instruction sequence.
+         let instructions: SlideInstruction[] = []
+         // Record segments whose movement is affected because they are frozen.
+         let rigidBecauseFrozen = new Map<Segment, number>()
          let haveScheduledAmassed = false
          let orthogonalAxis = slideAxis.orthogonal()
          let slideRanges = projectionOfCircuitOnto(slideDir)
@@ -1928,6 +1954,7 @@
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
                let canStretch = segment.axis === slideAxis && !segment.isFrozen
+               let freezeMatters = segment.axis == slideAxis && segment.isFrozen
                if (
                   canStretch &&
                   adjDir.approxEquals(slideDir, 0.1) &&
@@ -1951,6 +1978,7 @@
                   proposeTo(movableAt(adjVertex), delay, isPush)
                   for (let attachment of segment.attachments)
                      proposeTo(attachment, delay, isPush)
+                  if (freezeMatters) rigidBecauseFrozen.set(segment, delay)
                }
             }
             // If the Movable is a Junction with a host, propagate the
@@ -1958,6 +1986,7 @@
             if (movable instanceof Junction && movable.host()) {
                let host = movable.host() as Segment
                let canStretch = host.axis === slideAxis && !host.isFrozen
+               let freezeMatters = host.axis === slideAxis && host.isFrozen
                if (canStretch) {
                   // Prevent the attachment from sliding past the host endpoint.
                   let hostDir = host.end.directionFrom(movable)
@@ -1975,6 +2004,7 @@
                   // Push the host immediately.
                   proposeTo(movableAt(host.start), delay, isPush)
                   proposeTo(movableAt(host.end), delay, isPush)
+                  if (freezeMatters) rigidBecauseFrozen.set(host, delay)
                }
             }
             // Check whether amassed items should be moved at the same time as
@@ -2018,19 +2048,29 @@
                proposals.set(movable, proposal)
             }
          }
-         return instructions
+         return [instructions, rigidBecauseFrozen]
       }
-      let posInstructions, negInstructions
+      let posDir = slideAxis.posDirection()
+      let negDir = slideAxis.negDirection()
+      let posInstructions, negInstructions, posFrozen, negFrozen
       if (selectedSlideMode() === "push connected") {
-         posInstructions = generateInstructions(slideAxis.posDirection(), false)
-         negInstructions = generateInstructions(slideAxis.negDirection(), false)
+         ;[posInstructions, posFrozen] = generateInstructions(posDir, false)
+         ;[negInstructions, negFrozen] = generateInstructions(negDir, false)
       } else {
-         posInstructions = generateInstructions(slideAxis.posDirection(), true)
-         negInstructions = generateInstructions(slideAxis.negDirection(), true)
+         ;[posInstructions, posFrozen] = generateInstructions(posDir, true)
+         ;[negInstructions, negFrozen] = generateInstructions(negDir, true)
       }
       let contactPositions = posInstructions
          .flatMap((i) => (i.isPush ? [i.delay] : []))
          .concat(negInstructions.flatMap((i) => (i.isPush ? [-i.delay] : [])))
+      let rigidBecauseFrozen = new Set([
+         ...posFrozen.keys(),
+         ...negFrozen.keys(),
+      ])
+      let immediatelyMoved = new Set<Segment>()
+      for (let [seg, delay] of posFrozen) {
+         if (delay === 0 && negFrozen.get(seg) === 0) immediatelyMoved.add(seg)
+      }
       slide = {
          mode: selectedSlideMode(),
          originalPositions: copyPositions(),
@@ -2040,6 +2080,8 @@
          posInstructions,
          negInstructions,
          contactPositions,
+         rigidBecauseFrozen,
+         immediatelyMoved,
       }
    }
    function endSlide() {
