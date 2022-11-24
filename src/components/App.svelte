@@ -1157,6 +1157,8 @@
             // Find the appropriate glyph to display at the Junction.
             let glyph: string | undefined
             let edgeTypes = [...v.edges()].map(([segment]) => segment.type)
+            let host = v.host()
+            if (host) edgeTypes.push(host.type, host.type)
             if (edgeTypes.length === 1) {
                glyph = edgeTypes[0].ending
             } else if (edgeTypes.length === 2) {
@@ -1190,6 +1192,34 @@
                   let typeB = edgeTypes.find((t) => t.name == nameB) as LineType
                   let glyphA = typeA.meeting?.[typeB.name].X
                   let glyphB = typeB.meeting?.[typeA.name].X
+                  if (glyphA === glyphB) {
+                     glyph = glyphA
+                  } else if (!glyphA || !glyphB) {
+                     glyph = glyphA || glyphB
+                  } else {
+                     glyph = undefined
+                  }
+               } else if (names.size === 3 && edgeTypes.length === 4) {
+                  let glyphA, glyphB
+                  if (edgeTypes[0].name === edgeTypes[1].name) {
+                     glyphA = edgeTypes[2].meeting?.[edgeTypes[0].name].T
+                     glyphB = edgeTypes[3].meeting?.[edgeTypes[0].name].T
+                  } else if (edgeTypes[0].name === edgeTypes[2].name) {
+                     glyphA = edgeTypes[1].meeting?.[edgeTypes[0].name].T
+                     glyphB = edgeTypes[3].meeting?.[edgeTypes[0].name].T
+                  } else if (edgeTypes[0].name === edgeTypes[3].name) {
+                     glyphA = edgeTypes[1].meeting?.[edgeTypes[0].name].T
+                     glyphB = edgeTypes[2].meeting?.[edgeTypes[0].name].T
+                  } else if (edgeTypes[1].name === edgeTypes[2].name) {
+                     glyphA = edgeTypes[0].meeting?.[edgeTypes[1].name].T
+                     glyphB = edgeTypes[3].meeting?.[edgeTypes[1].name].T
+                  } else if (edgeTypes[1].name === edgeTypes[3].name) {
+                     glyphA = edgeTypes[0].meeting?.[edgeTypes[1].name].T
+                     glyphB = edgeTypes[2].meeting?.[edgeTypes[1].name].T
+                  } else {
+                     glyphA = edgeTypes[0].meeting?.[edgeTypes[2].name].T
+                     glyphB = edgeTypes[1].meeting?.[edgeTypes[2].name].T
+                  }
                   if (glyphA === glyphB) {
                      glyph = glyphA
                   } else if (!glyphA || !glyphB) {
