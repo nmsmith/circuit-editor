@@ -1238,6 +1238,22 @@
          }
       }
    }
+   let attachmentErrors: Set<{ source: Point; target: Point }> // for debugging
+   $: {
+      attachmentErrors = new Set()
+      for (let segment of Segment.s) {
+         for (let attachment of segment.attachments) {
+            let target = segment.partClosestTo(attachment)
+            if (attachment.sqDistanceFrom(target) > 1) {
+               attachmentErrors.add({ source: attachment, target })
+               console.error(
+                  "An attachment has become separated from its host." +
+                     " (A red error line has been rendered.)"
+               )
+            }
+         }
+      }
+   }
 
    // ---------------------------- Primary events -----------------------------
    let amassedOnMouseDown = false
@@ -2996,6 +3012,18 @@
             {/each}
          </g>
          <!-- HUD layer -->
+         <g>
+            {#each [...attachmentErrors] as { source, target }}
+               <line
+                  x1={source.x}
+                  y1={source.y}
+                  x2={target.x}
+                  y2={target.y}
+                  stroke="red"
+                  stroke-width="2"
+               />
+            {/each}
+         </g>
          <g>
             {#if config.showSymbolSnaps.state === "on"}
                {#each [...SymbolInstance.s] as symbol}
