@@ -3615,7 +3615,7 @@
                url("../cursors/warp 1x.png") 1x,
                url("../cursors/warp 2x.png") 2x
             )
-            11 11,
+            12 11,
          default;
    }
    .cursor-slide {
@@ -3624,7 +3624,7 @@
                url("../cursors/slide 1x.png") 1x,
                url("../cursors/slide 2x.png") 2x
             )
-            11 11,
+            12 11,
          default;
    }
    .cursor-draw {
