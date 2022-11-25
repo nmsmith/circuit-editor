@@ -3643,6 +3643,14 @@
             10 1,
          default;
    }
+   .cursor-freeze {
+      cursor: -webkit-image-set(
+               url("../cursors/freeze 1x.png") 1x,
+               url("../cursors/freeze 2x.png") 2x
+            )
+            10 0,
+         default;
+   }
    .historyPane {
       position: absolute;
       top: 0;
