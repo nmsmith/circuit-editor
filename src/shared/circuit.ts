@@ -210,6 +210,14 @@ export type LineType = {
    attachToAll?: boolean // whether to always attach to target (ie. never split)
 }
 
+const tetherLineTypeName = "tether"
+export const tetherLineType: LineType = {
+   name: tetherLineTypeName,
+   color: "black",
+   thickness: 1,
+   attachToAll: true,
+}
+
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly objectID: number // for serialization
@@ -233,13 +241,20 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       this.start.addEdge(this.edgeS)
       this.end.addEdge(this.edgeE)
    }
+   isTether(): boolean {
+      return this.type.name === tetherLineTypeName
+   }
+   isRigid(): boolean {
+      return this.isFrozen || (this.isTether() && this.attachments.size > 0)
+   }
+   midpoint(): Midpoint {
+      let point = this.start.interpolatedToward(this.end, 0.5)
+      return new Midpoint(point.x, point.y, this)
+   }
    updateAxis(newAxis: Axis) {
       forgetAxis(this.axis)
       ;(this.axis as Axis) = newAxis
       rememberAxis(this.axis)
-   }
-   center(): Point {
-      return this.start.interpolatedToward(this.end, 0.5)
    }
    delete(): Set<Junction> {
       Segment.s.delete(this)
@@ -291,6 +306,14 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
          new Segment(this.type, point, start, axis),
          new Segment(this.type, point, end, axis)
       )
+   }
+}
+
+export class Midpoint extends Point {
+   readonly segment: Segment
+   constructor(x: number, y: number, segment: Segment) {
+      super(x, y)
+      this.segment = segment
    }
 }
 

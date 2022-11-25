@@ -16,6 +16,8 @@
       saveToJSON,
       loadFromJSON,
       emptyCircuitJSON,
+      tetherLineType,
+      Midpoint,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -86,13 +88,6 @@
       "reservoir.json",
    ]
    const hydraulicLineFileName = "hydraulic"
-   const tether = "tether"
-   const tetherLineType: LineType = {
-      name: tether,
-      color: "black",
-      thickness: 1,
-      attachToAll: true,
-   }
    let canvas: SVGElement | undefined // the root element of this component
    $: {
       if (canvas) {
@@ -149,16 +144,22 @@
    type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
-   type Attachable = Junction | Port | Segment //Things a segment can attach to.
+   type Attachable = Junction | Port | Segment | Midpoint // Things a segment can attach to.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
    function movableAt(vertex: Vertex): Movable {
       return vertex instanceof Junction ? vertex : vertex.symbol
    }
+   function isVertex(thing: any): thing is Vertex {
+      return thing instanceof Junction || thing instanceof Port
+   }
    function* allVertices(): Generator<Vertex> {
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
+   }
+   function* midpoints(): Generator<Midpoint> {
+      for (let seg of Segment.s) if (seg.isTether()) yield seg.midpoint()
    }
    function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
@@ -202,7 +203,12 @@
    }
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
       return (
-         closestNearTo(point, allVertices()) || closestNearTo(point, Segment.s)
+         closestNearTo(point, allVertices()) ||
+         closestNearTo(point, midpoints()) ||
+         closestNearTo(
+            point,
+            [...Segment.s].filter((s) => !s.isTether())
+         )
       )
    }
    function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
@@ -836,7 +842,7 @@
       posInstructions: SlideInstruction[]
       negInstructions: SlideInstruction[]
       contactPositions: number[]
-      rigidBecauseFrozen: Set<Segment>
+      rigidSegments: Set<Segment> //segments whose rigidity affects the movement
       immediatelyMoved: Set<Segment>
    } = null
    type WarpMode = "pan" | "rotate"
@@ -848,7 +854,7 @@
       keyRotations: Set<Rotation>
       incidentEdges: Set<Edge> // edges incident to movables, but not in-between
       affectedSegments: Set<Segment> // segments that may be altered by the warp
-      rigidBecauseFrozen: Set<Segment>
+      rigidSegments: Set<Segment> //segments whose rigidity affects the movement
       originalPositions: DefaultMap<Movable, Point>
       originalDirections: DefaultMap<SymbolInstance, Direction>
       start: Point
@@ -944,29 +950,29 @@
          }
       }
    }
-   let freezeLight: Set<Segment>
+   let rigidLight: Set<Segment>
    $: {
-      freezeLight = new Set()
+      rigidLight = new Set()
       if (toolToUse === "freeze") {
-         for (let s of Segment.s) if (s.isFrozen) freezeLight.add(s)
+         for (let s of Segment.s) if (s.isRigid()) rigidLight.add(s)
       } else {
-         for (let s of rigidlyMovedBecauseFrozen) freezeLight.add(s)
+         for (let s of rigidlyMovedSegments) rigidLight.add(s)
       }
       if (freezeRect) {
          if (freezeRect.mode === "remove") {
-            for (let item of freezeRect.items) freezeLight.delete(item)
+            for (let item of freezeRect.items) rigidLight.delete(item)
          } else {
-            for (let item of freezeRect.items) freezeLight.add(item)
+            for (let item of freezeRect.items) rigidLight.add(item)
          }
       }
    }
-   let touchLight: Set<Interactable>
+   let touchLight: Set<Interactable | Midpoint>
    $: {
       touchLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
          let tool = toolBeingUsed?.tool || toolToUse
          let touchLocation = toolBeingUsed?.canvasDownPosition || mouseOnCanvas
-         let touching: Interactable | undefined
+         let touching: Interactable | Midpoint | undefined
          if (tool === "amass" && !amassRect) {
             touching = amassTarget(touchLocation)?.object
          } else if (tool === "warp") {
@@ -1291,23 +1297,23 @@
          }
       }
    }
-   let rigidlyMovedBecauseFrozen: Set<Segment>
+   let rigidlyMovedSegments: Set<Segment>
    $: {
-      rigidlyMovedBecauseFrozen = new Set()
+      rigidlyMovedSegments = new Set()
       if (slide) {
          for (let segment of Segment.s) {
-            if (!slide.rigidBecauseFrozen.has(segment)) continue
+            if (!slide.rigidSegments.has(segment)) continue
             let [s, e] = [movableAt(segment.start), movableAt(segment.end)]
             if (
                s.sqDistanceFrom(slide.originalPositions.read(s)) > 0 ||
                e.sqDistanceFrom(slide.originalPositions.read(e)) > 0 ||
                slide.immediatelyMoved.has(segment)
             ) {
-               rigidlyMovedBecauseFrozen.add(segment)
+               rigidlyMovedSegments.add(segment)
             }
          }
       } else if (warp) {
-         rigidlyMovedBecauseFrozen = warp.rigidBecauseFrozen
+         rigidlyMovedSegments = warp.rigidSegments
       }
    }
 
@@ -1684,7 +1690,7 @@
          let extraAxesToConsider =
             attach?.object instanceof Segment
                ? [attach.object.axis] // The axis of the segment.
-               : attach
+               : attach && isVertex(attach?.object)
                ? [...attach.object.axes()] // The axes incident to the vertex.
                : []
          regularDrawAxis = nearestAxis(dragAxis, regularAxes)
@@ -1718,7 +1724,7 @@
             }
             newDraw(selectedLineType, junction, regularDrawAxis)
          }
-      } else if (attach) {
+      } else if (attach && isVertex(attach.object)) {
          let vertex = attach.object
          let continuedDraw = false
          if (
@@ -1750,12 +1756,19 @@
             }
          }
          if (!continuedDraw) newDraw(selectedLineType, vertex, regularDrawAxis)
-      } else
+      } else if (attach?.object instanceof Midpoint) {
+         let midpoint = attach.object
+         // Begin drawing from the Midpoint of a tether.
+         let junction = new Junction(midpoint)
+         junction.attachTo(midpoint.segment)
+         newDraw(selectedLineType, junction, regularDrawAxis)
+      } else {
          newDraw(
             selectedLineType,
             new Junction(toolBeingUsed.canvasDownPosition),
             regularDrawAxis
          )
+      }
    }
    function newDraw(type: LineType, start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
@@ -1858,19 +1871,24 @@
             }
             endVertex = draw.end
          } else if (endObject) {
+            if (isVertex(endObject)) {
+               endVertex = endObject
+            } else {
+               endVertex = new Junction(endObject)
+               endVertex.attachTo(endObject.segment)
+            }
             // Check whether there is an existing segment incident to the
-            // endObject (before we attach the new one), that has the same axis.
+            // endVertex (before we attach the new one), that has the same axis.
             let extend =
-               endObject instanceof Junction &&
-               shouldExtendTheSegmentAt(endObject, segment.axis)
-            // Replace the drawn segment with one that ends at the endObject.
+               endVertex instanceof Junction &&
+               shouldExtendTheSegmentAt(endVertex, segment.axis)
+            // Replace the drawn segment with one that ends at the endVertex.
             segment.replaceWith(
-               new Segment(segment.type, segment.start, endObject, segment.axis)
+               new Segment(segment.type, segment.start, endVertex, segment.axis)
             )
-            endVertex = endObject
             // Consider fusing the segment with an existing segment.
             if (extend && !willChainDraw)
-               (endObject as Junction).convertToCrossing(crossingMap)
+               (endVertex as Junction).convertToCrossing(crossingMap)
          } else {
             endVertex = draw.end
          }
@@ -1904,7 +1922,7 @@
          // The final instruction sequence.
          let instructions: SlideInstruction[] = []
          // Record segments whose movement is affected because they are frozen.
-         let rigidBecauseFrozen = new Map<Segment, number>()
+         let rigidSegments = new Map<Segment, number>()
          let haveScheduledAmassed = false
          let orthogonalAxis = slideAxis.orthogonal()
          let slideRanges = projectionOfCircuitOnto(slideDir)
@@ -1989,8 +2007,9 @@
                   adjVertex === segment.end ? segment.start : segment.end
                let adjDir = adjVertex.directionFrom(nearVertex)
                if (!adjDir) continue
-               let canStretch = segment.axis === slideAxis && !segment.isFrozen
-               let freezeMatters = segment.axis == slideAxis && segment.isFrozen
+               let canStretch = segment.axis === slideAxis && !segment.isRigid()
+               let rigidityMatters =
+                  segment.axis === slideAxis && segment.isRigid()
                if (
                   canStretch &&
                   adjDir.approxEquals(slideDir, 0.1) &&
@@ -2014,15 +2033,15 @@
                   proposeTo(movableAt(adjVertex), delay, isPush)
                   for (let attachment of segment.attachments)
                      proposeTo(attachment, delay, isPush)
-                  if (freezeMatters) rigidBecauseFrozen.set(segment, delay)
+                  if (rigidityMatters) rigidSegments.set(segment, delay)
                }
             }
             // If the Movable is a Junction with a host, propagate the
             // movement to it.
             if (movable instanceof Junction && movable.host()) {
                let host = movable.host() as Segment
-               let canStretch = host.axis === slideAxis && !host.isFrozen
-               let freezeMatters = host.axis === slideAxis && host.isFrozen
+               let canStretch = host.axis === slideAxis && !host.isRigid()
+               let rigidityMatters = host.axis === slideAxis && host.isRigid()
                if (canStretch) {
                   // Prevent the attachment from sliding past the host endpoint.
                   let hostDir = host.end.directionFrom(movable)
@@ -2040,7 +2059,7 @@
                   // Push the host immediately.
                   proposeTo(movableAt(host.start), delay, isPush)
                   proposeTo(movableAt(host.end), delay, isPush)
-                  if (freezeMatters) rigidBecauseFrozen.set(host, delay)
+                  if (rigidityMatters) rigidSegments.set(host, delay)
                }
             }
             // Check whether amassed items should be moved at the same time as
@@ -2084,28 +2103,25 @@
                proposals.set(movable, proposal)
             }
          }
-         return [instructions, rigidBecauseFrozen]
+         return [instructions, rigidSegments]
       }
       let posDir = slideAxis.posDirection()
       let negDir = slideAxis.negDirection()
-      let posInstructions, negInstructions, posFrozen, negFrozen
+      let posInstructions, negInstructions, posRigid, negRigid
       if (selectedSlideMode() === "push connected") {
-         ;[posInstructions, posFrozen] = generateInstructions(posDir, false)
-         ;[negInstructions, negFrozen] = generateInstructions(negDir, false)
+         ;[posInstructions, posRigid] = generateInstructions(posDir, false)
+         ;[negInstructions, negRigid] = generateInstructions(negDir, false)
       } else {
-         ;[posInstructions, posFrozen] = generateInstructions(posDir, true)
-         ;[negInstructions, negFrozen] = generateInstructions(negDir, true)
+         ;[posInstructions, posRigid] = generateInstructions(posDir, true)
+         ;[negInstructions, negRigid] = generateInstructions(negDir, true)
       }
       let contactPositions = posInstructions
          .flatMap((i) => (i.isPush ? [i.delay] : []))
          .concat(negInstructions.flatMap((i) => (i.isPush ? [-i.delay] : [])))
-      let rigidBecauseFrozen = new Set([
-         ...posFrozen.keys(),
-         ...negFrozen.keys(),
-      ])
+      let rigidSegments = new Set([...posRigid.keys(), ...negRigid.keys()])
       let immediatelyMoved = new Set<Segment>()
-      for (let [seg, delay] of posFrozen) {
-         if (delay === 0 && negFrozen.get(seg) === 0) immediatelyMoved.add(seg)
+      for (let [seg, delay] of posRigid) {
+         if (delay === 0 && negRigid.get(seg) === 0) immediatelyMoved.add(seg)
       }
       slide = {
          mode: selectedSlideMode(),
@@ -2116,7 +2132,7 @@
          posInstructions,
          negInstructions,
          contactPositions,
-         rigidBecauseFrozen,
+         rigidSegments,
          immediatelyMoved,
       }
    }
@@ -2145,6 +2161,7 @@
       let targetSegments = draw
          ? [...Segment.s].filter(
               (seg) =>
+                 !seg.isTether() &&
                  ![...draw!.segment.start.edges()].find(([s]) => s === seg)
            )
          : []
@@ -2168,7 +2185,7 @@
          )
       }
       if (draw) {
-         let associatedDrawAxis: (vertex: Vertex) => Axis
+         let associatedDrawAxis: (vertex: Vertex | Midpoint) => Axis
          let defaultDrawEnd: Point
          let defaultDrawAxis: Axis
          if (draw.mode === "strafing") {
@@ -2176,7 +2193,7 @@
             defaultDrawEnd = mouseOnCanvas
             defaultDrawAxis = draw.segment.axis
          } else {
-            associatedDrawAxis = (vertex: Vertex) =>
+            associatedDrawAxis = (vertex) =>
                Axis.fromVector(vertex.displacementFrom(draw!.segment.start)) ||
                draw!.segment.axis
             // By default, draw to the mouse position.
@@ -2251,7 +2268,9 @@
             return true
          }
          let acceptableVertices = Array.from(allVertices()).filter(isAcceptable)
-         let closestVertex = closestNearTo(mouseOnCanvas, acceptableVertices)
+         let closestVertex =
+            closestNearTo(mouseOnCanvas, acceptableVertices) ||
+            closestNearTo(mouseOnCanvas, midpoints())
          if (closestVertex) {
             // Snap to the closest vertex.
             draw.end.moveTo(closestVertex.object)
@@ -2420,7 +2439,7 @@
    }
    function beginWarp(grabbed: Grabbable, partGrabbed: Point) {
       let movables = new Set<Movable>()
-      let rigidBecauseFrozen = new Set<Segment>()
+      let rigidSegments = new Set<Segment>()
       // Gather all the Movables that should be warped.
       if (amassed.items.has(grabbed)) {
          amassed.items.forEach((item) => add(item))
@@ -2451,12 +2470,12 @@
             addMovable(movableAt(host.end))
          }
          for (let [segment, v] of m.edges()) {
-            if (segment.isFrozen || segment.attachments.size > 0) {
+            if (segment.isRigid() || segment.attachments.size > 0) {
                // Treat the segment as rigid.
                addMovable(movableAt(v))
                // Attachments must move with their hosts.
                for (let a of segment.attachments) addMovable(a)
-               if (segment.isFrozen) rigidBecauseFrozen.add(segment)
+               if (segment.isRigid()) rigidSegments.add(segment)
             }
          }
       }
@@ -2519,7 +2538,7 @@
          keyRotations,
          incidentEdges,
          affectedSegments,
-         rigidBecauseFrozen,
+         rigidSegments,
          originalPositions: copyPositions(),
          originalDirections: copySymbolDirections(),
          start: partGrabbed,
@@ -2972,16 +2991,18 @@
          </g>
          <g id="symbol amassLight layer" class="amassLight" />
          <g id="symbol touchLight layer" class="touchLight" />
-         <g id="segment freezeLight layer" class="freezeLight">
+         <g id="segment rigidLight layer">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if freezeLight.has(segment) && !willBeDeleted(segment)}
-                  {#each sections as section}
-                     <CircuitLine
-                        type={segment.type}
-                        segment={section}
-                        render="freeze"
-                     />
-                  {/each}
+               {#if rigidLight.has(segment) && !willBeDeleted(segment)}
+                  <g class={segment.isFrozen ? "freezeLight" : "rigidLight"}>
+                     {#each sections as section}
+                        <CircuitLine
+                           type={segment.type}
+                           segment={section}
+                           render="rigid"
+                        />
+                     {/each}
+                  </g>
                {/if}
             {/each}
          </g>
@@ -3013,12 +3034,20 @@
          </g>
          <g id="segment layer">
             {#each [...segmentsToDraw] as [segment, sections]}
-               {#if !willBeDeleted(segment) && !(segment.type.name == tether && config.showTethers.state == "off")}
+               {#if !willBeDeleted(segment) && !(segment.isTether() && config.showTethers.state == "off")}
                   {#each sections as section}
                      <CircuitLine type={segment.type} segment={section} />
                   {/each}
                {/if}
             {/each}
+         </g>
+         <g>
+            {#if config.showTethers.state === "on"}
+               {#each [...Segment.s].filter((s) => s.isTether() && !willBeDeleted(s)) as t}
+                  {@const mid = t.midpoint()}
+                  <circle class="tetherMidpoint" cx={mid.x} cy={mid.y} r="4" />
+               {/each}
+            {/if}
          </g>
          <!-- Segment glyph highlight layer -->
          <g>
@@ -3381,6 +3410,9 @@
    .amassLight {
       color: white;
    }
+   .rigidLight {
+      color: #0004;
+   }
    .freezeLight {
       color: rgb(0, 150, 255);
    }
@@ -3606,6 +3638,11 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
+   }
+   .tetherMidpoint {
+      stroke-width: 1px;
+      stroke: black;
+      fill: #ff4ff9;
    }
    .cursor-amass {
       cursor: default;

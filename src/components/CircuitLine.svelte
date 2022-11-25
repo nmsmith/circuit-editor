@@ -3,8 +3,8 @@
    import type { LineSegment } from "~/shared/geometry"
    export let type: LineType
    export let segment: LineSegment
-   export let render: "segment" | "highlight" | "freeze" = "segment"
-   const freezeThickness = 12
+   export let render: "segment" | "highlight" | "rigid" = "segment"
+   const rigidThickness = 12
 </script>
 
 <line
@@ -13,7 +13,7 @@
       ? type.thickness
       : render === "highlight"
       ? type.thickness + strokeHighlightThickness
-      : type.thickness + freezeThickness}
+      : type.thickness + rigidThickness}
    stroke-dasharray={type.dasharray}
    stroke-linejoin="round"
    stroke-linecap="round"
