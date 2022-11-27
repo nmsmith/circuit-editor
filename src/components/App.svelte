@@ -191,16 +191,18 @@
       segments: Iterable<Segment> = Segment.s
    ): ClosenessResult<Segment> {
       let closest = closestSegmentTo(point, alongAxis, segments)
-      if (
-         closest &&
-         closest.closestPart.sqDistanceFrom(point) <
-            sqInteractRadius / cameraZoom && // divisor intentionally nonsquared
-         closest.closestPart.sqDistanceFrom(closest.object.start) >=
-            sqSegmentIntersectBuffer &&
-         closest.closestPart.sqDistanceFrom(closest.object.end) >=
-            sqSegmentIntersectBuffer
-      ) {
-         return closest
+      if (closest) {
+         let segment = closest.object
+         let c = closest.closestPart
+         if (
+            // the "cameraZoom" divisor is intentionally non-squared
+            c.sqDistanceFrom(point) < sqInteractRadius / cameraZoom &&
+            [segment.start, segment.end, ...segment.attachments].every(
+               (v) => c.sqDistanceFrom(v) >= sqSegmentIntersectBuffer
+            )
+         ) {
+            return closest
+         }
       }
    }
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
@@ -2298,6 +2300,7 @@
             return true
          }
          function isAcceptableCenterPoint(c: CenterPoint) {
+            if (c.sqDistanceFrom(draw!.segment.start) === 0) return false
             if (c.object instanceof SymbolInstance) {
                let orthoDisp = c
                   .displacementFrom(mouseOnCanvas)
