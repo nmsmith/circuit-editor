@@ -266,6 +266,8 @@
    function layerOf(point: Point): "lower" | "upper" {
       return point instanceof Port ||
          point instanceof CenterPoint ||
+         touchLight.has(point as any) ||
+         amassLight.has(point as any) ||
          point === draw?.segment.end
          ? "upper"
          : "lower"
@@ -1296,7 +1298,12 @@
       }
       if (centerMarkerGlyph) {
          for (let c of centerPoints()) {
-            if (toolToUse === "draw" || c.object.attachments.size > 0)
+            if (
+               toolToUse === "draw" ||
+               (c.object instanceof Segment &&
+                  c.object.attachments.size > 0 &&
+                  config.showTethers.state === "on")
+            )
                glyphsToDraw.add({
                   type: "vertex glyph",
                   vertex: c,
