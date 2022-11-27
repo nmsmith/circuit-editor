@@ -35,15 +35,12 @@ export class Junction extends Point implements Deletable {
    readonly objectID: number // for serialization
    glyph: VertexGlyph
    private readonly edges_ = new Set<Edge>()
-   private host_: Segment | null = null
+   private host_: Segment | SymbolInstance | null = null
    constructor(point: Point, glyph?: VertexGlyph) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
       this.glyph = glyph ? glyph : { type: "auto" }
       Junction.s.add(this)
-   }
-   center(): Point {
-      return this
    }
    delete(): Set<Junction> {
       Junction.s.delete(this)
@@ -81,11 +78,11 @@ export class Junction extends Point implements Deletable {
       this.edges_.delete(edge)
       if (this.edges_.size === 0) this.delete()
    }
-   attachTo(host: Segment) {
+   attachTo(host: Segment | SymbolInstance) {
       this.host_ = host
       host.attachments.add(this)
    }
-   host(): Segment | null {
+   host(): Segment | SymbolInstance | null {
       return this.host_
    }
    detach() {
@@ -218,6 +215,14 @@ export const tetherLineType: LineType = {
    attachToAll: true,
 }
 
+export class CenterPoint extends Point {
+   readonly object: Segment | SymbolInstance
+   constructor(x: number, y: number, object: Segment | SymbolInstance) {
+      super(x, y)
+      this.object = object
+   }
+}
+
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly objectID: number // for serialization
@@ -247,9 +252,15 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    isRigid(): boolean {
       return this.isFrozen || (this.isTether() && this.attachments.size > 0)
    }
-   midpoint(): Midpoint {
-      let point = this.start.interpolatedToward(this.end, 0.5)
-      return new Midpoint(point.x, point.y, this)
+   private cachedCenterPoint = new CenterPoint(0, 0, this)
+   // A variant of center() that retains extra information.
+   centerPoint(): CenterPoint {
+      // The purpose of caching is to ensure that the CenterPoint has a
+      // consistent object identity for as long as the segment is stationary.
+      let point = this.center()
+      if (point.sqDistanceFrom(this.cachedCenterPoint) !== 0)
+         this.cachedCenterPoint = new CenterPoint(point.x, point.y, this)
+      return this.cachedCenterPoint
    }
    updateAxis(newAxis: Axis) {
       forgetAxis(this.axis)
@@ -306,14 +317,6 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
          new Segment(this.type, point, start, axis),
          new Segment(this.type, point, end, axis)
       )
-   }
-}
-
-export class Midpoint extends Point {
-   readonly segment: Segment
-   constructor(x: number, y: number, segment: Segment) {
-      super(x, y)
-      this.segment = segment
    }
 }
 
@@ -492,6 +495,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
    readonly image: SVGElement
    readonly highlight: SVGElement
    readonly ports: Port[]
+   attachments = new Set<Junction>() // should only be modified from Junction class
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
       super(position, rotation, kind.collisionBox)
@@ -526,8 +530,15 @@ export class SymbolInstance extends Rectangle implements Deletable {
          .getElementById("symbol amassLight layer")
          ?.appendChild(this.highlight)
    }
-   center(): Point {
-      return Point.mean(this.svgCorners())
+   private cachedCenterPoint = new CenterPoint(0, 0, this)
+   // A variant of center() that retains extra information.
+   centerPoint(): CenterPoint {
+      // The purpose of caching is to ensure that the CenterPoint has a
+      // consistent object identity for as long as the symbol is stationary.
+      let point = this.center()
+      if (point.sqDistanceFrom(this.cachedCenterPoint) !== 0)
+         this.cachedCenterPoint = new CenterPoint(point.x, point.y, this)
+      return this.cachedCenterPoint
    }
    delete(): Set<Junction> {
       SymbolInstance.s.delete(this)
@@ -546,6 +557,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
             port.edges().clear()
          }
       }
+      this.attachments.forEach((a) => a.detach())
       return new Set()
    }
    edges(): Set<Edge> {

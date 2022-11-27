@@ -141,6 +141,9 @@ export class Point extends Object2D {
       this.x = x
       this.y = y
    }
+   center(): Point {
+      return this
+   }
    partClosestTo(point: Point): Point {
       return this
    }
@@ -371,6 +374,9 @@ export class LineSegment<P extends Point = Point> extends Object2D {
       this.start = start
       this.end = end
       this.axis = axis
+   }
+   center(): Point {
+      return this.start.interpolatedToward(this.end, 0.5)
    }
    partClosestTo(point: Point): Point {
       let d = this.end.displacementFrom(this.start)

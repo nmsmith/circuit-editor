@@ -17,7 +17,7 @@
       loadFromJSON,
       emptyCircuitJSON,
       tetherLineType,
-      Midpoint,
+      CenterPoint,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -80,6 +80,7 @@
    const crossingGlyphsForBrowserTesting = ["hopover.svg"]
    const vertexMarkerFileName = "vertex marker.svg"
    const crossingMarkerFileName = "crossing marker.svg"
+   const centerMarkerFileName = "center marker.svg"
    const lineTypesForBrowserTesting = [
       "hydraulic.json",
       "pilot.json",
@@ -144,7 +145,7 @@
    type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
-   type Attachable = Junction | Port | Segment | Midpoint // Things a segment can attach to.
+   type Attachable = Junction | Port | Segment | CenterPoint // Things a segment can attach to.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -158,8 +159,9 @@
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
    }
-   function* midpoints(): Generator<Midpoint> {
-      for (let seg of Segment.s) if (seg.isTether()) yield seg.midpoint()
+   function* centerPoints(): Generator<CenterPoint> {
+      for (let seg of Segment.s) if (seg.isTether()) yield seg.centerPoint()
+      for (let symbol of SymbolInstance.s) yield symbol.centerPoint()
    }
    function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
@@ -204,7 +206,7 @@
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
       return (
          closestNearTo(point, allVertices()) ||
-         closestNearTo(point, midpoints()) ||
+         closestNearTo(point, centerPoints()) ||
          closestNearTo(
             point,
             [...Segment.s].filter((s) => !s.isTether())
@@ -260,7 +262,9 @@
       return a * distance * distance + b * distance + c
    }
    function layerOf(point: Point): "lower" | "upper" {
-      return point instanceof Port || point === draw?.segment.end
+      return point instanceof Port ||
+         point instanceof CenterPoint ||
+         point === draw?.segment.end
          ? "upper"
          : "lower"
    }
@@ -269,11 +273,15 @@
       if (item instanceof Segment || item instanceof SymbolInstance) {
          return eraseRect.items.has(item)
       } else if (item.type === "vertex glyph") {
-         let m = movableAt(item.vertex)
-         if (m instanceof Junction) {
-            return [...m.edges()].every(([seg]) => eraseRect?.items.has(seg))
+         if (item.vertex instanceof CenterPoint) {
+            return willBeDeleted(item.vertex.object)
          } else {
-            return eraseRect.items.has(m)
+            let m = movableAt(item.vertex)
+            if (m instanceof Junction) {
+               return [...m.edges()].every(([seg]) => eraseRect?.items.has(seg))
+            } else {
+               return eraseRect.items.has(m)
+            }
          }
       } else {
          return item.segment ? eraseRect.items.has(item.segment) : false
@@ -631,6 +639,7 @@
    let crossingGlyphs = new Set<SymbolKind>()
    let vertexMarkerGlyph: SymbolKind | undefined
    let crossingMarkerGlyph: SymbolKind | undefined
+   let centerMarkerGlyph: SymbolKind | undefined
    let lineTypes = new Set<LineType>()
    // If we're not using Electron, load test symbols.
    if (!usingElectron) {
@@ -667,6 +676,9 @@
          crossingMarkerGlyph = [...kinds][0]
       }
    )
+   loadSymbols(builtinGlyphFolderName, [centerMarkerFileName]).then((kinds) => {
+      centerMarkerGlyph = [...kinds][0]
+   })
    let symbolLoadError = false
    let lineTypeLoadError = false
 
@@ -966,13 +978,13 @@
          }
       }
    }
-   let touchLight: Set<Interactable | Midpoint>
+   let touchLight: Set<Interactable | CenterPoint>
    $: {
       touchLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
          let tool = toolBeingUsed?.tool || toolToUse
          let touchLocation = toolBeingUsed?.canvasDownPosition || mouseOnCanvas
-         let touching: Interactable | Midpoint | undefined
+         let touching: Interactable | CenterPoint | undefined
          if (tool === "amass" && !amassRect) {
             touching = amassTarget(touchLocation)?.object
          } else if (tool === "warp") {
@@ -1034,7 +1046,7 @@
    type Section = Geometry.LineSegment<Point>
    type VertexGlyph = {
       type: "vertex glyph"
-      vertex: Vertex
+      vertex: Vertex | CenterPoint
       glyph: SymbolKind
       position: Point
       style: HighlightStyle
@@ -1053,9 +1065,9 @@
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
       segmentsToDraw = new Map()
       glyphsToDraw = new Set()
-      function styleOf(thing: Interactable): HighlightStyle {
+      function styleOf(thing: Interactable | CenterPoint): HighlightStyle {
          if (touchLight.has(thing)) return "touch"
-         else if (amassLight.has(thing)) return "amass"
+         else if (amassLight.has(thing as Interactable)) return "amass"
       }
       let renderedCrossings = new Set<Crossing>()
       for (let segment of Segment.s) {
@@ -1164,7 +1176,7 @@
             let glyph: string | undefined
             let edgeTypes = [...v.edges()].map(([segment]) => segment.type)
             let host = v.host()
-            if (host) edgeTypes.push(host.type, host.type)
+            if (host instanceof Segment) edgeTypes.push(host.type, host.type)
             if (edgeTypes.length === 1) {
                glyph = edgeTypes[0].ending
             } else if (edgeTypes.length === 2) {
@@ -1280,13 +1292,25 @@
             })
          }
       }
+      if (centerMarkerGlyph) {
+         for (let c of centerPoints()) {
+            if (toolToUse === "draw" || c.object.attachments.size > 0)
+               glyphsToDraw.add({
+                  type: "vertex glyph",
+                  vertex: c,
+                  glyph: centerMarkerGlyph,
+                  position: c,
+                  style: styleOf(c),
+               })
+         }
+      }
    }
    let attachmentErrors: Set<{ source: Point; target: Point }> // for debugging
    $: {
       attachmentErrors = new Set()
-      for (let segment of Segment.s) {
-         for (let attachment of segment.attachments) {
-            let target = segment.partClosestTo(attachment)
+      for (let object of [...Segment.s, ...SymbolInstance.s]) {
+         for (let attachment of object.attachments) {
+            let target = object.partClosestTo(attachment)
             if (attachment.sqDistanceFrom(target) > 1) {
                attachmentErrors.add({ source: attachment, target })
                console.error(
@@ -1756,11 +1780,11 @@
             }
          }
          if (!continuedDraw) newDraw(selectedLineType, vertex, regularDrawAxis)
-      } else if (attach?.object instanceof Midpoint) {
-         let midpoint = attach.object
-         // Begin drawing from the Midpoint of a tether.
-         let junction = new Junction(midpoint)
-         junction.attachTo(midpoint.segment)
+      } else if (attach?.object instanceof CenterPoint) {
+         let centerPoint = attach.object
+         // Begin drawing from the CenterPoint of something.
+         let junction = new Junction(centerPoint)
+         junction.attachTo(centerPoint.object)
          newDraw(selectedLineType, junction, regularDrawAxis)
       } else {
          newDraw(
@@ -1875,7 +1899,7 @@
                endVertex = endObject
             } else {
                endVertex = new Junction(endObject)
-               endVertex.attachTo(endObject.segment)
+               endVertex.attachTo(endObject.object)
             }
             // Check whether there is an existing segment incident to the
             // endVertex (before we attach the new one), that has the same axis.
@@ -2036,30 +2060,36 @@
                   if (rigidityMatters) rigidSegments.set(segment, delay)
                }
             }
-            // If the Movable is a Junction with a host, propagate the
-            // movement to it.
-            if (movable instanceof Junction && movable.host()) {
-               let host = movable.host() as Segment
-               let canStretch = host.axis === slideAxis && !host.isRigid()
-               let rigidityMatters = host.axis === slideAxis && host.isRigid()
-               if (canStretch) {
-                  // Prevent the attachment from sliding past the host endpoint.
-                  let hostDir = host.end.directionFrom(movable)
-                  let endpoint = hostDir?.approxEquals(slideDir, 0.1)
-                     ? host.end
-                     : host.start
-                  let distance = endpoint.distanceFrom(movable)
-                  let distanceSnap =
-                     config.distanceSnap.state === "off"
-                        ? slidePad // to prevent attachment overlapping endpoint
-                        : config.distanceSnap.state
-                  let e = Math.max(0, distance - distanceSnap)
-                  proposeTo(movableAt(endpoint), delay + e, true)
-               } else {
-                  // Push the host immediately.
-                  proposeTo(movableAt(host.start), delay, isPush)
-                  proposeTo(movableAt(host.end), delay, isPush)
-                  if (rigidityMatters) rigidSegments.set(host, delay)
+            if (movable instanceof SymbolInstance) {
+               // Attachments must move with their host.
+               for (let a of movable.attachments) proposeTo(a, delay, isPush)
+            } else if (movable instanceof Junction) {
+               // Hosts must move with their attachments.
+               let host = movable.host()
+               if (host instanceof SymbolInstance) {
+                  proposeTo(host, delay, isPush)
+               } else if (host instanceof Segment) {
+                  let canStretch = host.axis === slideAxis && !host.isRigid()
+                  let rigidityMatters = host.axis == slideAxis && host.isRigid()
+                  if (canStretch) {
+                     // Prevent the attachment from sliding past the endpoint.
+                     let hostDir = host.end.directionFrom(movable)
+                     let endpoint = hostDir?.approxEquals(slideDir, 0.1)
+                        ? host.end
+                        : host.start
+                     let distance = endpoint.distanceFrom(movable)
+                     let distanceSnap =
+                        config.distanceSnap.state === "off"
+                           ? slidePad // don't let attachment overlap endpoint
+                           : config.distanceSnap.state
+                     let e = Math.max(0, distance - distanceSnap)
+                     proposeTo(movableAt(endpoint), delay + e, true)
+                  } else {
+                     // Push the host immediately.
+                     proposeTo(movableAt(host.start), delay, isPush)
+                     proposeTo(movableAt(host.end), delay, isPush)
+                     if (rigidityMatters) rigidSegments.set(host, delay)
+                  }
                }
             }
             // Check whether amassed items should be moved at the same time as
@@ -2185,7 +2215,7 @@
          )
       }
       if (draw) {
-         let associatedDrawAxis: (vertex: Vertex | Midpoint) => Axis
+         let associatedDrawAxis: (vertex: Vertex | CenterPoint) => Axis
          let defaultDrawEnd: Point
          let defaultDrawAxis: Axis
          if (draw.mode === "strafing") {
@@ -2242,7 +2272,7 @@
                }
             }
          }
-         function isAcceptable(v: Vertex) {
+         function isAcceptableVertex(v: Vertex) {
             if (v === draw!.segment.start || v === draw!.end) return false
             let drawAxis = associatedDrawAxis(v)
             let drawDir = v
@@ -2267,10 +2297,34 @@
             }
             return true
          }
-         let acceptableVertices = Array.from(allVertices()).filter(isAcceptable)
+         function isAcceptableCenterPoint(c: CenterPoint) {
+            if (c.object instanceof SymbolInstance) {
+               let orthoDisp = c
+                  .displacementFrom(mouseOnCanvas)
+                  .scalarProjectionOnto(draw!.segment.axis.orthogonal())
+               return canDisplaceTowardMovable(c.object, orthoDisp)
+            } else if (associatedDrawAxis(c) === c.object.axis) {
+               return false
+            } else if (slide) {
+               let { start, end } = c.object
+               let orthoDisp = c
+                  .displacementFrom(mouseOnCanvas)
+                  .scalarProjectionOnto(draw!.segment.axis.orthogonal())
+               return (
+                  canDisplaceTowardMovable(movableAt(start), orthoDisp) &&
+                  canDisplaceTowardMovable(movableAt(end), orthoDisp)
+               )
+            } else return true
+         }
          let closestVertex =
-            closestNearTo(mouseOnCanvas, acceptableVertices) ||
-            closestNearTo(mouseOnCanvas, midpoints())
+            closestNearTo(
+               mouseOnCanvas,
+               [...allVertices()].filter(isAcceptableVertex)
+            ) ||
+            closestNearTo(
+               mouseOnCanvas,
+               [...centerPoints()].filter(isAcceptableCenterPoint)
+            )
          if (closestVertex) {
             // Snap to the closest vertex.
             draw.end.moveTo(closestVertex.object)
@@ -2463,17 +2517,24 @@
       function addMovable(m: Movable) {
          if (movables.has(m)) return // avoid infinite loops
          movables.add(m)
-         if (m instanceof Junction && m.host()) {
+         if (m instanceof SymbolInstance) {
+            // Attachments must move with their host.
+            for (let a of m.attachments) addMovable(a)
+         } else if (m instanceof Junction) {
             // Hosts must move with their attachments.
-            let host = m.host() as Segment
-            addMovable(movableAt(host.start))
-            addMovable(movableAt(host.end))
+            let host = m.host()
+            if (host instanceof SymbolInstance) {
+               addMovable(host)
+            } else if (host instanceof Segment) {
+               addMovable(movableAt(host.start))
+               addMovable(movableAt(host.end))
+            }
          }
          for (let [segment, v] of m.edges()) {
             if (segment.isRigid() || segment.attachments.size > 0) {
                // Treat the segment as rigid.
                addMovable(movableAt(v))
-               // Attachments must move with their hosts.
+               // Attachments must move with their host.
                for (let a of segment.attachments) addMovable(a)
                if (segment.isRigid()) rigidSegments.add(segment)
             }
@@ -3040,14 +3101,6 @@
                   {/each}
                {/if}
             {/each}
-         </g>
-         <g>
-            {#if config.showTethers.state === "on"}
-               {#each [...Segment.s].filter((s) => s.isTether() && !willBeDeleted(s)) as t}
-                  {@const mid = t.midpoint()}
-                  <circle class="tetherMidpoint" cx={mid.x} cy={mid.y} r="4" />
-               {/each}
-            {/if}
          </g>
          <!-- Segment glyph highlight layer -->
          <g>
@@ -3638,11 +3691,6 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
-   }
-   .tetherMidpoint {
-      stroke-width: 1px;
-      stroke: black;
-      fill: #ff4ff9;
    }
    .cursor-amass {
       cursor: default;
