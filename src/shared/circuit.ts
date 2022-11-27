@@ -79,6 +79,7 @@ export class Junction extends Point implements Deletable {
       if (this.edges_.size === 0) this.delete()
    }
    attachTo(host: Segment | SymbolInstance) {
+      if (this.host_) this.detach()
       this.host_ = host
       host.attachments.add(this)
    }
@@ -119,11 +120,8 @@ export class Junction extends Point implements Deletable {
          )
          crossing.push(mergedSegment)
          // Merge the state of the old segments into the new one.
-         mergedSegment.attachments = new Set([
-            ...segs[0].attachments,
-            ...segs[1].attachments,
-         ])
-         mergedSegment.attachments.forEach((a) => a.attachTo(mergedSegment))
+         segs[0].attachments.forEach((a) => a.attachTo(mergedSegment))
+         segs[1].attachments.forEach((a) => a.attachTo(mergedSegment))
          mergedSegment.isFrozen = segs[0].isFrozen && segs[1].isFrozen
          for (let group of groups) {
             if (group.items.has(segs[0]) || group.items.has(segs[1]))

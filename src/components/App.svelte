@@ -297,6 +297,7 @@
    ): boolean {
       return (
          junction.edges().size === 1 &&
+         [...junction.edges()][0][0].attachments.size === 0 &&
          !junction.host() &&
          junction.axes()[0] === drawAxis
       )
@@ -1299,7 +1300,9 @@
       if (centerMarkerGlyph) {
          for (let c of centerPoints()) {
             if (
-               toolToUse === "draw" ||
+               (toolToUse === "draw" &&
+                  (!(c.object instanceof Segment) ||
+                     config.showTethers.state === "on")) ||
                (c.object instanceof Segment &&
                   c.object.attachments.size > 0 &&
                   config.showTethers.state === "on")
@@ -1734,7 +1737,7 @@
       }
       if (attach?.object instanceof Segment) {
          let segment = attach.object
-         if (specialDrawAxis === segment.axis) {
+         if (specialDrawAxis == segment.axis && segment.attachments.size == 0) {
             // Cut the segment, and allow the user to move one side of it.
             let direction = segment.start.displacementFrom(attach.closestPart)
             let [newStart, otherV] =
@@ -1770,6 +1773,7 @@
          } else {
             for (let [segment, other] of vertex.edges()) {
                if (segment.axis !== specialDrawAxis) continue
+               if (segment.attachments.size > 0) continue
                if (other.displacementFrom(vertex).dot(dragVector) <= 0) continue
                // Unplug this segment from the vertex.
                let junction = new Junction(vertex)
@@ -1830,7 +1834,8 @@
          )
          drawSegment.replaceWith(segment)
       }
-      // Drop any attachments (retaining them would be complicated).
+      // This function should never be called on a segment with attachments,
+      // but if it is, remove the attachments. (There's no good alternative.)
       segment.attachments.forEach((a) => a.detach())
       // Initialize the draw operation.
       draw = {
@@ -1891,6 +1896,12 @@
             )
                return false
          }
+         if (
+            segment.start instanceof Junction &&
+            segment.start.host() instanceof Segment &&
+            (segment.start.host() as Segment).axis === segment.axis
+         )
+            return false
          return true
       }
       let endVertex: Vertex | undefined
@@ -2295,6 +2306,13 @@
                let dir = v.directionFrom(other)
                if (dir?.approxEquals(drawDir, 0.1)) return false
             }
+            if (
+               v instanceof Junction &&
+               v.host() instanceof Segment &&
+               (v.host() as Segment).axis === drawAxis
+            ) {
+               return false
+            }
             if (slide) {
                // Reject if snapping to the vertex is impossible, because the
                // vertex would slide away from the mouse.
@@ -2308,6 +2326,8 @@
          }
          function isAcceptableCenterPoint(c: CenterPoint) {
             if (c.sqDistanceFrom(draw!.segment.start) === 0) return false
+            if ([...c.object.attachments].some((a) => a.sqDistanceFrom(c) < 1))
+               return false // Should interact with the attachment instead.
             if (c.object instanceof SymbolInstance) {
                let orthoDisp = c
                   .displacementFrom(mouseOnCanvas)
@@ -3143,8 +3163,8 @@
             <!-- TODO: This is occurrence 2/4 of the glyph-generating code.-->
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
-                  <!-- TODO: Inherit "color" more intelligently.-->
                   {@const port = glyph.glyph.ports[0]}
+                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
                      color="blue"
                      transform="translate({glyph.position.x - port.x} {glyph
@@ -3153,6 +3173,7 @@
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
                {:else if glyph.type === "crossing glyph" && !willBeDeleted(glyph)}
+                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
                      color="blue"
                      transform="translate({glyph.position.x} {glyph.position
@@ -3194,6 +3215,7 @@
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.ports[0]}
+                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
                      color="blue"
                      transform="translate({glyph.position.x - port.x} {glyph
