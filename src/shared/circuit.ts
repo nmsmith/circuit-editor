@@ -651,6 +651,7 @@ type SymbolJSON = {
    objectID: number
    fileName: string // represents a SymbolKind
    ports: PortJSON[]
+   attachments: number[]
    // Rectangle data
    position: { x: number; y: number }
    direction: { x: number; y: number }
@@ -714,6 +715,7 @@ export function saveToJSON(): CircuitJSON {
          ports: s.ports.map((p) => {
             return { objectID: p.objectID, svgID: p.kind.svgID, glyph: p.glyph }
          }),
+         attachments: [...s.attachments].map((j) => j.objectID),
          position: { x: s.position.x, y: s.position.y },
          direction: { x: s.direction.x, y: s.direction.y },
       }
@@ -782,6 +784,17 @@ export function loadFromJSON(
                vertexMap.set(p.objectID, port)
             }
          })
+         // Load the symbol's attachments.
+         for (let id of s.attachments) {
+            let j = vertexMap.get(id)
+            if (!j) {
+               console.error(
+                  `Failed to find a junction (ID ${id}) attached to a symbol (ID ${s.objectID}).`
+               )
+            } else {
+               ;(j as Junction).attachTo(newSymbol)
+            }
+         }
       } else {
          console.error(
             `Failed to load a symbol, because the SymbolKind "${s.fileName}" could not be found.`
