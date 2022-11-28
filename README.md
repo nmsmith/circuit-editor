@@ -2,7 +2,7 @@
 
 This app is an editor for electrical & hydraulic circuit diagrams.
 
-It is currently in-development. Some basic features are still missing (such as save and load), so it is not yet "production ready".
+Some basic features are still missing, so it is not yet "production ready".
 
 # User guide
 
@@ -23,7 +23,7 @@ The symbols that have been loaded will appear in the sidebar. To place a symbol 
 
 ## Using the tools
 
-There are currently five tools implemented: draw, erase, warp, slide, and amass.
+There are currently six tools implemented: draw, erase, warp, slide, amass, and freeze.
 
 A tool can be equipped by pressing its button in the GUI, or by using a keyboard shortcut.
 
@@ -34,6 +34,7 @@ The keyboard shortcuts are:
 -  `W`: warp
 -  `S`: slide
 -  `A`: amass
+-  `F`: freeze
 
 It is also possible to switch to another tool _temporarily_. To do so, hold down the key of the desired tool and perform the operations you desire. When the key is released, the editor will automatically switch back to the previous tool.
 
@@ -43,7 +44,7 @@ The draw tool allows you to draw line segments, and attach them to symbols. To d
 
 By default, only horizontal and vertical lines can be drawn. To draw in a different direction, hold the Shift key. Once you have chosen a new draw direction, the Shift key can be released.
 
-Whilst drawing, the endpoint of the line being drawn will snap towards other line segments, and to the ports of nearby symbols. If the mouse is released whilst this is happening, the line will attach itself to the target. To _detach_ a line from a target, click at the attachment point and drag backward along the line, as if you were "unplugging" it.
+While drawing, the endpoint of the line being drawn will snap towards other line segments, and to the ports of nearby symbols. If the mouse is released while this is happening, the line will attach itself to the target. To _detach_ a line from a target, click at the attachment point and drag backward along the line, as if you were "unplugging" it.
 
 To draw multiple line segments in quick succession, you can tap the draw key ("D") to finalize the current line segment and begin the next.
 
@@ -61,7 +62,7 @@ By default, rotation will snap towards "nice" orientations for the object, e.g. 
 
 ### The slide tool
 
-The slide tool allows you to move an object (or a selection of objects) whilst ensuring it remains a "standard distance" apart from other objects on the canvas. Roughly, the slide tool "pushes" objects, without letting them touch or pass one another.
+The slide tool allows you to move an object (or a selection of objects) while ensuring it remains a "standard distance" apart from other objects on the canvas. Roughly, the slide tool "pushes" objects, without letting them touch or pass one another.
 
 By default, the moved object(s) will push all objects in their path. However, if the Shift key is held, only objects that are connected via a line segment will be pushed.
 
@@ -73,7 +74,7 @@ The amass tool allow you to select (i.e. _amass_) multiple circuit elements, for
 
 The amass tool has similar controls to the "select" and/or "move" tools of popular CAD apps. To amass a single item, click on it. To amass a rectangular region of items, click on an empty part of the canvas and then drag to specify the region.
 
-By default, the previous amassment will be cleared each time you amass new items. If you instead wish to _add_ to the current amassment, hold Shift before beginning the operation. (An exception: Shift-clicking on a single item will _toggle_ it, rather than add it.) If you wish to _remove_ from the current amassment, hold Alt before beginning the operation. To _clear_ the current amassment, click on an empty part of the canvas.
+By default, the previous amassment will be cleared each time you amass new items. If you instead wish to _add_ to the current amassment, hold Shift before beginning the operation. (An exception: Shift-clicking on a single item will _toggle_ it, rather than add it.) If you wish to _remove_ from the current amassment, hold Alt/Opt before beginning the operation. To _clear_ the current amassment, click on an empty part of the canvas.
 
 Items remained amassed even after changing to another tool. This gives you the opportunity to manipulate the amassment using multiple tools (such as _warp_ and _slide_) without having to re-select the items after each tool change.
 
@@ -81,6 +82,12 @@ When using one of the movement tools to manipulate the circuit diagram, the amas
 
 -  You want to move the amassment as a single unit.
 -  You want to move _other_ parts of the circuit, and you want to keep the amassment undisturbed.
+
+### The freeze tool
+
+The freeze tool allows you to make line segments _rigid_, meaning their length cannot be changed by subsequent warping and sliding.
+
+The controls for freezing are identical to those for amassing, with the exception that the Shift key is "stuck on" by default. This is because freezing is intended to be more-or-less permanent — freezing a segment signals that its length is "finalized" and needs to be preserved. Just like with the amass tool, segments can be bulk-unfrozen by holding Alt/Opt and dragging.
 
 ## Configuring snapping behaviour
 
@@ -154,7 +161,8 @@ As an example, you may define a JSON file "drain.json" for a drain line, contain
       "manifold": {
          "crossing": "port.svg",
          "T": "plug.svg",
-         "X": "port.svg"
+         "X": "port.svg",
+         "attaches": true,
       }
    }
 }
@@ -164,16 +172,17 @@ This file describes a blue line (#0000FF) with a thickness of 3, and a basic das
 
 The "meeting" object consists of a set of key-value pairs. The keys ("drain" and "manifold") must match the file names of other line-type JSON files in the project, excluding their file extension. Thus for our example, the files "drain.json" and "manifold.json" must be included in the same directory as our example file (which happens to be "drain.json" itself).
 
-Each key is paired with a JSON object, which may contain the following fields:
+Each key is paired with a JSON object, which may contain the following fields. Herein, "file-segment" refers to a line segment of the type being specified in the current JSON file, and "key-segment" refers to a line segment of the type being referenced in the current key-value pair:
 
--  crossing (optional): The glyph that should be drawn when the main line type crosses over the key's line type without intersecting it. (This field is typically used to specify a "hop-over" glyph.)
--  L (optional): The glyph that should be drawn when the main line type intersects the key's line type at an L-junction, i.e. a corner.
--  T (optional): The glyph that should be drawn when the main line type intersects the key's line type at a T-junction.
-   -  Here, the main line type is the stem of the T, and the key's line type is the crossbar of the T. If you wish to specify the opposite kind of T-junction, you must do so in the key type's JSON file.
+-  crossing (optional): The glyph that should be drawn when a file-segment crosses over a key-segment without intersecting it. (This field is typically used to specify a "hop-over" glyph.)
+-  L (optional): The glyph that should be drawn when a file-segment intersects a key-segment at an L-junction, i.e. a corner.
+-  T (optional): The glyph that should be drawn when a file-segment intersects a key-segment at a T-junction.
+   -  Here, the file-segment is the stem of the T, and the key-segment is the crossbar of the T. If you wish to specify the opposite kind of T-junction, you must do so in the key-segment's JSON file.
    -  T-junctions involving three line types are not supported.
--  X (optional): The glyph that should be drawn when the main type intersects the key's line type at an X-junction.
+-  X (optional): The glyph that should be drawn when a file-segment intersects a key-segment at an X-junction.
    -  An X-junction is any junction with four lines coming into it. Neither the angle of the lines, nor the multiplicity of each line type is relevant.
    -  X-junctions involving three or more line types are not supported.
+-  attaches (optional): If set to `true`, the file-segment will "attach onto" the key-segment when intersecting it. If set to `false`, or omitted, the file-segment will _split_ the key-segment when intersecting it. For further explanation, see the "attachments" section of this user guide.
 
 The particular glyph to be used at one of these meetings is described by a file name, as illustrated in the example. As described earlier in this guide, crossing glyphs (those associated with the "crossing" key) must be placed in the "crossing glyphs" folder, and vertex glyphs (those associated with the "L/T/X" keys) must be placed in the "vertex glyphs" folder. The format of these files is described in the next section.
 
@@ -197,6 +206,33 @@ The file format for glyphs is the same as for symbols (described earlier), with 
 
 -  A crossing glyph splices itself into the middle of a line — typically, the line that is "hopping over". Thus it must be a symbol with two ports: one for each side of the cut.
 -  A vertex glyph appears at the point where multiple lines intersect. Thus it must be a symbol with one port, corresponding to the part of the glyph that should be placed at the intersection point.
+
+## Attachments
+
+By default, when a line segment is connected to a point along another segment, the latter segment is split into two halves. You may decide that, for a particular pair of line types, this behaviour fails to respect the _meaning_ of the connection. For example: maybe you are trying to draw cables "plugging into" a device. Certainly, the cables should not cut the device in half!
+
+The alternative to the aforementioned splitting is what I call "attaching". When a line segment "attaches" to another segment, the latter segment is _not_ split. This only makes a minor difference to diagram construction, but you may find it relevant.
+
+For instructions on how to enable this behaviour, see the "line types" section of this user guide.
+
+## Tethers
+
+Tethers are a special line type that is built into the editor. They are unique in three ways:
+
+-  They can be hidden via the config bar.
+   -  If an export feature were to exist, they would also be omitted when the circuit is exported.
+-  They _attach_ onto every other line type.
+-  They come with a special attachment point at their midpoint. Other than this, nothing can split or attach onto a tether.
+
+Tethers are intended to be used to enforce relative positioning of circuit elements. For example, two corners can be aligned vertically as follows:
+
+<img src="./user-guide-images/v-alignment.png" width="200px">
+
+And a symbol can be positioned midway between two lines as follows:
+
+<img src="./user-guide-images/equal-spacing.png" width="400px">
+
+Here, a vertical tether has been drawn between the midpoint of a horizontal tether and the midpoint of the symbol. Once this has been done, the horizontal tether acts as if it has been frozen using the Freeze tool. This ensures that the alignment is preserved throughout subsequent operations. The tether can be "unfrozen" by deleting the tether attached to its midpoint.
 
 ## Q&A
 
