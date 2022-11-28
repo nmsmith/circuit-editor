@@ -962,6 +962,7 @@
    }
    let crossingMap: DefaultMap<Segment, Map<Segment, Crossing>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
+      let oldCrossingMap = crossingMap
       crossingMap = new DefaultMap(() => new Map())
       for (let seg1 of Segment.s) {
          for (let seg2 of Segment.s) {
@@ -973,7 +974,12 @@
                   ...ends.map((p) => p.sqDistanceFrom(crossPoint as Point))
                )
                if (minSqDistance >= sqSegmentCrossingBuffer) {
-                  let crossing = new Crossing(seg1, seg2, crossPoint)
+                  let crossing = oldCrossingMap.read(seg1).get(seg2)
+                  if (crossing) {
+                     crossing.point = crossPoint
+                  } else {
+                     crossing = new Crossing(seg1, seg2, crossPoint)
+                  }
                   crossingMap.getOrCreate(seg1).set(seg2, crossing)
                   crossingMap.getOrCreate(seg2).set(seg1, crossing)
                }
@@ -1173,7 +1179,7 @@
          for (let crossing of map.values()) {
             if (
                !renderedCrossings.has(crossing) &&
-               touchLight.has(crossing) &&
+               (touchLight.has(crossing) || amassLight.has(crossing)) &&
                crossingMarkerGlyph
             ) {
                let port = crossingMarkerGlyph.ports[0]
@@ -2209,6 +2215,8 @@
       slide = null
    }
    function updateDrawAndSlide() {
+      if (!draw && !slide) return
+
       if (draw && draw.mode !== selectedDrawMode()) {
          // Change the draw mode.
          endSlide() // If we were sliding, commit the operation.

@@ -856,9 +856,11 @@ export function loadFromJSON(
          if (item.type === "crossing") {
             let seg1 = segmentMap.get(item.seg1ID)
             let seg2 = segmentMap.get(item.seg2ID)
-            if (seg1 && seg2) {
-               let crossing = crossingMap.read(seg1).get(seg2)
-               if (crossing) items.add(crossing)
+            let crossPoint = seg1 && seg2 ? seg1.intersection(seg2) : undefined
+            if (seg1 && seg2 && crossPoint) {
+               let crossing = new Crossing(seg1, seg2, crossPoint)
+               crossingMap.getOrCreate(seg1).set(seg2, crossing)
+               items.add(crossing)
             } else {
                console.error(
                   `Failed to assign the crossing of two segments (ID ${item.seg1ID} and ID ${item.seg2ID}) to group "${g.name}" because at least one of these segments does not exist.`

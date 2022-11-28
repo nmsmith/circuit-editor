@@ -420,8 +420,8 @@ export class LineSegment<P extends Point = Point> extends Object2D {
 
 // A representation of two line segments that cross one another.
 export class LineSegmentCrossing<S extends LineSegment> extends Object2D {
-   seg1: S
-   seg2: S
+   readonly seg1: S
+   readonly seg2: S
    point: Point
    constructor(seg1: S, seg2: S, point: Point) {
       super()
