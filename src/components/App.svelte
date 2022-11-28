@@ -3384,7 +3384,10 @@
                      class="lineGridItem {line === selectedLineType
                         ? 'selected'
                         : ''}"
-                     on:click={() => (selectedLineType = line)}
+                     on:click={() => {
+                        selectedLineType = line
+                        boundTool = "draw"
+                     }}
                   >
                      <div class="lineName">
                         {line.name}
