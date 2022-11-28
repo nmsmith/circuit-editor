@@ -972,15 +972,16 @@
       rigidLight = new Set()
       if (toolToUse === "freeze") {
          for (let s of Segment.s) if (s.isRigid()) rigidLight.add(s)
+         if (freezeRect) {
+            if (freezeRect.mode === "remove") {
+               for (let item of freezeRect.items)
+                  if (item.isFrozen) rigidLight.delete(item)
+            } else {
+               for (let item of freezeRect.items) rigidLight.add(item)
+            }
+         }
       } else {
          for (let s of rigidlyMovedSegments) rigidLight.add(s)
-      }
-      if (freezeRect) {
-         if (freezeRect.mode === "remove") {
-            for (let item of freezeRect.items) rigidLight.delete(item)
-         } else {
-            for (let item of freezeRect.items) rigidLight.add(item)
-         }
       }
    }
    let touchLight: Set<Interactable | CenterPoint>
@@ -3089,7 +3090,13 @@
          <g id="segment rigidLight layer">
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if rigidLight.has(segment) && !willBeDeleted(segment)}
-                  <g class={segment.isFrozen ? "freezeLight" : "rigidLight"}>
+                  <g
+                     class={segment.isFrozen ||
+                     (freezeRect?.mode === "add" &&
+                        freezeRect?.items.has(segment))
+                        ? "freezeLight"
+                        : "rigidLight"}
+                  >
                      {#each sections as section}
                         <CircuitLine
                            type={segment.type}
