@@ -637,7 +637,7 @@ type PortJSON = {
 type SegmentJSON = {
    objectID: number
    type: string // must be a LineType.name
-   attachments: number[]
+   attachments?: number[]
    isFrozen: boolean
    crossingTypes: { segmentID: number; crossing: CrossingType }[]
    startID: number
@@ -649,7 +649,7 @@ type SymbolJSON = {
    objectID: number
    fileName: string // represents a SymbolKind
    ports: PortJSON[]
-   attachments: number[]
+   attachments?: number[]
    // Rectangle data
    position: { x: number; y: number }
    direction: { x: number; y: number }
@@ -783,7 +783,7 @@ export function loadFromJSON(
             }
          })
          // Load the symbol's attachments.
-         for (let id of s.attachments) {
+         for (let id of s.attachments || []) {
             let j = vertexMap.get(id)
             if (!j) {
                console.error(
@@ -826,7 +826,7 @@ export function loadFromJSON(
             end,
             Axis.fromVector(new Vector(s.axis.x, s.axis.y)) as Axis
          )
-         for (let id of s.attachments) {
+         for (let id of s.attachments || []) {
             let j = vertexMap.get(id)
             if (!j) {
                console.error(

@@ -417,6 +417,19 @@
    }
    async function openProjectFolder() {
       if (!usingElectron || !worker) return
+      if (projectFolder && history.timestampOfLastSave !== history.timestamp) {
+         // Save the current project.
+         let save = await worker.saveHistory(
+            path.join(projectFolder, autosaveFileName)
+         )
+         if (
+            save.outcome !== "success" &&
+            !confirm(
+               `Failed to save the current project.\nReason: ${save.error.message}\nDo you still wish to load a different project?`
+            )
+         )
+            return
+      }
       let response = await openDirectory()
       if (!response) return
       projectFolder = response
@@ -483,6 +496,7 @@
             if (historyLoading.outcome === "success") {
                history = historyLoading.history
                loadState(history.stack[history.index].state)
+               resetCamera()
             } else {
                console.error(
                   `Failed to load the project's history. Reason:\n${historyLoading.error.message}`
