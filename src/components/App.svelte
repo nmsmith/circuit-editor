@@ -1818,6 +1818,8 @@
          segmentIsNew: true,
       }
       if (mode === "strafing") beginDrawStrafing()
+      if (segment.isTether() && config.showTethers.state === "off")
+         config.showTethers.state = "on"
    }
    function continueDraw(drawSegment: Segment, end: Junction) {
       let mode: DrawMode = selectedDrawMode()
@@ -1845,6 +1847,8 @@
          segmentIsNew: false,
       }
       if (mode === "strafing") beginDrawStrafing()
+      if (segment.isTether() && config.showTethers.state === "off")
+         config.showTethers.state = "on"
    }
    function beginDrawStrafing() {
       if (!draw) return
