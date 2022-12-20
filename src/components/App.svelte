@@ -112,8 +112,10 @@
    const tau = 2 * Math.PI
    const zeroVector = new Vector(0, 0)
    const infinityVector = new Vector(Infinity, Infinity)
+   const err = 0.01 // constant to accommodate for floating-point error
+   const sqErr = err ** 2
    // Circuit-sizing constants (zoom-independent)
-   const sqMinSegmentLength = 15 ** 2
+   const sqMinSegmentLength = 10 ** 2
    const standardGap = 30 // standard spacing between circuit elements
    const halfGap = 15
    const slidePad = halfGap / 2 // dist at which close-passing elements collide
@@ -1344,7 +1346,7 @@
       for (let object of [...Segment.s, ...SymbolInstance.s]) {
          for (let attachment of object.attachments) {
             let target = object.partClosestTo(attachment)
-            if (attachment.sqDistanceFrom(target) > 1) {
+            if (attachment.sqDistanceFrom(target) > sqErr) {
                attachmentErrors.add({ source: attachment, target })
                console.error(
                   "An attachment has become separated from its host." +
@@ -1915,7 +1917,7 @@
             if (
                s !== segment &&
                s.axis === segment.axis &&
-               other.distanceFrom(segment.end) + 1 <
+               other.distanceFrom(segment.end) + err <
                   segment.start.distanceFrom(segment.end) +
                      other.distanceFrom(segment.start)
             )
@@ -2081,7 +2083,7 @@
                   segment.axis === slideAxis && segment.isRigid()
                if (
                   canStretch &&
-                  adjDir.approxEquals(slideDir, 0.1) &&
+                  adjDir.approxEquals(slideDir, err) &&
                   config.distanceSnap.state !== "off"
                ) {
                   // Allow the edge to contract toward a minimum length.
@@ -2119,7 +2121,7 @@
                   if (canStretch) {
                      // Prevent the attachment from sliding past the endpoint.
                      let hostDir = host.end.directionFrom(movable)
-                     let endpoint = hostDir?.approxEquals(slideDir, 0.1)
+                     let endpoint = hostDir?.approxEquals(slideDir, err)
                         ? host.end
                         : host.start
                      let distance = endpoint.distanceFrom(movable)
@@ -2258,7 +2260,7 @@
             slideDistance > 0 ? slide.posInstructions : slide.negInstructions
          slideDistance = Math.abs(slideDistance)
          return !instructions.find(
-            (i) => movable === i.movable && slideDistance >= i.delay + 0.001
+            (i) => movable === i.movable && slideDistance >= i.delay + err
          )
       }
       if (draw) {
@@ -2331,7 +2333,7 @@
                // Reject if the segment being drawn would overlap this segment.
                if (axis !== drawAxis) continue
                let dir = v.directionFrom(other)
-               if (dir?.approxEquals(drawDir, 0.1)) return false
+               if (dir?.approxEquals(drawDir, err)) return false
             }
             if (
                v instanceof Junction &&
@@ -2353,8 +2355,12 @@
          }
          function isAcceptableCenterPoint(c: CenterPoint) {
             if (c.sqDistanceFrom(draw!.segment.start) === 0) return false
-            if ([...c.object.attachments].some((a) => a.sqDistanceFrom(c) < 1))
+            let centerAttachmentExists = [...c.object.attachments].some(
+               (attachment) => attachment.sqDistanceFrom(c) < sqErr
+            )
+            if (centerAttachmentExists) {
                return false // Should interact with the attachment instead.
+            }
             if (c.object instanceof SymbolInstance) {
                let orthoDisp = c
                   .displacementFrom(mouseOnCanvas)
@@ -3085,7 +3091,7 @@
             }
          } else {
             executeZoom(mouseWheelIncrements(event) * wheelZoomSpeed)
-            if (cameraZoom > 0.99 && cameraZoom < 1.01) cameraZoom = 1
+            if (Math.abs(cameraZoom - 1) < err) cameraZoom = 1
          }
       }}
    >
