@@ -379,24 +379,26 @@ export class SymbolKind {
       }
       // Add the template to the main document so its size can be measured.
       document.getElementById("symbol templates")?.appendChild(this.svgTemplate)
-
+      // To account for "noise" in the data, we round things down to 0.5.
+      function floor(x: number) {
+         return Math.floor(x * 2) / 2
+      }
       // Compute the bounding box of the whole SVG.
       {
          this.svgTemplate.getBoundingClientRect() // hack to fix Safari bug
          let { x, y, width, height } = this.svgTemplate.getBoundingClientRect()
          this.svgBox = Range2D.fromXY(
-            new Range1D([x, x + width]),
-            new Range1D([y, y + height])
+            new Range1D([floor(x), floor(x + width)]),
+            new Range1D([floor(y), floor(y + height)])
          )
       }
-
       // Locate the collision box of the symbol.
-      let box = doc.getElementById("collisionBox")
+      let box = this.svgTemplate.querySelector("#collisionBox")
       if (box) {
          let { x, y, width, height } = box.getBoundingClientRect()
          this.collisionBox = Range2D.fromXY(
-            new Range1D([x, x + width]),
-            new Range1D([y, y + height])
+            new Range1D([floor(x), floor(x + width)]),
+            new Range1D([floor(y), floor(y + height)])
          )
       } else {
          this.collisionBox = this.svgBox // a sensible alternative
@@ -411,7 +413,11 @@ export class SymbolKind {
             // Record this port.
             let { x, y, width, height } = element.getBoundingClientRect()
             this.ports.push(
-               new PortKind(element.id, x + width / 2, y + height / 2)
+               new PortKind(
+                  element.id,
+                  floor(x + width / 2),
+                  floor(y + height / 2)
+               )
             )
             // Remove it from the DOM - it shouldn't be rendered.
             element.remove()
