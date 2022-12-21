@@ -636,6 +636,13 @@ export class Rectangle extends Object2D {
          new LineSegment(p4, p1, p4.axisFrom(p1) || Axis.vertical),
       ]
    }
+   specialPoints(): Point[] {
+      return [
+         this.center(),
+         ...this.corners(),
+         ...this.sides().map((seg) => seg.center()),
+      ]
+   }
 }
 
 export type ClosenessResult<T> =

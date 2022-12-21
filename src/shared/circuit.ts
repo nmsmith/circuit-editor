@@ -213,7 +213,7 @@ export const tetherLineType: LineType = {
    attachToAll: true,
 }
 
-export class CenterPoint extends Point {
+export class SpecialAttachPoint extends Point {
    readonly object: Segment | SymbolInstance
    constructor(x: number, y: number, object: Segment | SymbolInstance) {
       super(x, y)
@@ -250,14 +250,14 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    isRigid(): boolean {
       return this.isFrozen || (this.isTether() && this.attachments.size > 0)
    }
-   private cachedCenterPoint = new CenterPoint(0, 0, this)
+   private cachedCenterPoint = new SpecialAttachPoint(0, 0, this)
    // A variant of center() that retains extra information.
-   centerPoint(): CenterPoint {
-      // The purpose of caching is to ensure that the CenterPoint has a
+   centerPoint(): SpecialAttachPoint {
+      // The purpose of caching is to ensure that the center point has a
       // consistent object identity for as long as the segment is stationary.
       let point = this.center()
       if (point.sqDistanceFrom(this.cachedCenterPoint) !== 0)
-         this.cachedCenterPoint = new CenterPoint(point.x, point.y, this)
+         this.cachedCenterPoint = new SpecialAttachPoint(point.x, point.y, this)
       return this.cachedCenterPoint
    }
    updateAxis(newAxis: Axis) {
@@ -499,6 +499,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
    readonly image: SVGElement
    readonly highlight: SVGElement
    readonly ports: Port[]
+   specialAttachPoints: SpecialAttachPoint[] = []
    attachments = new Set<Junction>() // should only be modified from Junction class
 
    constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
@@ -508,6 +509,9 @@ export class SymbolInstance extends Rectangle implements Deletable {
       this.kind = kind
       this.ports = kind.ports.map(
          (p) => new Port(this, p, this.fromRectCoordinates(p))
+      )
+      this.specialAttachPoints = this.specialPoints().map(
+         (p) => new SpecialAttachPoint(p.x, p.y, this)
       )
       SymbolInstance.s.add(this)
 
@@ -533,16 +537,6 @@ export class SymbolInstance extends Rectangle implements Deletable {
       document
          .getElementById("symbol amassLight layer")
          ?.appendChild(this.highlight)
-   }
-   private cachedCenterPoint = new CenterPoint(0, 0, this)
-   // A variant of center() that retains extra information.
-   centerPoint(): CenterPoint {
-      // The purpose of caching is to ensure that the CenterPoint has a
-      // consistent object identity for as long as the symbol is stationary.
-      let point = this.center()
-      if (point.sqDistanceFrom(this.cachedCenterPoint) !== 0)
-         this.cachedCenterPoint = new CenterPoint(point.x, point.y, this)
-      return this.cachedCenterPoint
    }
    delete(): Set<Junction> {
       SymbolInstance.s.delete(this)
@@ -584,6 +578,9 @@ export class SymbolInstance extends Rectangle implements Deletable {
          ;(port.x as number) = p.x
          ;(port.y as number) = p.y
       }
+      this.specialAttachPoints = this.specialPoints().map(
+         (p) => new SpecialAttachPoint(p.x, p.y, this)
+      )
    }
    moveBy(displacement: Vector) {
       this.moveTo(this.position.displacedBy(displacement))

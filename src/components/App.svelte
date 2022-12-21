@@ -17,7 +17,7 @@
       loadFromJSON,
       emptyCircuitJSON,
       tetherLineType,
-      CenterPoint,
+      SpecialAttachPoint,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -80,7 +80,7 @@
    const crossingGlyphsForBrowserTesting = ["hopover.svg"]
    const vertexMarkerFileName = "vertex marker.svg"
    const crossingMarkerFileName = "crossing marker.svg"
-   const centerMarkerFileName = "center marker.svg"
+   const attachMarkerFileName = "attach marker.svg"
    const lineTypesForBrowserTesting = [
       "hydraulic.json",
       "pilot.json",
@@ -147,7 +147,7 @@
    type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
-   type Attachable = Junction | Port | Segment | CenterPoint // Things a segment can attach to.
+   type Attachable = Junction | Port | Segment | SpecialAttachPoint // Things a segment can attach to.
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -161,9 +161,10 @@
       for (let v of Junction.s) yield v
       for (let v of Port.s) yield v
    }
-   function* centerPoints(): Generator<CenterPoint> {
+   function* specialAttachPoints(): Generator<SpecialAttachPoint> {
       for (let seg of Segment.s) if (seg.isTether()) yield seg.centerPoint()
-      for (let symbol of SymbolInstance.s) yield symbol.centerPoint()
+      for (let symbol of SymbolInstance.s)
+         for (let p of symbol.specialAttachPoints) yield p
    }
    function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
@@ -210,7 +211,9 @@
    function closestAttachable(point: Point): ClosenessResult<Attachable> {
       return (
          closestNearTo(point, allVertices()) ||
-         closestNearTo(point, centerPoints()) ||
+         (specialAttachPointsVisible
+            ? closestNearTo(point, specialAttachPoints())
+            : undefined) ||
          closestNearTo(
             point,
             [...Segment.s].filter((s) => !s.isTether())
@@ -267,7 +270,7 @@
    }
    function layerOf(point: Point): "lower" | "upper" {
       return point instanceof Port ||
-         point instanceof CenterPoint ||
+         point instanceof SpecialAttachPoint ||
          touchLight.has(point as any) ||
          amassLight.has(point as any) ||
          point === draw?.segment.end
@@ -279,7 +282,7 @@
       if (item instanceof Segment || item instanceof SymbolInstance) {
          return eraseRect.items.has(item)
       } else if (item.type === "vertex glyph") {
-         if (item.vertex instanceof CenterPoint) {
+         if (item.vertex instanceof SpecialAttachPoint) {
             return willBeDeleted(item.vertex.object)
          } else {
             let m = movableAt(item.vertex)
@@ -660,7 +663,7 @@
    let crossingGlyphs = new Set<SymbolKind>()
    let vertexMarkerGlyph: SymbolKind | undefined
    let crossingMarkerGlyph: SymbolKind | undefined
-   let centerMarkerGlyph: SymbolKind | undefined
+   let attachMarkerGlyph: SymbolKind | undefined
    let lineTypes = new Set<LineType>()
    // If we're not using Electron, load test symbols.
    if (!usingElectron) {
@@ -697,8 +700,8 @@
          crossingMarkerGlyph = [...kinds][0]
       }
    )
-   loadSymbols(builtinGlyphFolderName, [centerMarkerFileName]).then((kinds) => {
-      centerMarkerGlyph = [...kinds][0]
+   loadSymbols(builtinGlyphFolderName, [attachMarkerFileName]).then((kinds) => {
+      attachMarkerGlyph = [...kinds][0]
    })
    let symbolLoadError = false
    let lineTypeLoadError = false
@@ -791,6 +794,10 @@
       canvasDownPosition: Point
       chainDrawFromEnd?: Vertex // Special field for the draw tool.
    } = null
+   $: specialAttachPointsVisible =
+      toolToUse === "draw" &&
+      ((!draw && selectedLineType === tetherLineType) ||
+         (draw && draw.segment.type === tetherLineType))
 
    let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
@@ -1006,13 +1013,13 @@
          for (let s of rigidlyMovedSegments) rigidLight.add(s)
       }
    }
-   let touchLight: Set<Interactable | CenterPoint>
+   let touchLight: Set<Interactable | SpecialAttachPoint>
    $: {
       touchLight = new Set()
       if (document.hasFocus() /* hasFocus => the mouse position is fresh */) {
          let tool = toolBeingUsed?.tool || toolToUse
          let touchLocation = toolBeingUsed?.canvasDownPosition || mouseOnCanvas
-         let touching: Interactable | CenterPoint | undefined
+         let touching: Interactable | SpecialAttachPoint | undefined
          if (tool === "amass" && !amassRect) {
             touching = amassTarget(touchLocation)?.object
          } else if (tool === "warp") {
@@ -1074,7 +1081,7 @@
    type Section = Geometry.LineSegment<Point>
    type VertexGlyph = {
       type: "vertex glyph"
-      vertex: Vertex | CenterPoint
+      vertex: Vertex | SpecialAttachPoint
       glyph: SymbolKind
       position: Point
       style: HighlightStyle
@@ -1093,7 +1100,9 @@
    $: /* Determine which SVG elements (line segments and glyphs) to draw. */ {
       segmentsToDraw = new Map()
       glyphsToDraw = new Set()
-      function styleOf(thing: Interactable | CenterPoint): HighlightStyle {
+      function styleOf(
+         thing: Interactable | SpecialAttachPoint
+      ): HighlightStyle {
          if (touchLight.has(thing)) return "touch"
          else if (amassLight.has(thing as Interactable)) return "amass"
       }
@@ -1320,22 +1329,20 @@
             })
          }
       }
-      if (centerMarkerGlyph) {
-         for (let c of centerPoints()) {
+      if (attachMarkerGlyph) {
+         for (let p of specialAttachPoints()) {
             if (
-               (toolToUse === "draw" &&
-                  (!(c.object instanceof Segment) ||
-                     config.showTethers.state === "on")) ||
-               (c.object instanceof Segment &&
-                  c.object.attachments.size > 0 &&
+               specialAttachPointsVisible ||
+               (p.object instanceof Segment &&
+                  p.object.attachments.size > 0 &&
                   config.showTethers.state === "on")
             )
                glyphsToDraw.add({
                   type: "vertex glyph",
-                  vertex: c,
-                  glyph: centerMarkerGlyph,
-                  position: c,
-                  style: styleOf(c),
+                  vertex: p,
+                  glyph: attachMarkerGlyph,
+                  position: p,
+                  style: styleOf(p),
                })
          }
       }
@@ -1816,11 +1823,11 @@
             }
          }
          if (!continuedDraw) newDraw(selectedLineType, vertex, regularDrawAxis)
-      } else if (attach?.object instanceof CenterPoint) {
-         let centerPoint = attach.object
-         // Begin drawing from the CenterPoint of something.
-         let junction = new Junction(centerPoint)
-         junction.attachTo(centerPoint.object)
+      } else if (attach?.object instanceof SpecialAttachPoint) {
+         let attachPoint = attach.object
+         // Begin drawing from the attachment point.
+         let junction = new Junction(attachPoint)
+         junction.attachTo(attachPoint.object)
          newDraw(selectedLineType, junction, regularDrawAxis)
       } else {
          newDraw(
@@ -2264,7 +2271,7 @@
          )
       }
       if (draw) {
-         let associatedDrawAxis: (vertex: Vertex | CenterPoint) => Axis
+         let associatedDrawAxis: (vertex: Vertex | SpecialAttachPoint) => Axis
          let defaultDrawEnd: Point
          let defaultDrawAxis: Axis
          if (draw.mode === "strafing") {
@@ -2353,24 +2360,24 @@
             }
             return true
          }
-         function isAcceptableCenterPoint(c: CenterPoint) {
-            if (c.sqDistanceFrom(draw!.segment.start) === 0) return false
-            let centerAttachmentExists = [...c.object.attachments].some(
-               (attachment) => attachment.sqDistanceFrom(c) < sqErr
+         function isAcceptableAttachPoint(p: SpecialAttachPoint) {
+            if (p.sqDistanceFrom(draw!.segment.start) === 0) return false
+            let somethingAlreadyAttached = [...p.object.attachments].some(
+               (attachment) => attachment.sqDistanceFrom(p) < sqErr
             )
-            if (centerAttachmentExists) {
+            if (somethingAlreadyAttached) {
                return false // Should interact with the attachment instead.
             }
-            if (c.object instanceof SymbolInstance) {
-               let orthoDisp = c
+            if (p.object instanceof SymbolInstance) {
+               let orthoDisp = p
                   .displacementFrom(mouseOnCanvas)
                   .scalarProjectionOnto(draw!.segment.axis.orthogonal())
-               return canDisplaceTowardMovable(c.object, orthoDisp)
-            } else if (associatedDrawAxis(c) === c.object.axis) {
+               return canDisplaceTowardMovable(p.object, orthoDisp)
+            } else if (associatedDrawAxis(p) === p.object.axis) {
                return false
             } else if (slide) {
-               let { start, end } = c.object
-               let orthoDisp = c
+               let { start, end } = p.object
+               let orthoDisp = p
                   .displacementFrom(mouseOnCanvas)
                   .scalarProjectionOnto(draw!.segment.axis.orthogonal())
                return (
@@ -2379,15 +2386,16 @@
                )
             } else return true
          }
-         let closestVertex =
-            closestNearTo(
+         let closestVertex = closestNearTo<Vertex | SpecialAttachPoint>(
+            mouseOnCanvas,
+            [...allVertices()].filter(isAcceptableVertex)
+         )
+         if (!closestVertex && specialAttachPointsVisible) {
+            closestVertex = closestNearTo(
                mouseOnCanvas,
-               [...allVertices()].filter(isAcceptableVertex)
-            ) ||
-            closestNearTo(
-               mouseOnCanvas,
-               [...centerPoints()].filter(isAcceptableCenterPoint)
+               [...specialAttachPoints()].filter(isAcceptableAttachPoint)
             )
+         }
          if (closestVertex) {
             // Snap to the closest vertex.
             draw.end.moveTo(closestVertex.object)
