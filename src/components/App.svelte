@@ -18,6 +18,7 @@
       emptyCircuitJSON,
       tetherLineType,
       SpecialAttachPoint,
+      LineTypeConfig,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -88,7 +89,7 @@
       "manifold.json",
       "reservoir.json",
    ]
-   const hydraulicLineFileName = "hydraulic"
+   const lineTypeConfigFile = "config.json"
    let canvas: SVGElement | undefined // the root element of this component
    $: {
       if (canvas) {
@@ -96,8 +97,8 @@
          canvasHeight = canvas.getBoundingClientRect().height
       }
    }
-   const row1Tools = ["qButton", "warp", "erase", "rButton", "tButton"] as const
-   const row2Tools = ["amass", "slide", "draw", "freeze", "gButton"] as const
+   const row1Tools = ["qButton", "warp", "erase", "rButton"] as const
+   const row2Tools = ["amass", "slide", "draw", "freeze"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
    // Input constants
@@ -481,23 +482,31 @@
          lineTypeLoadError = !fileNames
          if (fileNames) {
             await loadLineTypes(
-               fileNames.filter((f) => path.extname(f) === ".json")
+               fileNames.filter(
+                  (f) => path.extname(f) === ".json" && f !== lineTypeConfigFile
+               )
             ).then((types) => {
-               lineTypes = types
-               lineTypes.add(tetherLineType)
-               types.forEach((type) => {
-                  // Bind the hydraulic line by default:
-                  if (type.name === hydraulicLineFileName && !selectedLineType)
-                     selectedLineType = type
-               })
+               lineTypes = new Set([tetherLineType, ...types])
+               selectedLineType = tetherLineType
             })
          }
       })
+      let load5 = loadLineTypeConfig()
+         .then((config) => {
+            lineTypeConfig = config
+         })
+         .catch(() => {
+            lineTypeConfig = null
+         })
       let loadHistory = worker.loadHistory(
          path.join(projectFolder, autosaveFileName)
       )
-      Promise.all([loadHistory, load1, load2, load3, load4]).then(
-         ([historyLoading]) => {
+      Promise.all([loadHistory, load1, load2, load3, load4, load5])
+         .then(([historyLoading]) => {
+            let defaultLineType = lineTypeConfig?.sidebarOrder[0]
+            if (defaultLineType)
+               for (let type of lineTypes)
+                  if (type.name === defaultLineType) selectedLineType = type
             if (historyLoading.outcome === "success") {
                history = historyLoading.history
                loadState(history.stack[history.index].state)
@@ -508,8 +517,12 @@
                )
                history = emptyHistory()
             }
-         }
-      )
+         })
+         .catch((error: Error) => {
+            console.error(
+               `Failed to load the project. Reason:\n${error.message}`
+            )
+         })
    }
    async function getFileNames(directory: string) {
       try {
@@ -564,6 +577,13 @@
          )
       )
       return s
+   }
+   async function loadLineTypeConfig(): Promise<LineTypeConfig> {
+      return fetch(assetFilePath(lineTypeFolderName, lineTypeConfigFile))
+         .then((response) => response.json())
+         .then((json: LineTypeConfig) => {
+            return json
+         })
    }
    type Time = number & {} // in milliseconds (since whenever)
    type Duration = number & {} // in milliseconds
@@ -624,12 +644,10 @@
       ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
       ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
       //["KeyR", { type: "holdTool", tool: "rButton", pressing: false }],
-      // ["KeyT", { type: "holdTool", tool: "tButton", pressing: false }],
       ["KeyA", { type: "holdTool", tool: "amass", pressing: false }],
       ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
       ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
       ["KeyF", { type: "holdTool", tool: "freeze", pressing: false }],
-      //["KeyG", { type: "holdTool", tool: "gButton", pressing: false }],
       [LMB, { type: "useTool", pressing: false }],
       ["Escape", { type: "abort", pressing: false }],
    ])
@@ -665,6 +683,7 @@
    let crossingMarkerGlyph: SymbolKind | undefined
    let attachMarkerGlyph: SymbolKind | undefined
    let lineTypes = new Set<LineType>()
+   let lineTypeConfig: null | LineTypeConfig = null
    // If we're not using Electron, load test symbols.
    if (!usingElectron) {
       loadSymbols(symbolFolderName, symbolsForBrowserTesting).then((kinds) => {
@@ -681,15 +700,22 @@
       ).then((kinds) => {
          crossingGlyphs = kinds
       })
-      loadLineTypes(lineTypesForBrowserTesting).then((types) => {
-         lineTypes = types
-         lineTypes.add(tetherLineType)
-         types.forEach((type) => {
-            // Bind the hydraulic line by default:
-            if (type.name === hydraulicLineFileName && !selectedLineType) {
-               selectedLineType = type
-            }
+      let load1 = loadLineTypes(lineTypesForBrowserTesting).then((types) => {
+         lineTypes = new Set([tetherLineType, ...types])
+         selectedLineType = tetherLineType
+      })
+      let load2 = loadLineTypeConfig()
+         .then((config) => {
+            lineTypeConfig = config
          })
+         .catch(() => {
+            lineTypeConfig = null
+         })
+      Promise.all([load1, load2]).then(() => {
+         let defaultLineType = lineTypeConfig?.sidebarOrder[0]
+         if (defaultLineType)
+            for (let type of lineTypes)
+               if (type.name === defaultLineType) selectedLineType = type
       })
    }
    loadSymbols(builtinGlyphFolderName, [vertexMarkerFileName]).then((kinds) => {
@@ -794,10 +820,6 @@
       canvasDownPosition: Point
       chainDrawFromEnd?: Vertex // Special field for the draw tool.
    } = null
-   $: specialAttachPointsVisible =
-      toolToUse === "draw" &&
-      ((!draw && selectedLineType === tetherLineType) ||
-         (draw && draw.segment.type === tetherLineType))
 
    let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
@@ -969,6 +991,28 @@
       let windowTopLeft = windowCoordsToCanvasCoords(Point.zero)
       svgTranslate = new Vector(-windowTopLeft.x, -windowTopLeft.y)
    }
+   let orderedLineTypes: LineType[]
+   $: {
+      if (lineTypeConfig) {
+         orderedLineTypes = []
+         let remaining = new Set(lineTypes)
+         for (let name of lineTypeConfig.sidebarOrder) {
+            for (let type of lineTypes) {
+               if (type.name === name) {
+                  orderedLineTypes.push(type)
+                  remaining.delete(type)
+                  break
+               }
+            }
+         }
+         let sortedRemaining = [...remaining].sort((a, b) => {
+            return a.name < b.name ? -1 : 1
+         })
+         orderedLineTypes.push(...sortedRemaining)
+      } else {
+         orderedLineTypes = [...lineTypes]
+      }
+   }
    let crossingMap: DefaultMap<Segment, Map<Segment, Crossing>>
    $: /* Determine which Segments are crossing, and where they cross. */ {
       let oldCrossingMap = crossingMap
@@ -1077,6 +1121,10 @@
          }
       }
    }
+   $: specialAttachPointsVisible =
+      toolToUse === "draw" &&
+      ((!draw && selectedLineType === tetherLineType) ||
+         (draw && draw.segment.type === tetherLineType))
    type HighlightStyle = "touch" | "amass" | undefined
    type Section = Geometry.LineSegment<Point>
    type VertexGlyph = {
@@ -1471,6 +1519,28 @@
          }
       } else if (key.type === "abort") {
          keyAborted(LMB)
+      }
+      // Check if a line type shortcut key has been pressed.
+      if (lineTypeConfig) {
+         let shortcutPressed = name
+         for (let prefix of ["Key", "Digit", "Numpad"])
+            if (name.startsWith(prefix))
+               shortcutPressed = name.slice(prefix.length)
+         for (let [lineTypeName, shortcutName] of Object.entries(
+            lineTypeConfig.keyBindings
+         )) {
+            // Normalize the name, in case it is an integer or the wrong case.
+            shortcutName = shortcutName.toString().toLowerCase()
+            // Check if this is the shortcut being pressed.
+            if (shortcutName === shortcutPressed.toLowerCase()) {
+               for (let type of lineTypes)
+                  if (type.name === lineTypeName) {
+                     selectedLineType = type
+                     boundTool = "draw"
+                  }
+               break
+            }
+         }
       }
       keyInfo = keyInfo
    }
@@ -3420,9 +3490,7 @@
             </div>
          {:else if projectFolder || !usingElectron}
             <div class="lineGrid">
-               {#each [...lineTypes].sort((a, b) => {
-                  return a.name < b.name ? -1 : 1
-               }) as line}
+               {#each orderedLineTypes as line}
                   <div
                      class="lineGridItem {line === selectedLineType
                         ? 'selected'
@@ -3617,7 +3685,7 @@
       position: absolute;
       top: 0;
       left: 0;
-      width: 287px;
+      width: 250px;
       height: 100%;
       background-color: rgb(193, 195, 199);
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
@@ -3690,7 +3758,7 @@
       overflow: visible;
    }
    .linePane {
-      min-height: 100px;
+      min-height: 150px;
       flex-grow: 1;
       overflow-x: hidden;
       overflow-y: scroll;
@@ -3763,15 +3831,16 @@
    .toolbox {
       z-index: 1;
       flex-shrink: 0;
+      display: flex;
+      justify-content: center;
       background-color: rgb(231, 234, 237);
-      /* box-shadow: 0px 0px 2px 1px #00000088 inset; */
       user-select: none;
       -webkit-user-select: none;
    }
    .toolButtons {
       display: grid;
       grid-template-rows: 53px 53px;
-      grid-template-columns: repeat(5, 53px);
+      grid-template-columns: repeat(4, 53px);
       gap: 3px;
       padding: 5px;
       filter: drop-shadow(0 0 2px rgb(0, 0, 0, 0.9));

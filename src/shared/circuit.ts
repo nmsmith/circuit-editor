@@ -213,6 +213,13 @@ export const tetherLineType: LineType = {
    attachToAll: true,
 }
 
+export type LineTypeConfig = {
+   sidebarOrder: string[]
+   keyBindings: {
+      [lineType: string | symbol]: string // a map from line type to key binding
+   }
+}
+
 export class SpecialAttachPoint extends Point {
    readonly object: Segment | SymbolInstance
    constructor(x: number, y: number, object: Segment | SymbolInstance) {
