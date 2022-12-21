@@ -1817,7 +1817,11 @@
                   segment.axis
                )
                segment.replaceWith(newSegment)
-               if (vertex instanceof Junction && vertex.edges().size === 2)
+               if (
+                  vertex instanceof Junction &&
+                  vertex.edges().size === 2 &&
+                  !vertex.host()
+               )
                   vertex.convertToCrossing(crossingMap)
                // Allow the user to move the unplugged segment around.
                continueDraw(newSegment, junction)
@@ -2923,7 +2927,7 @@
          thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
       }
       for (let junction of junctionsToConvert) {
-         if (junction.edges().size === 2)
+         if (junction.edges().size === 2 && !junction.host())
             junction.convertToCrossing(crossingMap)
       }
       // Tell Svelte all of these things could have changed.
