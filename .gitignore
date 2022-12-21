@@ -20,3 +20,6 @@ dist-web
 *.njsproj
 *.sln
 *.sw?
+
+# Save files
+*.json.gz

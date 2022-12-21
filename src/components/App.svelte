@@ -535,7 +535,7 @@
       if (usingElectron && projectFolder) {
          return "file://" + path.join(projectFolder, folderName, fileName)
       } else {
-         return `${folderName}/${fileName}`
+         return `project template/${folderName}/${fileName}`
       }
    }
    async function loadSymbols(
@@ -554,6 +554,15 @@
          )
       )
       return s
+   }
+   async function loadBuiltInGlyph(fileName: string): Promise<SymbolKind> {
+      return fetch(`${builtinGlyphFolderName}/${fileName}`)
+         .then((response) => response.text())
+         .then((text) => {
+            let kind = SymbolKind.new(fileName, text)
+            if (kind) return kind
+            else throw "Failed to load built-in symbol."
+         })
    }
    async function loadLineTypes(fileNames: string[]): Promise<Set<LineType>> {
       let s = new Set<LineType>()
@@ -718,16 +727,14 @@
                if (type.name === defaultLineType) selectedLineType = type
       })
    }
-   loadSymbols(builtinGlyphFolderName, [vertexMarkerFileName]).then((kinds) => {
-      vertexMarkerGlyph = [...kinds][0]
+   loadBuiltInGlyph(vertexMarkerFileName).then((glyph) => {
+      vertexMarkerGlyph = glyph
    })
-   loadSymbols(builtinGlyphFolderName, [crossingMarkerFileName]).then(
-      (kinds) => {
-         crossingMarkerGlyph = [...kinds][0]
-      }
-   )
-   loadSymbols(builtinGlyphFolderName, [attachMarkerFileName]).then((kinds) => {
-      attachMarkerGlyph = [...kinds][0]
+   loadBuiltInGlyph(crossingMarkerFileName).then((glyph) => {
+      crossingMarkerGlyph = glyph
+   })
+   loadBuiltInGlyph(attachMarkerFileName).then((glyph) => {
+      attachMarkerGlyph = glyph
    })
    let symbolLoadError = false
    let lineTypeLoadError = false
