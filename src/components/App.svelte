@@ -1211,9 +1211,12 @@
          if (v instanceof Junction) {
             // Find the appropriate glyph to display at the Junction.
             let glyph: string | undefined
-            let edgeTypes = [...v.edges()].map(([segment]) => segment.type)
+            let edgeTypes = [...v.edges()]
+               .map(([segment]) => segment.type)
+               .filter((type) => type !== tetherLineType)
             let host = v.host()
-            if (host instanceof Segment) edgeTypes.push(host.type, host.type)
+            if (host instanceof Segment && host.type !== tetherLineType)
+               edgeTypes.push(host.type, host.type)
             if (edgeTypes.length === 1) {
                glyph = edgeTypes[0].ending
             } else if (edgeTypes.length === 2) {
