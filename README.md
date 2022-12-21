@@ -193,6 +193,29 @@ Most meeting types can be specified in _either_ file of the line types involved.
 -  If a glyph is specified in both files, but they are different glyphs, then no glyph will be used.
 -  If a glyph is specified in neither file, then no glyph will be used.
 
+### Configuring line type display order and keyboard shortcuts
+
+An optional `config.json` file can be placed in the same folder as the line types to configure two things:
+
+-  The order in which the line types appear in the sidebar.
+-  Keyboard shortcuts for switching to each line type.
+
+Here is an example of what `config.json` might look like:
+
+```
+{
+   "sidebarOrder": ["tether", "hydraulic", "drain", "pilot"],
+   "keyBindings": {
+      "tether": "T",
+      "hydraulic": "1",
+      "drain": "2",
+      "pilot": "3"
+   }
+}
+```
+
+As before, a line type is referenced by its file name (omitting the `.json` file extension). A key binding can be specified by a letter A-Z, a number 0-9, or any of the codes on [this page](https://developer.mozilla.org/en-US/docs/Web/API/UI_Events/Keyboard_event_code_values).
+
 ### Glyphs
 
 A "glyph" is a small symbol that can be placed (automatically or manually) at the point where two lines meet. As described earlier, a glyph is specified by an SVG file placed in a particular subfolder within the project folder.
@@ -232,7 +255,7 @@ And a symbol can be positioned midway between two lines as follows:
 
 <img src="./user-guide-images/equal-spacing.png" width="400px">
 
-Here, a vertical tether has been drawn between the midpoint of a horizontal tether and the midpoint of the symbol. Once this has been done, the horizontal tether acts as if it has been frozen using the Freeze tool. This ensures that the alignment is preserved throughout subsequent operations. The tether can be "unfrozen" by deleting the tether attached to its midpoint.
+These pink dots are visible whenever the tether line type is selected. You can use them to align symbols and/or tethers. In this example, the bottom-midpoint of the symbol has been aligned with the midpoint of the horizontal tether by drawing a vertical tether between them. The horizontal tether will act as if it has been frozen using the Freeze tool for as long as the vertical tether remains attached to it. This ensures that the alignment is preserved throughout subsequent operations.
 
 ## Q&A
 
