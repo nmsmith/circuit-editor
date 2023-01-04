@@ -812,7 +812,6 @@
 
    let grabbedSymbol: { kind: SymbolKind; grabOffset: Vector } | null = null
 
-   let selectedLineType: null | LineType = null
    // The "boundTool" is the tool that will be used when no keyboard keys of
    // type "holdTool" are being pressed.
    let boundTool: Tool = "draw"
@@ -827,6 +826,28 @@
       canvasDownPosition: Point
       chainDrawFromEnd?: Vertex // Special field for the draw tool.
    } = null
+
+   let selectedLineType: null | LineType = null
+   let lineTypeToUse: null | LineType
+   $: {
+      // By default, use the selected line type.
+      lineTypeToUse = selectedLineType
+      // If beginning a draw operation at a vertex whose edges all have the
+      // same line type, use that line type instead.
+      let target = drawTarget(
+         toolBeingUsed ? toolBeingUsed.canvasDownPosition : mouseOnCanvas
+      )
+      if (toolToUse === "draw" && target && isVertex(target.object)) {
+         let typeNames = new Set(
+            [...target.object.edges()].map(([segment]) => segment.type.name)
+         )
+         if (typeNames.size === 1) {
+            let name = [...typeNames][0]
+            let type = [...lineTypes].filter((t) => t.name === name)[0]
+            lineTypeToUse = type
+         }
+      }
+   }
 
    let committedCameraPosition: Point = Point.zero // Position on the canvas.
    let cameraZoom: number = 1
@@ -1130,8 +1151,8 @@
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
-      ((!draw && selectedLineType === tetherLineType) ||
-         (draw && draw.segment.type === tetherLineType))
+      ((!draw && selectedLineType?.name === tetherLineType.name) ||
+         (draw && draw.segment.type.name === tetherLineType.name))
    type HighlightStyle = "touch" | "amass" | undefined
    type Section = Geometry.LineSegment<Point>
    type VertexGlyph = {
@@ -1786,7 +1807,7 @@
       pan = null
    }
    function beginDraw(dragVector: Vector) {
-      if (!toolBeingUsed || !selectedLineType) return
+      if (!toolBeingUsed || !lineTypeToUse) return
       let drawMode = selectedDrawMode()
       if (toolBeingUsed.chainDrawFromEnd) {
          // Start the draw operation at the endpoint of the previous
@@ -1821,7 +1842,7 @@
                snapAxes.filter((axis) => !avoidDrawAxes.has(axis))
             )
          }
-         newDraw(selectedLineType, end, drawAxis)
+         newDraw(lineTypeToUse, end, drawAxis)
          return
       }
       // Otherwise, start the draw operation at the closest attachable.
@@ -1862,13 +1883,13 @@
             continueDraw(move, jMove)
          } else {
             let junction = new Junction(attach.closestPart)
-            let meeting = selectedLineType.meeting?.[segment.type.name]
-            if (selectedLineType.attachToAll || meeting?.attaches) {
+            let meeting = lineTypeToUse.meeting?.[segment.type.name]
+            if (lineTypeToUse.attachToAll || meeting?.attaches) {
                junction.attachTo(segment) // attach to target (don't split)
             } else {
                segment.splitAt(junction) // split target, making a T-junction
             }
-            newDraw(selectedLineType, junction, regularDrawAxis)
+            newDraw(lineTypeToUse, junction, regularDrawAxis)
          }
       } else if (attach && isVertex(attach.object)) {
          let vertex = attach.object
@@ -1906,16 +1927,16 @@
                break
             }
          }
-         if (!continuedDraw) newDraw(selectedLineType, vertex, regularDrawAxis)
+         if (!continuedDraw) newDraw(lineTypeToUse, vertex, regularDrawAxis)
       } else if (attach?.object instanceof SpecialAttachPoint) {
          let attachPoint = attach.object
          // Begin drawing from the attachment point.
          let junction = new Junction(attachPoint)
          junction.attachTo(attachPoint.object)
-         newDraw(selectedLineType, junction, regularDrawAxis)
+         newDraw(lineTypeToUse, junction, regularDrawAxis)
       } else {
          newDraw(
-            selectedLineType,
+            lineTypeToUse,
             new Junction(toolBeingUsed.canvasDownPosition),
             regularDrawAxis
          )
@@ -1934,6 +1955,7 @@
       if (mode === "strafing") beginDrawStrafing()
       if (segment.isTether() && config.showTethers.state === "off")
          config.showTethers.state = "on"
+      selectedLineType = segment.type
    }
    function continueDraw(drawSegment: Segment, end: Junction) {
       let mode: DrawMode = selectedDrawMode()
@@ -1963,6 +1985,7 @@
       if (mode === "strafing") beginDrawStrafing()
       if (segment.isTether() && config.showTethers.state === "off")
          config.showTethers.state = "on"
+      selectedLineType = segment.type
    }
    function beginDrawStrafing() {
       if (!draw) return
@@ -3499,7 +3522,9 @@
             <div class="lineGrid">
                {#each orderedLineTypes as line}
                   <div
-                     class="lineGridItem {line === selectedLineType
+                     class="lineGridItem {line.name === lineTypeToUse?.name
+                        ? 'toUse'
+                        : line.name === selectedLineType?.name
                         ? 'selected'
                         : ''}"
                      on:click={() => {
@@ -3788,8 +3813,11 @@
       gap: 4px;
       font-weight: 400;
    }
-   .lineGridItem.selected {
+   .lineGridItem.toUse {
       background-color: white;
+   }
+   .lineGridItem.selected {
+      background-color: #999;
    }
    .lineSvg {
       height: 16px;
