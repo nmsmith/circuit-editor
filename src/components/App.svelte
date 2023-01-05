@@ -792,6 +792,12 @@
       history.timestamp += 1
       worker?.executeRedo()
    }
+   function executeTimeTravel(historyIndex: number) {
+      history.index = historyIndex
+      loadState(history.stack[history.index].state)
+      history.timestamp += 1
+      worker?.executeTimeTravel(historyIndex)
+   }
    async function autosave() {
       if (!projectFolder || !worker) return
       if (history.timestampOfLastSave === history.timestamp) return
@@ -3461,6 +3467,7 @@
                   class="historyPaneItem {i === history.index
                      ? 'selected'
                      : ''}"
+                  on:click={() => executeTimeTravel(i)}
                >
                   {description}
                </div>

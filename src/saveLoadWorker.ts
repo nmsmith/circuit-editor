@@ -48,6 +48,10 @@ const workerInterface = {
       if (history.index < lastIndex) ++history.index
       history.timestamp += 1
    },
+   executeTimeTravel(historyIndex: number) {
+      history.index = historyIndex
+      history.timestamp += 1
+   },
    clearHistory() {
       history = emptyHistory()
    },
