@@ -3441,12 +3441,7 @@
       </g>
    </svg>
 
-   <div
-      class="sidebar"
-      on:mouseup={() => {
-         grabbedSymbol = null
-      }}
-   >
+   <div class="left sidebar">
       <div class="topThings">
          <div class="projectPane">
             <button on:click={openProjectFolder}>Choose a project folder</button
@@ -3457,60 +3452,23 @@
                <div>No folder chosen.</div>
             {/if}
          </div>
-         <div class="paneTitle">Symbols</div>
+         <div class="paneTitle">History</div>
       </div>
-      <div class="symbolPane">
-         {#if symbolLoadError}
-            <div class="paneMessage">
-               Failed to find a "{symbolFolderName}" folder within the project
-               folder.
-            </div>
-         {:else if projectFolder || !usingElectron}
-            <div class="symbolGrid">
-               {#each [...symbols].sort((a, b) => {
-                  return a.fileName < b.fileName ? -1 : 1
-               }) as kind}
-                  <div
-                     class="symbolGridItem"
-                     on:mousedown={() => {
-                        grabbedSymbol = {
-                           kind,
-                           // Grab slightly above the center of the symbol. This
-                           // position works well when the symbol is rotated.
-                           grabOffset: new Vector(
-                              (cameraZoom * -kind.svgBox.width()) / 2,
-                              (cameraZoom * (-kind.svgBox.height() + 10)) / 2
-                           ),
-                        }
-                     }}
-                  >
-                     <div class="symbolName">
-                        {kind.fileName.replace(".svg", "")}
-                     </div>
-                     <svg
-                        class="symbolImage"
-                        viewBox="{kind.svgBox.x.low} {kind.svgBox.y
-                           .low} {kind.svgBox.width()} {kind.svgBox.height()}"
-                     >
-                        <use href="#{kind.fileName}" />
-                     </svg>
-                  </div>
-               {/each}
-            </div>
-         {:else}
-            <div class="paneMessage">
-               <p>
-                  When you open a project folder, your schematic symbols will be
-                  displayed here.
-               </p>
-               <div class="spacer" />
-               <p>
-                  The SVG files for each symbol must be placed in a folder named
-                  "{symbolFolderName}" within the project folder.
-               </p>
-            </div>
-         {/if}
+      <div class="historyPane">
+         <div>
+            {#each history.stack as { description }, i}
+               <div
+                  class="historyPaneItem {i === history.index
+                     ? 'selected'
+                     : ''}"
+               >
+                  {description}
+               </div>
+            {/each}
+         </div>
       </div>
+      <div class="paneTitle inspectorPaneTitle">Inspector</div>
+      <div class="inspectorPane" />
       <div class="paneTitle linePaneTitle">Lines</div>
       <div class="linePane">
          {#if lineTypeLoadError}
@@ -3611,6 +3569,66 @@
          </div>
       </div>
    </div>
+   <div
+      class="right sidebar"
+      on:mouseup={() => {
+         grabbedSymbol = null
+      }}
+   >
+      <div class="paneTitle symbolPaneTitle">Symbols</div>
+      <div class="symbolPane">
+         {#if symbolLoadError}
+            <div class="paneMessage">
+               Failed to find a "{symbolFolderName}" folder within the project
+               folder.
+            </div>
+         {:else if projectFolder || !usingElectron}
+            <div class="symbolGrid">
+               {#each [...symbols].sort((a, b) => {
+                  return a.fileName < b.fileName ? -1 : 1
+               }) as kind}
+                  <div
+                     class="symbolGridItem"
+                     on:mousedown={() => {
+                        grabbedSymbol = {
+                           kind,
+                           // Grab slightly above the center of the symbol. This
+                           // position works well when the symbol is rotated.
+                           grabOffset: new Vector(
+                              (cameraZoom * -kind.svgBox.width()) / 2,
+                              (cameraZoom * (-kind.svgBox.height() + 10)) / 2
+                           ),
+                        }
+                     }}
+                  >
+                     <div class="symbolName">
+                        {kind.fileName.replace(".svg", "")}
+                     </div>
+                     <svg
+                        class="symbolImage"
+                        viewBox="{kind.svgBox.x.low} {kind.svgBox.y
+                           .low} {kind.svgBox.width()} {kind.svgBox.height()}"
+                     >
+                        <use href="#{kind.fileName}" />
+                     </svg>
+                  </div>
+               {/each}
+            </div>
+         {:else}
+            <div class="paneMessage">
+               <p>
+                  When you open a project folder, your schematic symbols will be
+                  displayed here.
+               </p>
+               <div class="spacer" />
+               <p>
+                  The SVG files for each symbol must be placed in a folder named
+                  "{symbolFolderName}" within the project folder.
+               </p>
+            </div>
+         {/if}
+      </div>
+   </div>
    {#if grabbedSymbol}
       <svg
          class="grabbedSymbolImage"
@@ -3625,19 +3643,6 @@
          <use href="#{grabbedSymbol.kind.fileName}" /></svg
       >
    {/if}
-   <div class="historyPane">
-      <div>
-         {#each history.stack as { description }, i}
-            <div
-               style="padding: 2px; {i === history.index
-                  ? 'background: white;'
-                  : ''}"
-            >
-               {description}
-            </div>
-         {/each}
-      </div>
-   </div>
 </div>
 
 <div
@@ -3714,30 +3719,43 @@
       height: 8px;
    }
    .sidebar {
+      background-color: rgb(201, 203, 207);
+      box-shadow: 0 0 25px 0 rgb(0, 0, 0, 0.12), 0 0 4px 0 rgb(0, 0, 0, 0.12);
+      display: flex;
+      flex-direction: column;
+   }
+   .left.sidebar {
       position: absolute;
       top: 0;
       left: 0;
       width: 250px;
       height: 100%;
-      background-color: rgb(193, 195, 199);
-      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
-      display: flex;
-      flex-direction: column;
+   }
+   .right.sidebar {
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 180px;
+      height: 100%;
    }
    .topThings,
    .linePaneTitle,
+   .inspectorPaneTitle,
+   .symbolPaneTitle,
    .configPane {
       box-shadow: 0 0 3px 1px rgb(0, 0, 0, 0.3);
    }
    .topThings,
-   .linePaneTitle {
+   .linePaneTitle,
+   .inspectorPaneTitle,
+   .symbolPaneTitle {
       z-index: 1;
    }
    .paneTitle {
       flex-shrink: 0;
-      padding: 5px 4px 3px 4px;
-      font-size: 17px;
-      font-weight: 560;
+      padding: 4px;
+      font-size: 16px;
+      font-weight: 680;
       background-color: rgb(231, 234, 237);
       user-select: none;
       -webkit-user-select: none;
@@ -3750,6 +3768,25 @@
       gap: 5px;
       background-color: rgb(231, 234, 237);
       border-bottom: 1px solid grey;
+   }
+   .historyPane {
+      height: 150px;
+      padding: 1px 0;
+      overflow-y: scroll;
+      display: flex;
+      flex-direction: column-reverse; /* keeps scroll bar at bottom of content*/
+      user-select: none;
+      -webkit-user-select: none;
+   }
+   .historyPaneItem {
+      padding: 3px 5px;
+   }
+   .historyPaneItem.selected {
+      background-color: white;
+   }
+   .inspectorPane {
+      min-height: 150px;
+      flex-grow: 1;
    }
    .symbolPane {
       min-height: 100px;
@@ -3770,7 +3807,7 @@
    .symbolGridItem {
       /* height: 80px; */
       padding: 5px;
-      background-color: rgb(193, 195, 199);
+      background-color: rgb(201, 203, 207);
       display: flex;
       flex-direction: column;
       align-items: flex-start;
@@ -3791,6 +3828,7 @@
    }
    .linePane {
       min-height: 150px;
+      padding: 1px 0;
       flex-grow: 1;
       overflow-x: hidden;
       overflow-y: scroll;
@@ -3798,18 +3836,13 @@
    .lineGrid {
       display: flex;
       flex-direction: column;
-      gap: 1px;
       user-select: none;
       -webkit-user-select: none;
    }
    .lineGridItem {
-      padding-left: 5px;
-      padding-right: 5px;
-      padding-top: 4px;
-      padding-bottom: 4px;
+      padding: 4px 5px;
       display: flex;
       flex-direction: row;
-      align-items: center;
       gap: 4px;
       font-weight: 400;
    }
@@ -3928,20 +3961,5 @@
             )
             10 0,
          default;
-   }
-   .historyPane {
-      position: absolute;
-      top: 0;
-      right: 0;
-      width: 105px;
-      height: 250px;
-      background-color: rgb(193, 195, 199);
-      box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.32);
-      padding: 4px;
-      overflow-y: scroll;
-      display: flex;
-      flex-direction: column-reverse; /* keeps scroll bar at bottom of content*/
-      user-select: none;
-      -webkit-user-select: none;
    }
 </style>
