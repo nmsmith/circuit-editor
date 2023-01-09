@@ -19,6 +19,7 @@
       tetherLineType,
       SpecialAttachPoint,
       LineTypeConfig,
+      VertexGlyphKind,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -738,6 +739,16 @@
    })
    let symbolLoadError = false
    let lineTypeLoadError = false
+   function findVertexGlyph(
+      fileName: string | null | undefined
+   ): SymbolKind | undefined {
+      for (let g of vertexGlyphs) if (g.fileName === fileName) return g
+   }
+   function findCrossingGlyph(
+      fileName: string | null | undefined
+   ): SymbolKind | undefined {
+      for (let g of crossingGlyphs) if (g.fileName === fileName) return g
+   }
 
    // Initialize the Web Worker that handles saving and loading.
    let worker: null | Comlink.Remote<WorkerInterface>
@@ -1155,6 +1166,97 @@
          }
       }
    }
+   type GlyphKind = "auto" | null | SymbolKind
+   let vertexGlyphKinds: GlyphKind[]
+   $: {
+      vertexGlyphKinds = ["auto", null, ...vertexGlyphs]
+   }
+   let inspectorItemSummary: string
+   let inspector:
+      | {
+           mode: "vertex"
+           items: Set<Vertex>
+           glyphs: Set<GlyphKind>
+        }
+      | {
+           mode: "crossing"
+           items: Set<Crossing>
+           glyphs: Set<GlyphKind>
+        }
+      | { mode: null }
+   $: {
+      inspectorItemSummary = ""
+      inspector = { mode: null }
+      let items = [...amassed.items]
+      let $vertices = items.filter((i) => isVertex(i)) as Vertex[]
+      let $crossings = items.filter((i) => i instanceof Crossing) as Crossing[]
+      let $segments = items.filter((i) => i instanceof Segment) as Segment[]
+      let $symbols = items.filter(
+         (i) => i instanceof SymbolInstance
+      ) as SymbolInstance[]
+      let vertexText =
+         $vertices.length > 1 ? `${$vertices.length} vertices` : "1 vertex"
+      let crossingText =
+         $crossings.length > 1 ? `${$crossings.length} crossings` : "1 crossing"
+      let segmentText =
+         $segments.length > 1 ? `${$segments.length} segments` : "1 segment"
+      let symbolText =
+         $symbols.length > 1 ? `${$symbols.length} symbols` : "1 symbol"
+      let data = [
+         [$vertices.length, vertexText] as const,
+         [$crossings.length, crossingText] as const,
+         [$segments.length, segmentText] as const,
+         [$symbols.length, symbolText] as const,
+      ]
+         .filter((d) => d[0] > 0)
+         .map((d) => d[1])
+      if (data.length === 0) {
+         inspectorItemSummary = "No items amassed."
+      } else {
+         inspectorItemSummary = data[0]
+         for (let i = 1; i < data.length; ++i) {
+            inspectorItemSummary += `, ${data[i]}`
+         }
+         inspectorItemSummary += "."
+      }
+      if (data.length === 1) {
+         // Show configuration options specific to the type of item selected.
+         if ($vertices.length > 0) {
+            let glyphs = new Set<GlyphKind>(
+               $vertices.map((v) =>
+                  v.glyph.type === "auto"
+                     ? "auto"
+                     : v.glyph.glyph
+                     ? findVertexGlyph(v.glyph.glyph) || null
+                     : null
+               )
+            )
+            inspector = { mode: "vertex", items: new Set($vertices), glyphs }
+         }
+      } else if (data.length > 1) {
+         // Show generic configuration options.
+      }
+   }
+   function setVertexGlyphs(kind: GlyphKind) {
+      if (inspector.mode !== "vertex") return
+      let glyph: VertexGlyphKind
+      if (kind === "auto") {
+         glyph = { type: "auto" }
+      } else if (kind === null) {
+         glyph = { type: "manual", glyph: null }
+      } else {
+         glyph = { type: "manual", glyph: kind.fileName }
+      }
+      for (let vertex of inspector.items) vertex.glyph = glyph
+      commitState(
+         inspector.items.size > 1
+            ? "change vertex glyphs"
+            : "change vertex glyph"
+      )
+      Junction.s = Junction.s
+      Port.s = Port.s
+      amassed.items = amassed.items
+   }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
       ((!draw && selectedLineType?.name === tetherLineType.name) ||
@@ -1199,10 +1301,8 @@
             // now. If "other" should render, we wait until the iteration of the
             // outer loop when "other" takes on the role of "segment".
             let autoGlyph = segment.type.meeting?.[other.type.name].crossing
-            let autoGlyphSymbol = [...crossingGlyphs].find(
-               (k) => k.fileName === autoGlyph
-            )
-            let cross = segment.crossingTypes.read(other)
+            let autoGlyphSymbol = findCrossingGlyph(autoGlyph)
+            let cross = segment.crossingKinds.read(other)
             let render: null | {
                glyph: SymbolKind
                facing: "left" | "right"
@@ -1218,9 +1318,7 @@
                }
             } else if (cross.type === "manual") {
                let manualGlyph = cross.glyph
-               let glyphSymbol = [...crossingGlyphs].find(
-                  (k) => k.fileName === manualGlyph
-               )
+               let glyphSymbol = findCrossingGlyph(manualGlyph)
                if (glyphSymbol) {
                   render = { glyph: glyphSymbol, facing: cross.facing }
                }
@@ -1290,7 +1388,31 @@
       }
       // Determine what vertex glyphs need to be drawn.
       for (let v of allVertices()) {
-         if (v instanceof Junction) {
+         if (v.glyph.type === "manual") {
+            let glyph = findVertexGlyph(v.glyph.glyph)
+            if (glyph) {
+               glyphsToDraw.add({
+                  type: "vertex glyph",
+                  vertex: v,
+                  glyph,
+                  position: v,
+                  style: styleOf(v),
+               })
+            } else if (
+               v instanceof Junction &&
+               (touchLight.has(v) || amassLight.has(v)) &&
+               vertexMarkerGlyph
+            ) {
+               // Mark the Junction to make it clear that it exists.
+               glyphsToDraw.add({
+                  type: "vertex glyph",
+                  vertex: v,
+                  glyph: vertexMarkerGlyph,
+                  position: v,
+                  style: styleOf(v),
+               })
+            }
+         } else if (v instanceof Junction) {
             // Find the appropriate glyph to display at the Junction.
             let glyph: string | undefined
             let edgeTypes = [...v.edges()]
@@ -1371,7 +1493,7 @@
                   glyph = undefined
                }
             }
-            let glyphSymbol = [...vertexGlyphs].find((k) => k.fileName == glyph)
+            let glyphSymbol = findVertexGlyph(glyph)
             if (glyph && glyphSymbol) {
                glyphsToDraw.add({
                   type: "vertex glyph",
@@ -3458,8 +3580,48 @@
                <div>No folder chosen.</div>
             {/if}
          </div>
-         <div class="paneTitle">History</div>
+         <div class="paneTitle">Inspector</div>
       </div>
+      <div class="inspectorPane">
+         <div class="inspectorItemSummary">{inspectorItemSummary}</div>
+         {#if inspector.mode === "vertex"}
+            <div class="spacer" />
+            <div class="inspectorSubtitle">Glyph</div>
+            <div class="inspectorGlyphSelectionBox">
+               {#each vertexGlyphKinds as kind}
+                  {@const kindText =
+                     kind === "auto"
+                        ? "auto"
+                        : kind === null
+                        ? "nothing"
+                        : kind.fileName.replace(".svg", "")}
+                  {@const highlightClass = inspector.glyphs.has(kind)
+                     ? inspector.glyphs.size === 1
+                        ? "uniqueHighlight"
+                        : "multiHighlight"
+                     : ""}
+                  <div
+                     class="inspectorGlyphSelectionItem {highlightClass}"
+                     on:click={() => setVertexGlyphs(kind)}
+                  >
+                     <div class="inspectorGlyphLabel">{kindText}</div>
+                     {#if kind instanceof SymbolKind}
+                        <svg
+                           class="inspectorGlyphImage"
+                           viewBox="{kind.svgBox.x.low} {kind.svgBox.y
+                              .low} {kind.svgBox.width()} {kind.svgBox.height()}"
+                        >
+                           <use href="#{kind.fileName}" />
+                        </svg>
+                     {:else}
+                        <div class="inspectorGlyphImage" />
+                     {/if}
+                  </div>
+               {/each}
+            </div>
+         {/if}
+      </div>
+      <!-- <div class="paneTitle">History</div>
       <div class="historyPane">
          <div>
             {#each history.stack as { description }, i}
@@ -3473,9 +3635,7 @@
                </div>
             {/each}
          </div>
-      </div>
-      <div class="paneTitle inspectorPaneTitle">Inspector</div>
-      <div class="inspectorPane" />
+      </div> -->
       <div class="paneTitle linePaneTitle">Lines</div>
       <div class="linePane">
          {#if lineTypeLoadError}
@@ -3747,14 +3907,12 @@
    }
    .topThings,
    .linePaneTitle,
-   .inspectorPaneTitle,
    .symbolPaneTitle,
    .configPane {
-      box-shadow: 0 0 3px 1px rgb(0, 0, 0, 0.3);
+      box-shadow: 0 1px 3px 0 rgb(0, 0, 0, 0.25);
    }
    .topThings,
    .linePaneTitle,
-   .inspectorPaneTitle,
    .symbolPaneTitle {
       z-index: 1;
    }
@@ -3794,6 +3952,50 @@
    .inspectorPane {
       min-height: 150px;
       flex-grow: 1;
+      padding: 5px 4px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      user-select: none;
+      -webkit-user-select: none;
+   }
+   .inspectorItemSummary {
+      font-weight: 550;
+   }
+   .spacer {
+      height: 3px;
+   }
+   .inspectorSubtitle {
+      font-weight: 640;
+      margin: 0 6px;
+   }
+   .inspectorGlyphSelectionBox {
+      /* box-shadow: inset 0 1px 3px 0 rgba(0, 0, 0, 0.4); */
+      border: 1px solid grey;
+      margin: 0 6px;
+      /* padding: 3px 0; */
+   }
+   .inspectorGlyphSelectionItem {
+      padding: 3px 5px;
+      display: flex;
+      flex-direction: row;
+      align-items: center;
+      gap: 7px;
+   }
+   .inspectorGlyphImage {
+      width: 12px;
+      min-height: 12px;
+   }
+   .inspectorGlyphLabel {
+      flex-grow: 1;
+   }
+   .inspectorGlyphSelectionItem.uniqueHighlight,
+   .lineGridItem.toUse {
+      background-color: white;
+   }
+   .inspectorGlyphSelectionItem.multiHighlight,
+   .lineGridItem.selected {
+      background-color: #999;
    }
    .symbolPane {
       min-height: 100px;
@@ -3852,12 +4054,6 @@
       flex-direction: row;
       gap: 4px;
       font-weight: 400;
-   }
-   .lineGridItem.toUse {
-      background-color: white;
-   }
-   .lineGridItem.selected {
-      background-color: #999;
    }
    .lineSvg {
       height: 16px;

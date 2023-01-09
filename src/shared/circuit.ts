@@ -16,10 +16,9 @@ import { DefaultMap, DefaultWeakMap, ToggleSet } from "./utilities"
 let nextObjectID = 0
 
 export type Vertex = Junction | Port
-export type VertexGlyph =
-   | { type: "none" }
+export type VertexGlyphKind =
    | { type: "auto" }
-   | { type: "manual"; glyph: string }
+   | { type: "manual"; glyph: string | null }
 export function isVertex(thing: any): thing is Vertex {
    return thing instanceof Junction || thing instanceof Port
 }
@@ -33,10 +32,10 @@ export type Edge = [Segment, Vertex]
 export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
    readonly objectID: number // for serialization
-   glyph: VertexGlyph
+   glyph: VertexGlyphKind
    private readonly edges_ = new Set<Edge>()
    private host_: Segment | SymbolInstance | null = null
-   constructor(point: Point, glyph?: VertexGlyph) {
+   constructor(point: Point, glyph?: VertexGlyphKind) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
       this.glyph = glyph ? glyph : { type: "auto" }
@@ -130,9 +129,9 @@ export class Junction extends Point implements Deletable {
          // Merge the crossing types of the old segments into the new one.
          let seg0Crossings = currentCrossings.read(segs[0])
          for (let s of Segment.s) {
-            let type = segs[seg0Crossings.has(s) ? 0 : 1].crossingTypes.read(s)
-            mergedSegment.crossingTypes.set(s, type)
-            s.crossingTypes.set(mergedSegment, type)
+            let type = segs[seg0Crossings.has(s) ? 0 : 1].crossingKinds.read(s)
+            mergedSegment.crossingKinds.set(s, type)
+            s.crossingKinds.set(mergedSegment, type)
          }
          // Get rid of the old segments.
          segs[0].delete()
@@ -155,7 +154,7 @@ export class Port extends Point {
    readonly objectID: number // for serialization
    readonly symbol: SymbolInstance
    readonly kind: PortKind
-   glyph: VertexGlyph
+   glyph: VertexGlyphKind
    private readonly edges_ = new Set<Edge>()
    constructor(symbol: SymbolInstance, kind: PortKind, position: Point) {
       super(position.x, position.y)
@@ -234,9 +233,11 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    type: LineType
    attachments = new Set<Junction>() // should only be modified from Junction class
    isFrozen = false
-   readonly crossingTypes = new DefaultWeakMap<Segment, CrossingType>(() => {
-      return { type: "auto" }
-   })
+   readonly crossingKinds = new DefaultWeakMap<Segment, CrossingGlyphKind>(
+      () => {
+         return { type: "auto" }
+      }
+   )
    private readonly edgeS: Edge
    private readonly edgeE: Edge
    constructor(type: LineType, start: Vertex, end: Vertex, axis: Axis) {
@@ -297,8 +298,8 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
          }
          // Copy the crossing types associated with this segment.
          for (let s of Segment.s) {
-            s.crossingTypes.set(newSegment, s.crossingTypes.read(this))
-            newSegment.crossingTypes.set(s, this.crossingTypes.read(s))
+            s.crossingKinds.set(newSegment, s.crossingKinds.read(this))
+            newSegment.crossingKinds.set(s, this.crossingKinds.read(s))
          }
       }
       // Migrate each attachment to the segment that it is closest to.
@@ -325,10 +326,9 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    }
 }
 
-export type CrossingType =
-   | { type: "none" }
+export type CrossingGlyphKind =
    | { type: "auto" }
-   | { type: "manual"; glyph: string; facing: "left" | "right" }
+   | { type: "manual"; glyph: string | null; facing: "left" | "right" }
 export class Crossing extends Geometry.LineSegmentCrossing<Segment> {}
 export function convertToJunction(crossing: Crossing) {
    let cutPoint = new Junction(crossing.point)
@@ -634,14 +634,14 @@ groups.add(amassed)
 
 type JunctionJSON = {
    objectID: number
-   glyph: VertexGlyph
+   glyph: VertexGlyphKind
    position: { x: number; y: number }
 }
 
 type PortJSON = {
    objectID: number
    svgID: string // represents a PortKind
-   glyph: VertexGlyph
+   glyph: VertexGlyphKind
 }
 
 type SegmentJSON = {
@@ -649,7 +649,7 @@ type SegmentJSON = {
    type: string // must be a LineType.name
    attachments?: number[]
    isFrozen: boolean
-   crossingTypes: { segmentID: number; crossing: CrossingType }[]
+   crossingKinds: { segmentID: number; crossing: CrossingGlyphKind }[]
    startID: number
    endID: number
    axis: { x: number; y: number }
@@ -698,11 +698,11 @@ export function saveToJSON(): CircuitJSON {
       }
    })
    let segments = [...Segment.s].map((s) => {
-      let crossingTypes = []
+      let crossingKinds = []
       for (let other of Segment.s) {
-         let crossing = s.crossingTypes.read(other)
+         let crossing = s.crossingKinds.read(other)
          if (crossing.type !== "auto") {
-            crossingTypes.push({ segmentID: other.objectID, crossing })
+            crossingKinds.push({ segmentID: other.objectID, crossing })
          }
       }
       return {
@@ -710,7 +710,7 @@ export function saveToJSON(): CircuitJSON {
          type: s.type.name,
          attachments: [...s.attachments].map((j) => j.objectID),
          isFrozen: s.isFrozen,
-         crossingTypes,
+         crossingKinds,
          startID: s.start.objectID,
          endID: s.end.objectID,
          axis: { x: s.axis.x, y: s.axis.y },
@@ -854,10 +854,10 @@ export function loadFromJSON(
    circuit.segments.forEach((s) => {
       let s1 = segmentMap.get(s.objectID)
       if (!s1) return // Segment may have failed to load.
-      for (let crossing of s.crossingTypes) {
+      for (let crossing of s.crossingKinds) {
          let s2 = segmentMap.get(crossing.segmentID)
          if (!s2) continue // Segment may have failed to load.
-         s1.crossingTypes.set(s2, crossing.crossing)
+         s1.crossingKinds.set(s2, crossing.crossing)
       }
    })
    circuit.groups.forEach((g) => {
