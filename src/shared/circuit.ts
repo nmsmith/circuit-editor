@@ -4,7 +4,6 @@ import {
    Vector,
    Point,
    Rotation,
-   Direction,
    Axis,
    Range2D,
    Rectangle,
@@ -538,8 +537,13 @@ export class SymbolInstance extends Rectangle implements Deletable {
    specialAttachPoints: SpecialAttachPoint[] = []
    attachments = new Set<Junction>() // should only be modified from Junction class
 
-   constructor(kind: SymbolKind, position: Point, rotation: Rotation) {
-      super(position, rotation, kind.collisionBox)
+   constructor(
+      kind: SymbolKind,
+      position: Point,
+      rotation: Rotation = Rotation.zero,
+      scale: Vector = new Vector(1, 1)
+   ) {
+      super(kind.collisionBox, position, rotation, scale)
       this.objectID = nextObjectID++
       this.instanceID = ":" + SymbolInstance.nextInstanceID++
       this.kind = kind
@@ -606,7 +610,9 @@ export class SymbolInstance extends Rectangle implements Deletable {
       ;(this.position as Point) = point
       let translate = `translate(${point.x} ${
          point.y
-      }) rotate(${this.rotation().toDegrees()})`
+      }) rotate(${this.rotation.toDegrees()}) scale(${this.scale.x}, ${
+         this.scale.y
+      })`
       this.image.setAttribute("transform", translate)
       this.highlight.setAttribute("transform", translate)
       for (let [i, port] of this.ports.entries()) {
@@ -622,8 +628,13 @@ export class SymbolInstance extends Rectangle implements Deletable {
       this.moveTo(this.position.displacedBy(displacement))
    }
    rotateAround(point: Point, rotation: Rotation) {
-      ;(this.direction as Direction) = this.direction.rotatedBy(rotation)
+      ;(this.rotation as Rotation) = this.rotation.add(rotation)
       this.moveTo(this.position.rotatedAround(point, rotation))
+   }
+   flip() {
+      let offset = new Vector(this.kind.svgBox.width() * this.scale.x, 0)
+      ;(this.scale as Vector) = new Vector(-this.scale.x, this.scale.y)
+      this.moveBy(offset.rotatedBy(this.rotation))
    }
    svgCorners(): Point[] {
       let { x, y } = this.kind.svgBox
@@ -691,7 +702,8 @@ type SymbolJSON = {
    attachments?: number[]
    // Rectangle data
    position: { x: number; y: number }
-   direction: { x: number; y: number }
+   rotation: { x: number; y: number }
+   scale: { x: number; y: number }
 }
 
 type GroupItem =
@@ -754,7 +766,8 @@ export function saveToJSON(): CircuitJSON {
          }),
          attachments: [...s.attachments].map((j) => j.objectID),
          position: { x: s.position.x, y: s.position.y },
-         direction: { x: s.direction.x, y: s.direction.y },
+         rotation: { x: s.rotation.x, y: s.rotation.y },
+         scale: { x: s.scale.x, y: s.scale.y },
       }
    })
    let groups_: GroupJSON[] = [...groups].map((g) => {
@@ -803,13 +816,11 @@ export function loadFromJSON(
       let kind = symbolKinds.get(s.fileName)
       if (kind) {
          // Load the symbol.
-         let direction = Direction.fromVector(
-            new Vector(s.direction.x, s.direction.y)
-         ) as Direction
          let newSymbol = new SymbolInstance(
             kind,
             new Point(s.position.x, s.position.y),
-            direction.rotationFrom(Rectangle.defaultDirection())
+            new Rotation(s.rotation.x, s.rotation.y),
+            new Vector(s.scale.x, s.scale.y)
          )
          symbolMap.set(s.objectID, newSymbol)
          // Load the state of the symbol's ports.

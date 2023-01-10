@@ -46,7 +46,6 @@
       overflow-y: scroll;
       /* box-shadow: inset 0 1px 3px 0 rgba(0, 0, 0, 0.4); */
       border: 1px solid grey;
-      margin: 0 6px;
       /* padding: 3px 0; */
    }
    .glyphSelectionItem {

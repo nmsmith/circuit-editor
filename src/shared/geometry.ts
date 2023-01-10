@@ -54,8 +54,12 @@ export class Vector {
    length(): number {
       return Math.sqrt(this.sqLength())
    }
-   scaledBy(factor: number): Vector {
-      return new Vector(factor * this.x, factor * this.y)
+   scaledBy(factor: number | Vector): Vector {
+      if (factor instanceof Vector) {
+         return new Vector(factor.x * this.x, factor.y * this.y)
+      } else {
+         return new Vector(factor * this.x, factor * this.y)
+      }
    }
    direction(): Direction | undefined {
       return Direction.fromVector(this)
@@ -214,7 +218,7 @@ export class Rotation {
    static readonly zero = this.fromRadians(0)
    static readonly halfTurn = this.fromRadians(0.5 * tau)
 
-   protected constructor(x: number, y: number) {
+   constructor(x: number, y: number) {
       this.x = x
       this.y = y
    }
@@ -273,7 +277,7 @@ export class Direction extends Vector {
    rotationFrom(dir: Direction): Rotation {
       return this.rotationFromPositiveX().sub(dir.rotationFromPositiveX())
    }
-   rotatedBy(rotation: Rotation): Direction {
+   override rotatedBy(rotation: Rotation): Direction {
       let r = this.rotationFromPositiveX().add(rotation)
       return new Direction(r.x, r.y)
    }
@@ -323,6 +327,9 @@ export class Axis extends Vector {
    }
    negDirection(): Direction {
       return Direction.fromVector(this.scaledBy(-1)) as Direction
+   }
+   override rotatedBy(rotation: Rotation): Axis {
+      return Axis.fromVector(super.rotatedBy(rotation)) as Axis
    }
 }
 
@@ -558,12 +565,12 @@ export class Range2D {
          return (
             this.contains(object.start) ||
             this.contains(object.end) ||
-            new Rectangle(Point.zero, Rotation.zero, this)
+            new Rectangle(this, Point.zero)
                .sides()
                .some((side) => object.intersection(side))
          )
       } else {
-         let mySides = new Rectangle(Point.zero, Rotation.zero, this).sides()
+         let mySides = new Rectangle(this, Point.zero).sides()
          return (
             object.corners().some((corner) => this.contains(corner)) ||
             this.corners().some((corner) => object.contains(corner)) ||
@@ -593,31 +600,39 @@ export class Range2D {
 }
 
 export class Rectangle extends Object2D {
-   readonly position: Point
-   readonly direction: Direction
    readonly range: Range2D
-   constructor(position: Point, rotation: Rotation, range: Range2D) {
+   // The range of the rectangle is transformed by the following three
+   // transformations, from top to bottom, yielding its world-space coordinates.
+   readonly scale: Vector
+   readonly rotation: Rotation
+   readonly position: Point
+   constructor(
+      range: Range2D,
+      position: Point,
+      rotation: Rotation = Rotation.zero,
+      scale: Vector = new Vector(1, 1)
+   ) {
       super()
-      this.position = position
-      this.direction = Rectangle.defaultDirection().rotatedBy(rotation)
       this.range = range
-   }
-   static defaultDirection(): Direction {
-      return Direction.positiveX
-   }
-   protected rotation(): Rotation {
-      return this.direction.rotationFrom(Rectangle.defaultDirection())
+      this.position = position
+      this.rotation = rotation
+      this.scale = scale
    }
    toRectCoordinates(point: Point): Point {
+      let inverseScale = new Vector(1 / this.scale.x, 1 / this.scale.y)
       return Point.zero.displacedBy(
          point
             .displacementFrom(this.position)
-            .rotatedBy(this.rotation().scaledBy(-1))
+            .rotatedBy(this.rotation.scaledBy(-1))
+            .scaledBy(inverseScale)
       )
    }
    fromRectCoordinates(point: Point): Point {
       return this.position.displacedBy(
-         point.displacementFrom(Point.zero).rotatedBy(this.rotation())
+         point
+            .displacementFrom(Point.zero)
+            .scaledBy(this.scale)
+            .rotatedBy(this.rotation)
       )
    }
    partClosestTo(point: Point): Point {

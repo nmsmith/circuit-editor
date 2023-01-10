@@ -350,13 +350,13 @@
       for (let s of SymbolInstance.s) positions.set(s, s.position.clone())
       return positions
    }
-   function copySymbolDirections(): DefaultMap<SymbolInstance, Direction> {
-      let directions = new DefaultMap<SymbolInstance, Direction>(
-         () => Direction.positiveX
+   function copySymbolRotations(): DefaultMap<SymbolInstance, Rotation> {
+      let rotations = new DefaultMap<SymbolInstance, Rotation>(
+         () => Rotation.zero
       )
       for (let symbol of SymbolInstance.s)
-         directions.set(symbol, symbol.direction)
-      return directions
+         rotations.set(symbol, symbol.rotation)
+      return rotations
    }
    // Returns the "shadow" each circuit element casts onto the given vector.
    // Only circuit elements parallel or orthogonal to the vector are considered.
@@ -394,7 +394,7 @@
             )
       }
       for (let symbol of SymbolInstance.s) {
-         let symbolAxis = Axis.fromDirection(symbol.direction)
+         let symbolAxis = Axis.horizontal.rotatedBy(symbol.rotation)
          if (axesConsidered.includes(symbolAxis))
             ranges.set(symbol, rangeAlong(vector, symbol))
       }
@@ -965,7 +965,7 @@
       affectedSegments: Set<Segment> // segments that may be altered by the warp
       rigidSegments: Set<Segment> //segments whose rigidity affects the movement
       originalPositions: DefaultMap<Movable, Point>
-      originalDirections: DefaultMap<SymbolInstance, Direction>
+      originalRotations: DefaultMap<SymbolInstance, Rotation>
       start: Point
    }
    let amassRect: null | {
@@ -1189,6 +1189,7 @@
            crossings: Set<Crossing>
            glyphs: Set<GlyphKind>
         }
+      | { mode: "symbol"; symbols: Set<SymbolInstance>; canFlip: boolean }
       | { mode: null }
    $: {
       inspectorItemSummary = ""
@@ -1255,6 +1256,9 @@
                crossings: new Set($crossings),
                glyphs,
             }
+         } else if ($symbols.length > 0) {
+            let canFlip = $symbols.every((symbol) => symbol.edges().size === 0)
+            inspector = { mode: "symbol", symbols: new Set($symbols), canFlip }
          }
       } else if (data.length > 1) {
          // Show generic configuration options.
@@ -1378,6 +1382,16 @@
             : "rotate crossing glyph"
       )
       Segment.s = Segment.s
+   }
+   function flipSymbols() {
+      if (inspector.mode !== "symbol") return
+      for (let symbol of inspector.symbols) symbol.flip()
+      commitState("flip")
+      SymbolInstance.s = SymbolInstance.s
+   }
+   function sendSymbolsToBack() {
+   }
+   function bringSymbolsToFront() {
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
@@ -2026,7 +2040,7 @@
       let spawnPosition = mouseOnCanvas.displacedBy(
          grabOffset.scaledBy(1 / cameraZoom)
       )
-      let symbol = new SymbolInstance(kind, spawnPosition, Rotation.zero)
+      let symbol = new SymbolInstance(kind, spawnPosition)
       toolBeingUsed = { tool: "warp", canvasDownPosition: mouseOnCanvas }
       beginWarp(symbol, mouseOnCanvas)
    }
@@ -3004,7 +3018,7 @@
          }
          // Consider the intrinsic axis of Symbols.
          if (movable instanceof SymbolInstance)
-            selectedAxes.add(Axis.fromDirection(movable.direction))
+            selectedAxes.add(Axis.horizontal.rotatedBy(movable.rotation))
       }
       let keyRotations = new Set<Rotation>()
       for (let axis of selectedAxes) {
@@ -3030,7 +3044,7 @@
          affectedSegments,
          rigidSegments,
          originalPositions: copyPositions(),
-         originalDirections: copySymbolDirections(),
+         originalRotations: copySymbolRotations(),
          start: partGrabbed,
       }
    }
@@ -3045,7 +3059,7 @@
          for (let m of warp.movables) {
             m.moveTo(warp.originalPositions.read(m))
             if (m instanceof SymbolInstance) {
-               ;(m.direction as Direction) = warp.originalDirections.read(m)
+               ;(m.rotation as Rotation) = warp.originalRotations.read(m)
             }
          }
       }
@@ -3707,39 +3721,62 @@
       </div>
       <div class="inspectorPane">
          <div class="inspectorItemSummary">{inspectorItemSummary}</div>
-         {#if inspector.mode === "vertex"}
-            <div class="spacer" />
-            <div class="inspectorSubtitle">Glyph</div>
-            <GlyphSelectionBox
-               glyphsToShow={vertexGlyphKinds}
-               glyphsToHighlight={inspector.glyphs}
-               glyphSelected={setVertexGlyphs}
-            />
-         {:else if inspector.mode === "crossing"}
-            <div class="spacer" />
-            <div class="inspectorSubtitle">Glyph</div>
-            <GlyphSelectionBox
-               glyphsToShow={crossingGlyphKinds}
-               glyphsToHighlight={inspector.glyphs}
-               glyphSelected={setCrossingGlyphs}
-            />
-            <div class="spacer" />
-            <div class="inspectorSubtitle">Rotate</div>
-            <div class="rotateButtons">
+         <div class="inspectorBody">
+            {#if inspector.mode === "vertex"}
+               <div class="inspectorSubtitle">Glyph</div>
+               <GlyphSelectionBox
+                  glyphsToShow={vertexGlyphKinds}
+                  glyphsToHighlight={inspector.glyphs}
+                  glyphSelected={setVertexGlyphs}
+               />
+            {:else if inspector.mode === "crossing"}
+               <div class="inspectorSubtitle">Glyph</div>
+               <GlyphSelectionBox
+                  glyphsToShow={crossingGlyphKinds}
+                  glyphsToHighlight={inspector.glyphs}
+                  glyphSelected={setCrossingGlyphs}
+               />
+               <div class="spacer" />
+               <div class="inspectorSubtitle">Rotate</div>
+               <div class="rotateButtons">
+                  <div
+                     class="rotateButton"
+                     on:mousedown={() => rotateCrossings("anticlockwise")}
+                  >
+                     ↺
+                  </div>
+                  <div
+                     class="rotateButton"
+                     on:mousedown={() => rotateCrossings("clockwise")}
+                  >
+                     ↻
+                  </div>
+               </div>
+            {:else if inspector.mode === "symbol"}
+               {#if inspector.canFlip}
+                  <div class="symbolMoveButton flip" on:mousedown={flipSymbols}>
+                     Flip
+                  </div>
+               {:else}
+                  <div style="display: flex; gap: 5px;">
+                     <div class="symbolMoveButton flip disabled">Flip</div>
+                     <div class="flipMessage">Symbols must be unconnected.</div>
+                  </div>
+               {/if}
                <div
-                  class="rotateButton"
-                  on:mousedown={() => rotateCrossings("anticlockwise")}
+                  class="symbolMoveButton send"
+                  on:mousedown={sendSymbolsToBack}
                >
-                  ↺
+                  Send to back
                </div>
                <div
-                  class="rotateButton"
-                  on:mousedown={() => rotateCrossings("clockwise")}
+                  class="symbolMoveButton bring"
+                  on:mousedown={bringSymbolsToFront}
                >
-                  ↻
+                  Bring to front
                </div>
-            </div>
-         {/if}
+            {/if}
+         </div>
       </div>
       <!-- <div class="paneTitle">History</div>
       <div class="historyPane">
@@ -4073,40 +4110,68 @@
       flex-grow: 1;
       max-height: 240px;
       padding: 5px 4px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
       user-select: none;
       -webkit-user-select: none;
    }
    .inspectorItemSummary {
       font-weight: 550;
    }
+   .inspectorBody {
+      padding: 9px 5px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+   }
    .spacer {
       height: 3px;
    }
    .inspectorSubtitle {
       font-weight: 640;
-      margin: 0 6px;
    }
    .rotateButtons {
-      margin: 0 6px;
       display: grid;
       grid-template-rows: 22px;
       grid-template-columns: 22px 22px;
       gap: 3px;
+   }
+   .rotateButtons,
+   .symbolMoveButton {
       filter: drop-shadow(0 1.5px 1.5px rgb(0, 0, 0, 0.6));
    }
    .rotateButton {
+      font-size: 24px;
+      font-weight: 500;
+   }
+   .symbolMoveButton {
+      font-weight: 500;
+      height: 20px;
+      line-height: 20px;
+      box-sizing: border-box;
+   }
+   .symbolMoveButton.flip {
+      width: 37px;
+   }
+   .symbolMoveButton.flip.disabled {
+      color: grey;
+   }
+   .flipMessage {
+      font-size: 14px;
+      line-height: 20px;
+   }
+   .symbolMoveButton.send,
+   .symbolMoveButton.bring {
+      width: 96px;
+   }
+   .rotateButton,
+   .symbolMoveButton {
       background-color: rgb(231, 234, 237);
       border-radius: 3px;
       user-select: none;
       -webkit-user-select: none;
-      font-size: 24px;
-      font-weight: 500;
       text-align: center;
    }
-   .rotateButton:active {
+   .rotateButton:active,
+   .symbolMoveButton:active:not(.disabled) {
       box-shadow: 1px 1px 2px 0px #00000077 inset;
       padding-left: 2px;
       padding-top: 1px;
