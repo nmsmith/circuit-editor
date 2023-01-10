@@ -118,6 +118,11 @@ export class Junction extends Point implements Deletable {
             segs[0].axis
          )
          crossing.push(mergedSegment)
+         // Compare the orientation of the merged segments to the original segs.
+         let seg0D = segs[0].end.displacementFrom(segs[0].start)
+         let seg1D = segs[1].end.displacementFrom(segs[1].start)
+         let mergedD = mergedSegment.end.displacementFrom(mergedSegment.start)
+         let sameFacing = [seg0D.dot(mergedD) > 0, seg1D.dot(mergedD) > 0]
          // Merge the state of the old segments into the new one.
          segs[0].attachments.forEach((a) => a.attachTo(mergedSegment))
          segs[1].attachments.forEach((a) => a.attachTo(mergedSegment))
@@ -127,11 +132,20 @@ export class Junction extends Point implements Deletable {
                group.items.add(mergedSegment)
          }
          // Merge the crossing types of the old segments into the new one.
-         let seg0Crossings = currentCrossings.read(segs[0])
          for (let s of Segment.s) {
-            let type = segs[seg0Crossings.has(s) ? 0 : 1].crossingKinds.read(s)
-            mergedSegment.crossingKinds.set(s, type)
-            s.crossingKinds.set(mergedSegment, type)
+            let i = currentCrossings.read(s).has(segs[0]) ? 0 : 1
+            s.crossingKinds.set(mergedSegment, s.crossingKinds.read(segs[i]))
+            let segCrossS = segs[i].crossingKinds.read(s)
+            if (segCrossS.type === "auto" || sameFacing[i]) {
+               mergedSegment.crossingKinds.set(s, segCrossS)
+            } else {
+               let not = { left: "right", right: "left" } as const
+               mergedSegment.crossingKinds.set(s, {
+                  type: "manual",
+                  glyph: segCrossS.glyph,
+                  facing: not[segCrossS.facing],
+               })
+            }
          }
          // Get rid of the old segments.
          segs[0].delete()
@@ -290,7 +304,10 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    replaceWith(...newSegments: Segment[]) {
       // NOTE: Whatever properties are preserved here, should also be preserved
       // at Junction.convertToCrossing().
+      let thisDisp = this.end.displacementFrom(this.start)
       for (let newSegment of newSegments) {
+         let segDisp = newSegment.end.displacementFrom(newSegment.start)
+         let sameFacing = thisDisp.dot(segDisp) > 0
          // Copy the state of this segment.
          newSegment.isFrozen = this.isFrozen
          for (let group of groups) {
@@ -298,8 +315,20 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
          }
          // Copy the crossing types associated with this segment.
          for (let s of Segment.s) {
+            // Copy how "s" crosses "this".
             s.crossingKinds.set(newSegment, s.crossingKinds.read(this))
-            newSegment.crossingKinds.set(s, this.crossingKinds.read(s))
+            // Copy how "this" crosses "s". The facing might need to be flipped.
+            let thisCrossS = this.crossingKinds.read(s)
+            if (thisCrossS.type === "auto" || sameFacing) {
+               newSegment.crossingKinds.set(s, thisCrossS)
+            } else {
+               let not = { left: "right", right: "left" } as const
+               newSegment.crossingKinds.set(s, {
+                  type: "manual",
+                  glyph: thisCrossS.glyph,
+                  facing: not[thisCrossS.facing],
+               })
+            }
          }
       }
       // Migrate each attachment to the segment that it is closest to.

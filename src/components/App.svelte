@@ -2191,6 +2191,7 @@
             regularDrawAxis
          )
       }
+      Segment.s = Segment.s
    }
    function newDraw(type: LineType, start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
