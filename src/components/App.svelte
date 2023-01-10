@@ -20,6 +20,7 @@
       SpecialAttachPoint,
       LineTypeConfig,
       VertexGlyphKind,
+      CrossingGlyphKind,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -44,6 +45,7 @@
    import Heap from "heap"
    import * as Comlink from "comlink"
    import type { WorkerInterface, CircuitHistory } from "~/saveLoadWorker"
+   import GlyphSelectionBox from "./GlyphSelectionBox.svelte"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -1171,16 +1173,20 @@
    $: {
       vertexGlyphKinds = ["auto", null, ...vertexGlyphs]
    }
+   let crossingGlyphKinds: GlyphKind[]
+   $: {
+      crossingGlyphKinds = ["auto", null, ...crossingGlyphs]
+   }
    let inspectorItemSummary: string
    let inspector:
       | {
            mode: "vertex"
-           items: Set<Vertex>
+           vertices: Set<Vertex>
            glyphs: Set<GlyphKind>
         }
       | {
            mode: "crossing"
-           items: Set<Crossing>
+           crossings: Set<Crossing>
            glyphs: Set<GlyphKind>
         }
       | { mode: null }
@@ -1223,15 +1229,32 @@
          // Show configuration options specific to the type of item selected.
          if ($vertices.length > 0) {
             let glyphs = new Set<GlyphKind>(
-               $vertices.map((v) =>
-                  v.glyph.type === "auto"
+               $vertices.map((vertex) =>
+                  vertex.glyph.type === "auto"
                      ? "auto"
-                     : v.glyph.glyph
-                     ? findVertexGlyph(v.glyph.glyph) || null
+                     : vertex.glyph.glyph
+                     ? findVertexGlyph(vertex.glyph.glyph) || null
                      : null
                )
             )
-            inspector = { mode: "vertex", items: new Set($vertices), glyphs }
+            inspector = { mode: "vertex", vertices: new Set($vertices), glyphs }
+         } else if ($crossings.length > 0) {
+            let glyphs = new Set<GlyphKind>(
+               $crossings.map((crossing) => {
+                  let c1 = crossing.seg1.crossingKinds.read(crossing.seg2)
+                  let c2 = crossing.seg2.crossingKinds.read(crossing.seg1)
+                  return c1.type === "auto" || c2.type === "auto"
+                     ? "auto"
+                     : c1.glyph
+                     ? findCrossingGlyph(c1.glyph) || null
+                     : findCrossingGlyph(c2.glyph) || null
+               })
+            )
+            inspector = {
+               mode: "crossing",
+               crossings: new Set($crossings),
+               glyphs,
+            }
          }
       } else if (data.length > 1) {
          // Show generic configuration options.
@@ -1247,15 +1270,114 @@
       } else {
          glyph = { type: "manual", glyph: kind.fileName }
       }
-      for (let vertex of inspector.items) vertex.glyph = glyph
+      for (let vertex of inspector.vertices) vertex.glyph = glyph
       commitState(
-         inspector.items.size > 1
+         inspector.vertices.size > 1
             ? "change vertex glyphs"
             : "change vertex glyph"
       )
       Junction.s = Junction.s
       Port.s = Port.s
       amassed.items = amassed.items
+   }
+   function setCrossingGlyphs(kind: GlyphKind) {
+      if (inspector.mode !== "crossing") return
+      for (let { seg1, seg2 } of inspector.crossings) {
+         if (kind === "auto") {
+            seg1.crossingKinds.set(seg2, { type: "auto" })
+            seg2.crossingKinds.set(seg1, { type: "auto" })
+         } else {
+            let c1 = seg1.crossingKinds.read(seg2)
+            let c2 = seg2.crossingKinds.read(seg1)
+            let type = "manual" as const
+            let glyph = kind?.fileName || null
+            if (
+               c1.type === "auto" ||
+               c2.type === "auto" ||
+               (!c1.glyph && !c2.glyph)
+            ) {
+               if (isMoreHorizontal(seg1, seg2)) {
+                  const facing = seg1.start.x < seg1.end.x ? "left" : "right"
+                  seg1.crossingKinds.set(seg2, { type, glyph, facing })
+                  seg2.crossingKinds.set(seg1, { type, glyph: null, facing })
+               } else {
+                  const facing = seg2.start.x < seg2.end.x ? "left" : "right"
+                  seg1.crossingKinds.set(seg2, { type, glyph: null, facing })
+                  seg2.crossingKinds.set(seg1, { type, glyph, facing })
+               }
+            } else if (c1.glyph) {
+               const facing = c1.facing
+               seg1.crossingKinds.set(seg2, { type, glyph, facing })
+               seg2.crossingKinds.set(seg1, { type, glyph: null, facing })
+            } else {
+               const facing = c2.facing
+               seg1.crossingKinds.set(seg2, { type, glyph: null, facing })
+               seg2.crossingKinds.set(seg1, { type, glyph, facing })
+            }
+         }
+      }
+      commitState(
+         inspector.crossings.size > 1
+            ? "change crossing glyphs"
+            : "change crossing glyph"
+      )
+      Segment.s = Segment.s
+      amassed.items = amassed.items
+   }
+   function rotateCrossings(direction: "clockwise" | "anticlockwise") {
+      if (inspector.mode !== "crossing") return
+      for (let { seg1, seg2 } of inspector.crossings) {
+         let c1 = seg1.crossingKinds.read(seg2)
+         let c2 = seg2.crossingKinds.read(seg1)
+         let dir1 = seg1.end.directionFrom(seg1.start)
+         let dir2 = seg2.end.directionFrom(seg2.start)
+         if (!dir1 || !dir2) continue
+         let not = { left: "right", right: "left" } as const
+         let type = "manual" as const
+         if (c1.type === "auto" || c2.type === "auto") {
+            if (isMoreHorizontal(seg1, seg2)) {
+               let autoGlyph =
+                  seg1.type.meeting?.[seg2.type.name].crossing || null
+               let facing: "left" | "right"
+               if (direction === "clockwise") {
+                  facing = seg2.start.y < seg2.end.y ? "left" : "right"
+               } else {
+                  facing = seg2.start.y < seg2.end.y ? "right" : "left"
+               }
+               seg1.crossingKinds.set(seg2, { type, glyph: null, facing })
+               seg2.crossingKinds.set(seg1, { type, glyph: autoGlyph, facing })
+            } else {
+               let autoGlyph =
+                  seg2.type.meeting?.[seg1.type.name].crossing || null
+               let facing: "left" | "right"
+               if (direction === "clockwise") {
+                  facing = seg1.start.y < seg1.end.y ? "left" : "right"
+               } else {
+                  facing = seg1.start.y < seg1.end.y ? "right" : "left"
+               }
+               seg1.crossingKinds.set(seg2, { type, glyph: autoGlyph, facing })
+               seg2.crossingKinds.set(seg1, { type, glyph: null, facing })
+            }
+         } else if (c1.glyph) {
+            const facing = dir2.rotationFrom(dir1)[direction]()
+               ? c1.facing
+               : not[c1.facing]
+            seg1.crossingKinds.set(seg2, { type, glyph: null, facing })
+            seg2.crossingKinds.set(seg1, { type, glyph: c1.glyph, facing })
+         } else {
+            const facing = dir1.rotationFrom(dir2)[direction]()
+               ? c2.facing
+               : not[c2.facing]
+            seg1.crossingKinds.set(seg2, { type, glyph: c2.glyph, facing })
+            seg2.crossingKinds.set(seg1, { type, glyph: null, facing })
+         }
+      }
+      commitState(
+         inspector.crossings.size > 1
+            ? "rotate crossing glyphs"
+            : "rotate crossing glyph"
+      )
+      Segment.s = Segment.s
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
@@ -3587,37 +3709,34 @@
          {#if inspector.mode === "vertex"}
             <div class="spacer" />
             <div class="inspectorSubtitle">Glyph</div>
-            <div class="inspectorGlyphSelectionBox">
-               {#each vertexGlyphKinds as kind}
-                  {@const kindText =
-                     kind === "auto"
-                        ? "auto"
-                        : kind === null
-                        ? "nothing"
-                        : kind.fileName.replace(".svg", "")}
-                  {@const highlightClass = inspector.glyphs.has(kind)
-                     ? inspector.glyphs.size === 1
-                        ? "uniqueHighlight"
-                        : "multiHighlight"
-                     : ""}
-                  <div
-                     class="inspectorGlyphSelectionItem {highlightClass}"
-                     on:click={() => setVertexGlyphs(kind)}
-                  >
-                     <div class="inspectorGlyphLabel">{kindText}</div>
-                     {#if kind instanceof SymbolKind}
-                        <svg
-                           class="inspectorGlyphImage"
-                           viewBox="{kind.svgBox.x.low} {kind.svgBox.y
-                              .low} {kind.svgBox.width()} {kind.svgBox.height()}"
-                        >
-                           <use href="#{kind.fileName}" />
-                        </svg>
-                     {:else}
-                        <div class="inspectorGlyphImage" />
-                     {/if}
-                  </div>
-               {/each}
+            <GlyphSelectionBox
+               glyphsToShow={vertexGlyphKinds}
+               glyphsToHighlight={inspector.glyphs}
+               glyphSelected={setVertexGlyphs}
+            />
+         {:else if inspector.mode === "crossing"}
+            <div class="spacer" />
+            <div class="inspectorSubtitle">Glyph</div>
+            <GlyphSelectionBox
+               glyphsToShow={crossingGlyphKinds}
+               glyphsToHighlight={inspector.glyphs}
+               glyphSelected={setCrossingGlyphs}
+            />
+            <div class="spacer" />
+            <div class="inspectorSubtitle">Rotate</div>
+            <div class="rotateButtons">
+               <div
+                  class="rotateButton"
+                  on:mousedown={() => rotateCrossings("anticlockwise")}
+               >
+                  ↺
+               </div>
+               <div
+                  class="rotateButton"
+                  on:mousedown={() => rotateCrossings("clockwise")}
+               >
+                  ↻
+               </div>
             </div>
          {/if}
       </div>
@@ -3950,8 +4069,8 @@
       background-color: white;
    }
    .inspectorPane {
-      min-height: 150px;
       flex-grow: 1;
+      max-height: 240px;
       padding: 5px 4px;
       display: flex;
       flex-direction: column;
@@ -3969,31 +4088,33 @@
       font-weight: 640;
       margin: 0 6px;
    }
-   .inspectorGlyphSelectionBox {
-      /* box-shadow: inset 0 1px 3px 0 rgba(0, 0, 0, 0.4); */
-      border: 1px solid grey;
+   .rotateButtons {
       margin: 0 6px;
-      /* padding: 3px 0; */
+      display: grid;
+      grid-template-rows: 22px;
+      grid-template-columns: 22px 22px;
+      gap: 3px;
+      filter: drop-shadow(0 1.5px 1.5px rgb(0, 0, 0, 0.6));
    }
-   .inspectorGlyphSelectionItem {
-      padding: 3px 5px;
-      display: flex;
-      flex-direction: row;
-      align-items: center;
-      gap: 7px;
+   .rotateButton {
+      background-color: rgb(231, 234, 237);
+      border-radius: 3px;
+      user-select: none;
+      -webkit-user-select: none;
+      font-size: 24px;
+      font-weight: 500;
+      text-align: center;
    }
-   .inspectorGlyphImage {
-      width: 12px;
-      min-height: 12px;
+   .rotateButton:active {
+      box-shadow: 1px 1px 2px 0px #00000077 inset;
+      padding-left: 2px;
+      padding-top: 1px;
    }
-   .inspectorGlyphLabel {
-      flex-grow: 1;
-   }
-   .inspectorGlyphSelectionItem.uniqueHighlight,
+   :global(.glyphSelectionItem.uniqueHighlight),
    .lineGridItem.toUse {
       background-color: white;
    }
-   .inspectorGlyphSelectionItem.multiHighlight,
+   :global(.glyphSelectionItem.multiHighlight),
    .lineGridItem.selected {
       background-color: #999;
    }
@@ -4037,8 +4158,8 @@
    }
    .linePane {
       min-height: 150px;
-      padding: 1px 0;
       flex-grow: 1;
+      padding: 1px 0;
       overflow-x: hidden;
       overflow-y: scroll;
    }
@@ -4114,7 +4235,7 @@
       grid-template-columns: repeat(4, 53px);
       gap: 3px;
       padding: 5px;
-      filter: drop-shadow(0 0 2px rgb(0, 0, 0, 0.9));
+      filter: drop-shadow(0 1px 2.5px rgb(0, 0, 0, 0.9));
    }
    .canvas {
       width: 100%;

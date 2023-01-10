@@ -206,6 +206,8 @@ export class Point extends Object2D {
 }
 
 // A Rotation is a _difference_ between two Directions.
+// Note: No _direction_ of rotation is represented (i.e. clockwise or
+// anticlockwise). Only the "relative orientation" is represented.
 export class Rotation {
    readonly x: number
    readonly y: number
@@ -240,6 +242,15 @@ export class Rotation {
       let cos = this.x * rotation.x + this.y * rotation.y
       let sin = this.y * rotation.x - this.x * rotation.y
       return new Rotation(cos, sin)
+   }
+   // Given a y-down coordinate system, return whether the "relative
+   // orientation" that the rotation represents is most efficiently reached by
+   // clockwise or anticlockwise rotation.
+   clockwise(): boolean {
+      return this.y >= 0
+   }
+   anticlockwise(): boolean {
+      return !this.clockwise()
    }
 }
 
