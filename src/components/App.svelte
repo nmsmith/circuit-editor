@@ -1390,8 +1390,25 @@
       SymbolInstance.s = SymbolInstance.s
    }
    function sendSymbolsToBack() {
+      if (inspector.mode !== "symbol") return
+      let $symbols = inspector.symbols
+      let targets = SymbolInstance.s.filter((symbol) => $symbols.has(symbol))
+      let rest = SymbolInstance.s.filter((symbol) => !$symbols.has(symbol))
+      SymbolInstance.s = [...targets, ...rest]
+      targets.reverse() // necessary because we are about to repeatedly prepend
+      for (let symbol of targets) symbol.applySendToBack()
+      commitState("send to back")
+      SymbolInstance.s = SymbolInstance.s
    }
    function bringSymbolsToFront() {
+      if (inspector.mode !== "symbol") return
+      let $symbols = inspector.symbols
+      let targets = SymbolInstance.s.filter((symbol) => $symbols.has(symbol))
+      let rest = SymbolInstance.s.filter((symbol) => !$symbols.has(symbol))
+      SymbolInstance.s = [...rest, ...targets]
+      for (let symbol of targets) symbol.applyBringToFront()
+      commitState("bring to front")
+      SymbolInstance.s = SymbolInstance.s
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&

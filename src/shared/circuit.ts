@@ -526,7 +526,7 @@ export class SymbolKind {
 }
 
 export class SymbolInstance extends Rectangle implements Deletable {
-   static s = new Set<SymbolInstance>()
+   static s: SymbolInstance[] = [] // order corresponds to rendering order
    readonly objectID: number // for serialization
    private static nextInstanceID = 0
    readonly instanceID: string
@@ -553,7 +553,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
       this.specialAttachPoints = this.specialPoints().map(
          (p) => new SpecialAttachPoint(p.x, p.y, this)
       )
-      SymbolInstance.s.add(this)
+      SymbolInstance.s.push(this)
 
       // Create the SVG for this Symbol.
       let svg = kind.svgTemplate.cloneNode(true) as SVGElement
@@ -578,8 +578,14 @@ export class SymbolInstance extends Rectangle implements Deletable {
          .getElementById("symbol amassLight layer")
          ?.appendChild(this.highlight)
    }
+   applySendToBack() {
+      document.getElementById("symbol layer")?.prepend(this.image)
+   }
+   applyBringToFront() {
+      document.getElementById("symbol layer")?.append(this.image)
+   }
    delete(): Set<Junction> {
-      SymbolInstance.s.delete(this)
+      SymbolInstance.s.splice(SymbolInstance.s.indexOf(this), 1)
       this.image.remove()
       this.highlight.remove()
       for (let port of this.ports) {
@@ -799,7 +805,7 @@ export function loadFromJSON(
    Junction.s = new Set()
    Port.s = new Set()
    Segment.s = new Set()
-   SymbolInstance.s = new Set()
+   SymbolInstance.s = []
    amassed.items = new ToggleSet()
    groups.clear()
    groups.add(amassed)
