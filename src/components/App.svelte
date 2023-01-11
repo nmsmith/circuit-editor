@@ -925,6 +925,16 @@
       config = config // Inform Svelte of change.
    }
 
+   // Avoid highlighting this item until the mouse is moved away from the
+   // specified position. (This is just a "trick" to make highlighting nicer.)
+   let doNotLightUp:
+      | { item: Interactable; clientPosition: Point }
+      | { item: null } = {
+      item: null,
+   }
+   const sqLightUpDistance = sqInteractRadius
+
+   // The following variables track the state of operations that are in-progress
    let pan: null | { clientDownPosition: Point } = null
    type DrawMode = "strafing" | "snapped rotation" | "free rotation"
    let draw: null | {
@@ -1133,7 +1143,7 @@
             // Otherwise, just highlight the thing being touched.
             if (tool !== "amass" && amassed.items.has(touching as any)) {
                for (let item of amassed.items) touchLight.add(item)
-            } else {
+            } else if (touching !== doNotLightUp.item) {
                touchLight.add(touching)
             }
          }
@@ -1501,7 +1511,7 @@
                   glyph: render.glyph,
                   position,
                   rotation: rotation.toDegrees(),
-                  style: styleOf(segment) || styleOf(crossing),
+                  style: styleOf(crossing) || styleOf(segment),
                   segment,
                })
                renderedCrossings.add(crossing)
@@ -1804,6 +1814,10 @@
                else amassed.items = new ToggleSet([target.object])
                amassed.items = amassed.items
                amassedOnMouseDown = true
+               doNotLightUp = {
+                  item: target.object,
+                  clientPosition: mouseInClient,
+               }
             } else if (amassed.items.size > 0 && !shift && !alt) {
                amassed.items = new ToggleSet()
                amassedOnMouseDown = true
@@ -2010,6 +2024,14 @@
       updateAmassRect()
       updateEraseRect()
       updateFreezeRect()
+      // Update highlighting.
+      if (
+         doNotLightUp.item !== null &&
+         mouseInClient.sqDistanceFrom(doNotLightUp.clientPosition) >=
+            sqLightUpDistance
+      ) {
+         doNotLightUp = { item: null }
+      }
       // Check for the initiation of drag-based operations.
       if (toolBeingUsed) {
          let dragVector = mouseOnCanvas
