@@ -979,7 +979,7 @@
       start: Point
    }
    let amassRect: null | {
-      mode: "new" | "add" | "remove"
+      mode: "add" | "remove"
       start: Point
       items: Set<Interactable>
    } = null
@@ -3247,11 +3247,7 @@
    }
    function beginAmassRect(start: Point) {
       amassRect = {
-         mode: keyInfo.read(Alt).pressing
-            ? "remove"
-            : keyInfo.read(Shift).pressing
-            ? "add"
-            : "new",
+         mode: keyInfo.read(Alt).pressing ? "remove" : "add",
          start,
          items: new Set(),
       }
@@ -3275,9 +3271,12 @@
       if (config.showSymbols.state === "on" || amassRect.mode === "remove")
          for (let symbol of SymbolInstance.s)
             if (range.intersects(symbol)) amassRect.items.add(symbol)
-      if (amassRect.mode === "remove")
-         for (let junction of Junction.s)
-            if (range.intersects(junction)) amassRect.items.add(junction)
+      if (amassRect.mode === "remove") {
+         for (let vertex of allVertices())
+            if (range.intersects(vertex)) amassRect.items.add(vertex)
+         for (let crossing of allCrossings())
+            if (range.intersects(crossing.point)) amassRect.items.add(crossing)
+      }
    }
    function updateEraseRect() {
       if (!eraseRect) return
