@@ -38,7 +38,7 @@
       closestSegmentTo,
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
-   import { DefaultMap, ToggleSet } from "~/shared/utilities"
+   import { DefaultMap } from "~/shared/utilities"
    import CircuitLine from "~/components/CircuitLine.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
@@ -1809,9 +1809,23 @@
             let shift = keyInfo.read(Shift).pressing
             let alt = keyInfo.read(Alt).pressing
             if (target) {
-               if (shift) amassed.items.toggle(target.object)
-               else if (alt) amassed.items.delete(target.object)
-               else amassed.items = new ToggleSet([target.object])
+               if (shift) {
+                  if (amassed.items.has(target.object)) {
+                     amassed.items.delete(target.object)
+                  } else {
+                     amassed.items.add(target.object)
+                     if (target.object instanceof Segment) {
+                        // The segment's crossings should be unselected.
+                        for (let [_, cross] of crossingMap.read(target.object))
+                           amassed.items.delete(cross)
+                     } else if (target.object instanceof Crossing) {
+                        // The crossing's segments should be unselected.
+                        amassed.items.delete(target.object.seg1)
+                        amassed.items.delete(target.object.seg2)
+                     }
+                  }
+               } else if (alt) amassed.items.delete(target.object)
+               else amassed.items = new Set([target.object])
                amassed.items = amassed.items
                amassedOnMouseDown = true
                doNotLightUp = {
@@ -1819,7 +1833,7 @@
                   clientPosition: mouseInClient,
                }
             } else if (amassed.items.size > 0 && !shift && !alt) {
-               amassed.items = new ToggleSet()
+               amassed.items = new Set()
                amassedOnMouseDown = true
             }
          } else if (toolToUse === "erase") {
@@ -1880,7 +1894,7 @@
          if (key.type === "holdTool" && key.tool === "amass") {
             if (!repeat) {
                // Select everything in the circuit.
-               amassed.items = new ToggleSet()
+               amassed.items = new Set()
                for (let segment of Segment.s) amassed.items.add(segment)
                for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
                commitState("amass all")
@@ -1917,15 +1931,13 @@
          }
       } else if (key.type === "useTool" && toolBeingUsed) {
          switch (toolBeingUsed.tool) {
-            case "amass":
-               if (amassRect && amassRect.items.size > 0) {
-                  endAmassRect()
-                  commitState("amass region")
-               } else if (amassedOnMouseDown) {
-                  commitState("amass")
-               }
+            case "amass": {
+               let workWasDone =
+                  amassedOnMouseDown || (amassRect && amassRect.items.size > 0)
                endAmassRect()
+               if (workWasDone) commitState("amass")
                break
+            }
             case "warp":
                if (warp) {
                   endWarp()
@@ -1948,15 +1960,13 @@
                }
                break
             }
-            case "erase":
-               if (eraseRect && eraseRect.items.size > 0) {
-                  endEraseRect()
-                  commitState("erase region")
-               } else if (erasedOnMouseDown) {
-                  commitState("erase")
-               }
+            case "erase": {
+               let workWasDone =
+                  erasedOnMouseDown || (eraseRect && eraseRect.items.size > 0)
                endEraseRect()
+               if (workWasDone) commitState("erase")
                break
+            }
             case "freeze":
                if (freezeRect && freezeRect.items.size > 0) {
                   let message =
@@ -3300,7 +3310,14 @@
       if (amassRect.mode === "remove") {
          for (let item of amassRect.items) amassed.items.delete(item)
       } else {
-         for (let item of amassRect.items) amassed.items.add(item)
+         for (let item of amassRect.items) {
+            amassed.items.add(item)
+            if (item instanceof Segment) {
+               // The segment's crossings should be unselected.
+               for (let [_, cross] of crossingMap.read(item))
+                  amassed.items.delete(cross)
+            }
+         }
       }
       amassed.items = amassed.items
       amassRect = null

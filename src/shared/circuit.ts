@@ -10,7 +10,7 @@ import {
    Range1D,
 } from "~/shared/geometry"
 import * as Geometry from "~/shared/geometry"
-import { DefaultMap, DefaultWeakMap, ToggleSet } from "./utilities"
+import { DefaultMap, DefaultWeakMap } from "./utilities"
 
 let nextObjectID = 0
 
@@ -671,11 +671,11 @@ function namespaceIDs(svg: SVGElement, suffix: string) {
 
 // Groups that circuit elements can belong to.
 export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
-export type Group = { name: string; items: ToggleSet<Interactable> }
+export type Group = { name: string; items: Set<Interactable> }
 export const groups = new Set<Group>()
 // The following "group" is not persisted, but is placed here for consistency:
 const amassedGroupName = "amassed"
-export const amassed: Group = { name: amassedGroupName, items: new ToggleSet() }
+export const amassed: Group = { name: amassedGroupName, items: new Set() }
 groups.add(amassed)
 
 type JunctionJSON = {
@@ -806,7 +806,7 @@ export function loadFromJSON(
    Port.s = new Set()
    Segment.s = new Set()
    SymbolInstance.s = []
-   amassed.items = new ToggleSet()
+   amassed.items = new Set()
    groups.clear()
    groups.add(amassed)
    let vertexMap = new Map<number, Vertex>()
@@ -907,7 +907,7 @@ export function loadFromJSON(
       }
    })
    circuit.groups.forEach((g) => {
-      let items = new ToggleSet<Interactable>()
+      let items = new Set<Interactable>()
       for (let item of g.items) {
          if (item.type === "crossing") {
             let seg1 = segmentMap.get(item.seg1ID)
