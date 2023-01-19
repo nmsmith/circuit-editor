@@ -232,6 +232,7 @@ export const tetherLineType: LineType = {
 
 export type LineTypeConfig = {
    sidebarOrder: string[]
+   selectedByDefault: string
    keyBindings: {
       [lineType: string | symbol]: string // a map from line type to key binding
    }

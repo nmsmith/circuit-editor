@@ -506,7 +506,7 @@
       )
       Promise.all([loadHistory, load1, load2, load3, load4, load5])
          .then(([historyLoading]) => {
-            let defaultLineType = lineTypeConfig?.sidebarOrder[0]
+            let defaultLineType = lineTypeConfig?.selectedByDefault
             if (defaultLineType)
                for (let type of lineTypes)
                   if (type.name === defaultLineType) selectedLineType = type
@@ -724,7 +724,7 @@
             lineTypeConfig = null
          })
       Promise.all([load1, load2]).then(() => {
-         let defaultLineType = lineTypeConfig?.sidebarOrder[0]
+         let defaultLineType = lineTypeConfig?.selectedByDefault
          if (defaultLineType)
             for (let type of lineTypes)
                if (type.name === defaultLineType) selectedLineType = type

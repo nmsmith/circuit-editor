@@ -195,9 +195,10 @@ Most meeting types can be specified in _either_ file of the line types involved.
 
 ### Configuring line type display order and keyboard shortcuts
 
-An optional `config.json` file can be placed in the same folder as the line types to configure two things:
+An optional `config.json` file can be placed in the same folder as the line types to configure the following things:
 
 -  The order in which the line types appear in the sidebar.
+-  The line type that is selected by default, when a project is opened.
 -  Keyboard shortcuts for switching to each line type.
 
 Here is an example of what `config.json` might look like:
@@ -205,6 +206,7 @@ Here is an example of what `config.json` might look like:
 ```
 {
    "sidebarOrder": ["tether", "hydraulic", "drain", "pilot"],
+   "selectedByDefault": "hydraulic",
    "keyBindings": {
       "tether": "T",
       "hydraulic": "1",

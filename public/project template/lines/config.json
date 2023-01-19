@@ -1,5 +1,6 @@
 {
    "sidebarOrder": ["tether", "hydraulic", "drain", "pilot"],
+   "selectedByDefault": "hydraulic",
    "keyBindings": {
       "tether": "T",
       "hydraulic": "1",
