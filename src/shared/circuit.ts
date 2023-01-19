@@ -701,23 +701,25 @@ groups.add(amassed)
 // Cut/copy/paste functionality.
 let clipboard = new Set<Segment | SymbolInstance>()
 export function cut(items: Iterable<Segment | SymbolInstance>) {
-   copy_(items, true)
+   clipboard = new Set(copy_(items, true))
    for (let item of items) item.delete()
 }
 export function copy(items: Iterable<Segment | SymbolInstance>) {
-   copy_(items, true)
+   clipboard = new Set(copy_(items, true))
 }
-export function duplicate(items: Iterable<Segment | SymbolInstance>) {
-   copy_(items, false)
+export function duplicate(
+   items: Iterable<Segment | SymbolInstance>
+): Iterable<Segment | SymbolInstance> {
+   return copy_(items, false)
 }
-export function paste() {
-   copy_(clipboard, false)
+export function paste(): Iterable<Segment | SymbolInstance> {
+   return copy_(clipboard, false)
 }
 // Copy circuit items — either to the clipboard, or into the circuit.
 export function copy_(
    items: Iterable<Segment | SymbolInstance>,
    toClipboard: boolean
-) {
+): Iterable<Segment | SymbolInstance> {
    if (toClipboard && clipboard.size > 0) {
       // Delete the existing clipboard items.
       for (let item of clipboard) item.delete()
@@ -754,11 +756,20 @@ export function copy_(
       copiedSegment.isFrozen = segment.isFrozen
       copiedSegments.set(segment, copiedSegment)
    }
-   // Establish the crossingKinds between each pair of copied segments.
    for (let [seg1, copiedSeg1] of copiedSegments) {
+      // Establish the crossingKinds between each pair of copied segments
+      // (which if toClipboard = true, are not part of the Segment.s set).
       for (let [seg2, copiedSeg2] of copiedSegments) {
          let c = seg1.crossingKinds.get(seg2)
          if (c) copiedSeg1.crossingKinds.set(copiedSeg2, c)
+      }
+      // Establish the crossingKinds between the copied segments and the
+      // pre-existing segments of the circuit.
+      for (let seg2 of Segment.s) {
+         let c12 = seg1.crossingKinds.get(seg2)
+         if (c12) copiedSeg1.crossingKinds.set(seg2, c12)
+         let c21 = seg2.crossingKinds.get(seg1)
+         if (c21) seg2.crossingKinds.set(copiedSeg1, c21)
       }
    }
    // For copied Junctions whose host (if any) was also copied, ensure that
@@ -794,6 +805,7 @@ export function copy_(
       }
       return copiedVertex
    }
+   return [...copiedSegments.values(), ...copiedSymbols.values()]
 }
 
 type JunctionJSON = {

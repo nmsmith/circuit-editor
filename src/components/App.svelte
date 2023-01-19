@@ -21,6 +21,10 @@
       LineTypeConfig,
       VertexGlyphKind,
       CrossingGlyphKind,
+      cut,
+      copy,
+      paste,
+      duplicate,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -1752,6 +1756,14 @@
          rigidlyMovedSegments = warp.rigidSegments
       }
    }
+   let amassedCopyables = new Set<Segment | SymbolInstance>()
+   $: {
+      amassedCopyables = new Set()
+      for (let item of amassed.items) {
+         if (item instanceof Segment || item instanceof SymbolInstance)
+            amassedCopyables.add(item)
+      }
+   }
 
    // ---------------------------- Primary events -----------------------------
    let amassedOnMouseDown = false
@@ -1889,18 +1901,54 @@
       if (name === "KeyZ") {
          keyInfo.read(Shift).pressing ? executeRedo() : executeUndo()
          return "recognized"
-      } else {
-         let key = keyInfo.getOrCreate(name)
-         if (key.type === "holdTool" && key.tool === "amass") {
-            if (!repeat) {
-               // Select everything in the circuit.
-               amassed.items = new Set()
-               for (let segment of Segment.s) amassed.items.add(segment)
-               for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
-               commitState("amass all")
+      } else if (name === "KeyX") {
+         cut(amassedCopyables)
+         commitState("cut")
+         Junction.s = Junction.s
+         Segment.s = Segment.s
+         SymbolInstance.s = SymbolInstance.s
+         Port.s = Port.s
+         amassed.items = amassed.items
+         return "recognized"
+      } else if (name === "KeyC") {
+         copy(amassedCopyables)
+         return "recognized"
+      } else if (name === "KeyV" || name === "KeyD") {
+         let didPaste = name === "KeyV"
+         let items = didPaste ? paste() : duplicate(amassedCopyables)
+         // Gather all of the Movables that were pasted.
+         let thingsToMove = new Set<Movable>()
+         for (let item of items) {
+            if (item instanceof Segment) {
+               if (item.start instanceof Junction) thingsToMove.add(item.start)
+               if (item.end instanceof Junction) thingsToMove.add(item.end)
+            } else {
+               thingsToMove.add(item)
             }
-            return "recognized"
-         } else return "not recognized"
+         }
+         // Offset all of the Movables by the same amount.
+         let d = new Vector(30, 30)
+         for (let thing of thingsToMove) thing.moveBy(d)
+         // Amass the copied items.
+         amassed.items = new Set(items)
+
+         commitState(didPaste ? "paste" : "duplicate")
+         Junction.s = Junction.s
+         Segment.s = Segment.s
+         SymbolInstance.s = SymbolInstance.s
+         Port.s = Port.s
+         return "recognized"
+      } else if (name === "KeyA") {
+         if (!repeat) {
+            // Select everything in the circuit.
+            amassed.items = new Set()
+            for (let segment of Segment.s) amassed.items.add(segment)
+            for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
+            commitState("amass all")
+         }
+         return "recognized"
+      } else {
+         return "not recognized"
       }
    }
    function keyReleased(name: string) {
@@ -3375,8 +3423,6 @@
       } else if (!event.repeat /* Ignore auto-repeated key presses */) {
          keyPressed(event.code)
       }
-      if (keyInfo.read(Control).pressing && event.code === "KeyA")
-         event.preventDefault() // Don't select all text on the page.
       if (event.code === "Space") event.preventDefault() // Don't trigger scroll
    }}
    on:keyup={(event) => {
