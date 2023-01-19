@@ -855,14 +855,16 @@
    $: {
       // By default, use the selected line type.
       lineTypeToUse = selectedLineType
-      // If beginning a draw operation at a vertex whose edges all have the
-      // same line type, use that line type instead.
+      // If beginning a draw operation at a vertex whose edges (ignoring
+      // tethers) all have the same line type, use that line type instead.
       let target = drawTarget(
          toolBeingUsed ? toolBeingUsed.canvasDownPosition : mouseOnCanvas
       )
       if (toolToUse === "draw" && target && isVertex(target.object)) {
          let typeNames = new Set(
-            [...target.object.edges()].map(([segment]) => segment.type.name)
+            [...target.object.edges()]
+               .map(([segment]) => segment.type.name)
+               .filter((name) => name !== tetherLineType.name)
          )
          if (typeNames.size === 1) {
             let name = [...typeNames][0]
