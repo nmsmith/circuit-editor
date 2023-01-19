@@ -34,11 +34,11 @@ export class Junction extends Point implements Deletable {
    glyph: VertexGlyphKind
    private readonly edges_ = new Set<Edge>()
    private host_: Segment | SymbolInstance | null = null
-   constructor(point: Point, glyph?: VertexGlyphKind) {
+   constructor(point: Point, glyph?: VertexGlyphKind, addToCircuit = true) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
       this.glyph = glyph ? glyph : { type: "auto" }
-      Junction.s.add(this)
+      if (addToCircuit) Junction.s.add(this)
    }
    delete(): Set<Junction> {
       Junction.s.delete(this)
@@ -169,13 +169,18 @@ export class Port extends Point {
    readonly kind: PortKind
    glyph: VertexGlyphKind
    private readonly edges_ = new Set<Edge>()
-   constructor(symbol: SymbolInstance, kind: PortKind, position: Point) {
+   constructor(
+      symbol: SymbolInstance,
+      kind: PortKind,
+      position: Point,
+      addToCircuit = true
+   ) {
       super(position.x, position.y)
       this.objectID = nextObjectID++
       this.symbol = symbol
       this.kind = kind
       this.glyph = { type: "auto" }
-      Port.s.add(this)
+      if (addToCircuit) Port.s.add(this)
    }
    edges(): Set<Edge> {
       return this.edges_
@@ -253,14 +258,20 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    )
    private readonly edgeS: Edge
    private readonly edgeE: Edge
-   constructor(type: LineType, start: Vertex, end: Vertex, axis: Axis) {
+   constructor(
+      type: LineType,
+      start: Vertex,
+      end: Vertex,
+      axis: Axis,
+      addToCircuit = true
+   ) {
       super(start, end, axis)
       this.objectID = nextObjectID++
       this.type = type
       this.edgeS = [this, end]
       this.edgeE = [this, start]
 
-      Segment.s.add(this)
+      if (addToCircuit) Segment.s.add(this)
       rememberAxis(this.axis)
       this.start.addEdge(this.edgeS)
       this.end.addEdge(this.edgeE)
@@ -540,27 +551,29 @@ export class SymbolInstance extends Rectangle implements Deletable {
    constructor(
       kind: SymbolKind,
       position: Point,
-      rotation: Rotation = Rotation.zero,
-      scale: Vector = new Vector(1, 1)
+      rotation = Rotation.zero,
+      scale = new Vector(1, 1),
+      addToCircuit = true
    ) {
       super(kind.collisionBox, position, rotation, scale)
       this.objectID = nextObjectID++
       this.instanceID = ":" + SymbolInstance.nextInstanceID++
       this.kind = kind
       this.ports = kind.ports.map(
-         (p) => new Port(this, p, this.fromRectCoordinates(p))
+         (p) => new Port(this, p, this.fromRectCoordinates(p), addToCircuit)
       )
       this.specialAttachPoints = this.specialPoints().map(
          (p) => new SpecialAttachPoint(p.x, p.y, this)
       )
-      SymbolInstance.s.push(this)
+      if (addToCircuit) SymbolInstance.s.push(this)
 
       // Create the SVG for this Symbol.
       let svg = kind.svgTemplate.cloneNode(true) as SVGElement
       namespaceIDs(svg, this.instanceID)
       this.image = document.createElementNS("http://www.w3.org/2000/svg", "g")
       this.image.appendChild(svg)
-      document.getElementById("symbol layer")?.appendChild(this.image)
+      if (addToCircuit)
+         document.getElementById("symbol layer")?.appendChild(this.image)
       // Create the SVG for this Symbol's highlight.
       let highlightSvg = kind.highlightTemplate.cloneNode(true) as SVGElement
       namespaceIDs(highlightSvg, this.instanceID)
@@ -585,7 +598,13 @@ export class SymbolInstance extends Rectangle implements Deletable {
       document.getElementById("symbol layer")?.append(this.image)
    }
    delete(): Set<Junction> {
-      SymbolInstance.s.splice(SymbolInstance.s.indexOf(this), 1)
+      let index = SymbolInstance.s.indexOf(this)
+      if (index === -1) {
+         // This Symbol is not in the circuit; it is on the clipboard.
+         // No cleaning up is necessary.
+         return new Set()
+      }
+      SymbolInstance.s.splice(index, 1)
       this.image.remove()
       this.highlight.remove()
       for (let port of this.ports) {
@@ -677,6 +696,104 @@ export const groups = new Set<Group>()
 const amassedGroupName = "amassed"
 export const amassed: Group = { name: amassedGroupName, items: new Set() }
 groups.add(amassed)
+
+// Cut/copy/paste functionality.
+let clipboard = new Set<Segment | SymbolInstance>()
+export function cut(items: Iterable<Segment | SymbolInstance>) {
+   copy_(items, true)
+   for (let item of items) item.delete()
+}
+export function copy(items: Iterable<Segment | SymbolInstance>) {
+   copy_(items, true)
+}
+export function duplicate(items: Iterable<Segment | SymbolInstance>) {
+   copy_(items, false)
+}
+export function paste() {
+   copy_(clipboard, false)
+}
+// Copy circuit items — either to the clipboard, or into the circuit.
+export function copy_(
+   items: Iterable<Segment | SymbolInstance>,
+   toClipboard: boolean
+) {
+   if (toClipboard && clipboard.size > 0) {
+      // Delete the existing clipboard items.
+      for (let item of clipboard) item.delete()
+      clipboard = new Set()
+   }
+   let symbols = new Set<SymbolInstance>()
+   let segments = new Set<Segment>()
+   for (let item of items) if (item instanceof SymbolInstance) symbols.add(item)
+   for (let item of items) if (item instanceof Segment) segments.add(item)
+   let copiedSymbols = new Map<SymbolInstance, SymbolInstance>()
+   let copiedPorts = new Map<Port, Vertex>()
+   let copiedSegments = new Map<Segment, Segment>()
+   let copiedJunctions = new Map<Junction, Junction>()
+   for (let symbol of symbols) {
+      let copiedSymbol = new SymbolInstance(
+         symbol.kind,
+         symbol.position,
+         symbol.rotation,
+         symbol.scale,
+         !toClipboard
+      )
+      copiedSymbols.set(symbol, copiedSymbol)
+      for (let i = 0; i < symbol.ports.length; ++i)
+         copiedPorts.set(symbol.ports[i], copiedSymbol.ports[i])
+   }
+   for (let segment of segments) {
+      let copiedSegment = new Segment(
+         segment.type,
+         getCopied(segment.start),
+         getCopied(segment.end),
+         segment.axis,
+         !toClipboard
+      )
+      copiedSegment.isFrozen = segment.isFrozen
+      copiedSegments.set(segment, copiedSegment)
+   }
+   // Establish the crossingKinds between each pair of copied segments.
+   for (let [seg1, copiedSeg1] of copiedSegments) {
+      for (let [seg2, copiedSeg2] of copiedSegments) {
+         let c = seg1.crossingKinds.get(seg2)
+         if (c) copiedSeg1.crossingKinds.set(copiedSeg2, c)
+      }
+   }
+   // For copied Junctions whose host (if any) was also copied, ensure that
+   // their relationship is preserved.
+   for (let [junction, copiedJunction] of copiedJunctions) {
+      let host = junction.host()
+      if (host instanceof Segment) {
+         let copiedSegment = copiedSegments.get(host)
+         if (copiedSegment) copiedJunction.attachTo(copiedSegment)
+      } else if (host) {
+         let copiedSymbol = copiedSymbols.get(host)
+         if (copiedSymbol) copiedJunction.attachTo(copiedSymbol)
+      }
+   }
+   function getCopied(vertex: Vertex): Vertex {
+      let copiedVertex =
+         copiedJunctions.get(vertex as Junction) ||
+         copiedPorts.get(vertex as Port)
+      if (!copiedVertex) {
+         // [If the vertex is a Junction]: Junctions are being copied lazily.
+         // We haven't found a pre-existing copy of the Junction, so we will
+         // copy it now.
+         // [If the vertex is a Port]: Symbols have already been copied at the
+         // time of this call, and so have their Ports. Thus, the fact that we
+         // couldn't find a copy of the Port means that its Symbol is not part
+         // of the selection. We will replace it with a Junction.
+         copiedVertex = new Junction(vertex, vertex.glyph, !toClipboard)
+         if (vertex instanceof Junction) {
+            copiedJunctions.set(vertex, copiedVertex)
+         } else {
+            copiedPorts.set(vertex, copiedVertex)
+         }
+      }
+      return copiedVertex
+   }
+}
 
 type JunctionJSON = {
    objectID: number
