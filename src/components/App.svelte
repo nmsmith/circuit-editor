@@ -691,6 +691,8 @@
    // ---------------------- Editor state (not persisted) ---------------------
    // Note: This is the state of the editor. The circuit is stored elsewhere.
    let [canvasWidth, canvasHeight] = [800, 600]
+   let pasteOffset = new Vector(0, 0) // offset for repeated pasting
+
    let projectFolder: null | string = null
    let symbols = new Set<SymbolKind>()
    let vertexGlyphs = new Set<SymbolKind>()
@@ -1928,9 +1930,20 @@
                thingsToMove.add(item)
             }
          }
-         // Offset all of the Movables by the same amount.
-         let d = new Vector(30, 30)
+         // Find their centroid.
+         let v = zeroVector
+         for (let m of thingsToMove) {
+            let p = m instanceof SymbolInstance ? m.center() : m
+            v = v.add(p.displacementFrom(Point.zero))
+         }
+         let centroid = Point.zero.displacedBy(
+            v.scaledBy(1 / thingsToMove.size)
+         )
+         // Place the centroid at the mouse position — with an offset for
+         // repeated pasting.
+         let d = mouseOnCanvas.displacementFrom(centroid).add(pasteOffset)
          for (let thing of thingsToMove) thing.moveBy(d)
+         pasteOffset = pasteOffset.add(new Vector(20, 20))
          // Amass the copied items.
          amassed.items = new Set(items)
 
@@ -2076,6 +2089,7 @@
    function mouseMoved() {
       cameraPosition = computeCameraPosition()
       mouseOnCanvas = computeMouseOnCanvas() // hack: immediately update the var
+      pasteOffset = new Vector(0, 0)
       // Update the actions that depend on mouse movement. (It's important that
       // these updates are invoked BEFORE any begin___() functions. The begin___
       // funcs may induce changes to derived data that the updates need to see.)
