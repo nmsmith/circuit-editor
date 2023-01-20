@@ -141,7 +141,7 @@ To assign IDs to SVG elements, you do not need to manually edit your SVG files. 
 The circuit editor allows you to define and draw lines of (almost) arbitrary appearance. Each line type is defined by a JSON file with a particular format. The root object of the JSON file can contain the following fields:
 
 -  color (mandatory): The color of the line, given as a CSS color, e.g. "blue", "#FFFFFF", or "rgb(180, 0, 90)".
--  thickness (mandatory): The thickness of the line in pixels, given as an integer, e.g. 3.
+-  thickness (mandatory): The thickness of the line in pixels, given as a number, e.g. 3.
 -  dasharray (optional): The dash pattern of the line, given in [the standard format](https://developer.mozilla.org/en-US/docs/Web/SVG/Attribute/stroke-dasharray) for SVG dash patterns.
 -  meeting (optional): A JSON object describing what glyphs (if any) should appear when this line type meets other line types. The format of this object is described in more detail below.
 
