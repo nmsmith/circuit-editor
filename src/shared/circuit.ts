@@ -28,16 +28,25 @@ export interface Deletable {
 
 export type Edge = [Segment, Vertex]
 
+export type GlyphOrientation = "fixed" | "withSegment"
+
 export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
    readonly objectID: number // for serialization
    glyph: VertexGlyphKind
+   glyphOrientation: GlyphOrientation
    private readonly edges_ = new Set<Edge>()
    private host_: Segment | SymbolInstance | null = null
-   constructor(point: Point, glyph?: VertexGlyphKind, addToCircuit = true) {
+   constructor(
+      point: Point,
+      glyph: VertexGlyphKind = { type: "auto" },
+      glyphOrientation: GlyphOrientation = "fixed",
+      addToCircuit = true
+   ) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
-      this.glyph = glyph ? glyph : { type: "auto" }
+      this.glyph = glyph
+      this.glyphOrientation = glyphOrientation
       if (addToCircuit) Junction.s.add(this)
    }
    delete(): Set<Junction> {
@@ -168,6 +177,7 @@ export class Port extends Point {
    readonly symbol: SymbolInstance
    readonly kind: PortKind
    glyph: VertexGlyphKind
+   glyphOrientation: GlyphOrientation = "fixed"
    private readonly edges_ = new Set<Edge>()
    constructor(
       symbol: SymbolInstance,
@@ -796,7 +806,12 @@ export function copy_(
          // time of this call, and so have their Ports. Thus, the fact that we
          // couldn't find a copy of the Port means that its Symbol is not part
          // of the selection. We will replace it with a Junction.
-         copiedVertex = new Junction(vertex, vertex.glyph, !toClipboard)
+         copiedVertex = new Junction(
+            vertex,
+            vertex.glyph,
+            vertex.glyphOrientation,
+            !toClipboard
+         )
          if (vertex instanceof Junction) {
             copiedJunctions.set(vertex, copiedVertex)
          } else {
@@ -811,6 +826,7 @@ export function copy_(
 type JunctionJSON = {
    objectID: number
    glyph: VertexGlyphKind
+   glyphOrientation: GlyphOrientation
    position: { x: number; y: number }
 }
 
@@ -818,6 +834,7 @@ type PortJSON = {
    objectID: number
    svgID: string // represents a PortKind
    glyph: VertexGlyphKind
+   glyphOrientation: GlyphOrientation
 }
 
 type SegmentJSON = {
@@ -871,6 +888,7 @@ export function saveToJSON(): CircuitJSON {
       return {
          objectID: j.objectID,
          glyph: j.glyph,
+         glyphOrientation: j.glyphOrientation,
          position: { x: j.x, y: j.y },
       }
    })
@@ -898,7 +916,12 @@ export function saveToJSON(): CircuitJSON {
          objectID: s.objectID,
          fileName: s.kind.fileName,
          ports: s.ports.map((p) => {
-            return { objectID: p.objectID, svgID: p.kind.svgID, glyph: p.glyph }
+            return {
+               objectID: p.objectID,
+               svgID: p.kind.svgID,
+               glyph: p.glyph,
+               glyphOrientation: p.glyphOrientation,
+            }
          }),
          attachments: [...s.attachments].map((j) => j.objectID),
          position: { x: s.position.x, y: s.position.y },
@@ -945,7 +968,11 @@ export function loadFromJSON(
    circuit.junctions.forEach((j) => {
       vertexMap.set(
          j.objectID,
-         new Junction(new Point(j.position.x, j.position.y), j.glyph)
+         new Junction(
+            new Point(j.position.x, j.position.y),
+            j.glyph,
+            j.glyphOrientation
+         )
       )
    })
    circuit.symbols.forEach((s) => {
@@ -965,6 +992,7 @@ export function loadFromJSON(
             let port = portsByID.get(p.svgID)
             if (port) {
                port.glyph = p.glyph
+               port.glyphOrientation = p.glyphOrientation
                vertexMap.set(p.objectID, port)
             }
          })

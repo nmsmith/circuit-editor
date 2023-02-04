@@ -25,6 +25,7 @@
       copy,
       paste,
       duplicate,
+      GlyphOrientation,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -50,6 +51,7 @@
    import * as Comlink from "comlink"
    import type { WorkerInterface, CircuitHistory } from "~/saveLoadWorker"
    import GlyphSelectionBox from "./GlyphSelectionBox.svelte"
+   import FakeRadioButton from "./FakeRadioButton.svelte"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -1201,6 +1203,7 @@
            mode: "vertex"
            vertices: Set<Vertex>
            glyphs: Set<GlyphKind>
+           glyphOrientations: GlyphOrientation | "both"
         }
       | {
            mode: "crossing"
@@ -1256,7 +1259,22 @@
                      : null
                )
             )
-            inspector = { mode: "vertex", vertices: new Set($vertices), glyphs }
+            let glyphOrientations: GlyphOrientation | "both"
+            if ($vertices.every((v) => v.glyphOrientation === "fixed")) {
+               glyphOrientations = "fixed"
+            } else if (
+               $vertices.every((v) => v.glyphOrientation === "withSegment")
+            ) {
+               glyphOrientations = "withSegment"
+            } else {
+               glyphOrientations = "both"
+            }
+            inspector = {
+               mode: "vertex",
+               vertices: new Set($vertices),
+               glyphs,
+               glyphOrientations,
+            }
          } else if ($crossings.length > 0) {
             let glyphs = new Set<GlyphKind>(
                $crossings.map((crossing) => {
@@ -1297,6 +1315,18 @@
          inspector.vertices.size > 1
             ? "change vertex glyphs"
             : "change vertex glyph"
+      )
+      Junction.s = Junction.s
+      Port.s = Port.s
+      amassed.items = amassed.items
+   }
+   function orientVertexGlyphs(orientation: GlyphOrientation) {
+      if (inspector.mode !== "vertex") return
+      for (let v of inspector.vertices) v.glyphOrientation = orientation
+      commitState(
+         inspector.vertices.size > 1
+            ? "orient vertex glyphs"
+            : "orient vertex glyph"
       )
       Junction.s = Junction.s
       Port.s = Port.s
@@ -1346,7 +1376,7 @@
       Segment.s = Segment.s
       amassed.items = amassed.items
    }
-   function rotateCrossings(direction: "clockwise" | "anticlockwise") {
+   function rotateCrossingGlyphs(direction: "clockwise" | "anticlockwise") {
       if (inspector.mode !== "crossing") return
       for (let { seg1, seg2 } of inspector.crossings) {
          let c1 = seg1.crossingKinds.read(seg2)
@@ -1439,6 +1469,7 @@
       vertex: Vertex | SpecialAttachPoint
       glyph: SymbolKind
       position: Point
+      rotation: number // in degrees
       style: HighlightStyle
    }
    type CrossingGlyph = {
@@ -1559,6 +1590,23 @@
       }
       // Determine what vertex glyphs need to be drawn.
       for (let v of allVertices()) {
+         // First, determine how/whether the glyph should be rotated.
+         let vertexRotation: number
+         if (v.glyphOrientation === "fixed") {
+            vertexRotation = 0
+         } else {
+            // Consider the edge with the smallest rotation.
+            let zero = Direction.positiveX
+            let edgeAngles = [...v.edges()].map(
+               ([_, vStart]) =>
+                  v.directionFrom(vStart)?.rotationFrom(zero).toDegrees() || 0
+            )
+            vertexRotation = edgeAngles.reduce(
+               (min, val) => (Math.abs(val) < Math.abs(min) ? val : min),
+               Infinity
+            )
+         }
+         // Now, determine the glyph to draw.
          if (v.glyph.type === "manual") {
             let glyph = findVertexGlyph(v.glyph.glyph)
             if (glyph) {
@@ -1567,6 +1615,7 @@
                   vertex: v,
                   glyph,
                   position: v,
+                  rotation: vertexRotation,
                   style: styleOf(v),
                })
             } else if (
@@ -1580,6 +1629,7 @@
                   vertex: v,
                   glyph: vertexMarkerGlyph,
                   position: v,
+                  rotation: 0,
                   style: styleOf(v),
                })
             }
@@ -1671,6 +1721,7 @@
                   vertex: v,
                   glyph: glyphSymbol,
                   position: v,
+                  rotation: vertexRotation,
                   style: styleOf(v),
                })
             } else if (
@@ -1689,6 +1740,7 @@
                   vertex: v,
                   glyph: vertexMarkerGlyph,
                   position: v,
+                  rotation: 0,
                   style: styleOf(v),
                })
             }
@@ -1703,6 +1755,7 @@
                vertex: v,
                glyph: vertexMarkerGlyph,
                position: v,
+               rotation: 0,
                style: styleOf(v),
             })
          }
@@ -1720,6 +1773,7 @@
                   vertex: p,
                   glyph: attachMarkerGlyph,
                   position: p,
+                  rotation: 0,
                   style: styleOf(p),
                })
          }
@@ -3678,8 +3732,8 @@
                   {@const port = glyph.glyph.ports[0]}
                   <g
                      class={className}
-                     transform="translate({glyph.position.x - port.x} {glyph
-                        .position.y - port.y})"
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}-highlight" />
                   </g>
@@ -3703,8 +3757,8 @@
                   <!-- TODO: Inherit "color" more intelligently.-->
                   <g
                      color="blue"
-                     transform="translate({glyph.position.x - port.x} {glyph
-                        .position.y - port.y})"
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
@@ -3737,8 +3791,8 @@
                      class={glyph.style === "touch"
                         ? "touchLight"
                         : "amassLight"}
-                     transform="translate({glyph.position.x - port.x} {glyph
-                        .position.y - port.y})"
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}-highlight" />
                   </g>
@@ -3754,8 +3808,8 @@
                   <!-- TODO: Inherit "color" more intelligently.-->
                   <g
                      color="blue"
-                     transform="translate({glyph.position.x - port.x} {glyph
-                        .position.y - port.y})"
+                     transform="translate({glyph.position.x} {glyph.position
+                        .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
@@ -3846,6 +3900,18 @@
                   glyphsToHighlight={inspector.glyphs}
                   glyphSelected={setVertexGlyphs}
                />
+               <div class="spacer" />
+               <div class="inspectorSubtitle">Glyph orientation</div>
+               <FakeRadioButton
+                  label="Fixed"
+                  checked={inspector.glyphOrientations === "fixed"}
+                  onClick={() => orientVertexGlyphs("fixed")}
+               />
+               <FakeRadioButton
+                  label="With segment"
+                  checked={inspector.glyphOrientations === "withSegment"}
+                  onClick={() => orientVertexGlyphs("withSegment")}
+               />
             {:else if inspector.mode === "crossing"}
                <div class="inspectorSubtitle">Glyph</div>
                <GlyphSelectionBox
@@ -3854,17 +3920,17 @@
                   glyphSelected={setCrossingGlyphs}
                />
                <div class="spacer" />
-               <div class="inspectorSubtitle">Rotate</div>
+               <div class="inspectorSubtitle">Glyph orientation</div>
                <div class="rotateButtons">
                   <div
                      class="rotateButton"
-                     on:mousedown={() => rotateCrossings("anticlockwise")}
+                     on:mousedown={() => rotateCrossingGlyphs("anticlockwise")}
                   >
                      ↺
                   </div>
                   <div
                      class="rotateButton"
-                     on:mousedown={() => rotateCrossings("clockwise")}
+                     on:mousedown={() => rotateCrossingGlyphs("clockwise")}
                   >
                      ↻
                   </div>
