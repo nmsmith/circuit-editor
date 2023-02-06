@@ -14,6 +14,32 @@ import { DefaultMap, DefaultWeakMap } from "./utilities"
 
 let nextObjectID = 0
 
+export type Tag = string
+export const emptyTag: Tag = ""
+
+// A property (key/value pair) has two representations: as a PropertyString and
+// as a Property. The former representation is a serialized version of the
+// latter. It exists so that duplicate key/value pairs are ignored when they
+// are stored in a Set.
+export type PropertyString = string
+export class Property {
+   name: string
+   value: string
+   constructor(name: string, value: string) {
+      this.name = name
+      this.value = value
+   }
+   serialize(): PropertyString {
+      return this.name + propSeparator + this.value
+   }
+}
+export function parseProperty(propString: PropertyString): Property {
+   let i = propString.indexOf(propSeparator)
+   return new Property(propString.slice(0, i), propString.slice(i + 1))
+}
+const propSeparator = "\\"
+export let emptyPropertyString: PropertyString = propSeparator
+
 export type Vertex = Junction | Port
 export type VertexGlyphKind =
    | { type: "auto" }
@@ -28,11 +54,13 @@ export interface Deletable {
 
 export type Edge = [Segment, Vertex]
 
-export type GlyphOrientation = "fixed" | "withSegment"
+export type GlyphOrientation = "fixed" | "inherit"
 
 export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
    readonly objectID: number // for serialization
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
    glyph: VertexGlyphKind
    glyphOrientation: GlyphOrientation
    private readonly edges_ = new Set<Edge>()
@@ -58,6 +86,7 @@ export class Junction extends Point implements Deletable {
       }
       this.edges_.clear()
       this.detach()
+      for (let group of groups) group.items.delete(this)
       return neighbours
    }
    moveTo(point: Point) {
@@ -174,6 +203,8 @@ export class PortKind extends Point {
 export class Port extends Point {
    static s = new Set<Port>()
    readonly objectID: number // for serialization
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
    readonly symbol: SymbolInstance
    readonly kind: PortKind
    glyph: VertexGlyphKind
@@ -259,6 +290,8 @@ export class SpecialAttachPoint extends Point {
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly objectID: number // for serialization
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
    type: LineType
    attachments = new Set<Junction>() // should only be modified from Junction class
    isFrozen = false
@@ -550,6 +583,8 @@ export class SymbolKind {
 export class SymbolInstance extends Rectangle implements Deletable {
    static s: SymbolInstance[] = [] // order corresponds to rendering order
    readonly objectID: number // for serialization
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
    private static nextInstanceID = 0
    readonly instanceID: string
    readonly kind: SymbolKind
@@ -632,6 +667,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
          }
       }
       this.attachments.forEach((a) => a.detach())
+      for (let group of groups) group.items.delete(this)
       return new Set()
    }
    edges(): Set<Edge> {
@@ -825,6 +861,8 @@ export function copy_(
 
 type JunctionJSON = {
    objectID: number
+   tags: Tag[]
+   properties: PropertyString[]
    glyph: VertexGlyphKind
    glyphOrientation: GlyphOrientation
    position: { x: number; y: number }
@@ -832,6 +870,8 @@ type JunctionJSON = {
 
 type PortJSON = {
    objectID: number
+   tags: Tag[]
+   properties: PropertyString[]
    svgID: string // represents a PortKind
    glyph: VertexGlyphKind
    glyphOrientation: GlyphOrientation
@@ -839,6 +879,8 @@ type PortJSON = {
 
 type SegmentJSON = {
    objectID: number
+   tags: Tag[]
+   properties: PropertyString[]
    type: string // must be a LineType.name
    attachments?: number[]
    isFrozen: boolean
@@ -850,6 +892,8 @@ type SegmentJSON = {
 
 type SymbolJSON = {
    objectID: number
+   tags: Tag[]
+   properties: PropertyString[]
    fileName: string // represents a SymbolKind
    ports: PortJSON[]
    attachments?: number[]
@@ -887,6 +931,8 @@ export function saveToJSON(): CircuitJSON {
    let junctions = [...Junction.s].map((j) => {
       return {
          objectID: j.objectID,
+         tags: [...j.tags],
+         properties: [...j.properties],
          glyph: j.glyph,
          glyphOrientation: j.glyphOrientation,
          position: { x: j.x, y: j.y },
@@ -902,6 +948,8 @@ export function saveToJSON(): CircuitJSON {
       }
       return {
          objectID: s.objectID,
+         tags: [...s.tags],
+         properties: [...s.properties],
          type: s.type.name,
          attachments: [...s.attachments].map((j) => j.objectID),
          isFrozen: s.isFrozen,
@@ -914,10 +962,14 @@ export function saveToJSON(): CircuitJSON {
    let symbols = [...SymbolInstance.s].map((s) => {
       return {
          objectID: s.objectID,
+         tags: [...s.tags],
+         properties: [...s.properties],
          fileName: s.kind.fileName,
          ports: s.ports.map((p) => {
             return {
                objectID: p.objectID,
+               tags: [...p.tags],
+               properties: [...p.properties],
                svgID: p.kind.svgID,
                glyph: p.glyph,
                glyphOrientation: p.glyphOrientation,
@@ -966,31 +1018,35 @@ export function loadFromJSON(
    let segmentMap = new Map<number, Segment>()
    let symbolMap = new Map<number, SymbolInstance>()
    circuit.junctions.forEach((j) => {
-      vertexMap.set(
-         j.objectID,
-         new Junction(
-            new Point(j.position.x, j.position.y),
-            j.glyph,
-            j.glyphOrientation
-         )
+      let junction = new Junction(
+         new Point(j.position.x, j.position.y),
+         j.glyph,
+         j.glyphOrientation
       )
+      junction.tags = new Set(j.tags)
+      junction.properties = new Set(j.properties)
+      vertexMap.set(j.objectID, junction)
    })
    circuit.symbols.forEach((s) => {
       let kind = symbolKinds.get(s.fileName)
       if (kind) {
          // Load the symbol.
-         let newSymbol = new SymbolInstance(
+         let symbol = new SymbolInstance(
             kind,
             new Point(s.position.x, s.position.y),
             new Rotation(s.rotation.x, s.rotation.y),
             new Vector(s.scale.x, s.scale.y)
          )
-         symbolMap.set(s.objectID, newSymbol)
+         symbol.tags = new Set(s.tags)
+         symbol.properties = new Set(s.properties)
+         symbolMap.set(s.objectID, symbol)
          // Load the state of the symbol's ports.
-         let portsByID = new Map(newSymbol.ports.map((p) => [p.kind.svgID, p]))
+         let portsByID = new Map(symbol.ports.map((p) => [p.kind.svgID, p]))
          s.ports.forEach((p) => {
             let port = portsByID.get(p.svgID)
             if (port) {
+               port.tags = new Set(p.tags)
+               port.properties = new Set(p.properties)
                port.glyph = p.glyph
                port.glyphOrientation = p.glyphOrientation
                vertexMap.set(p.objectID, port)
@@ -1004,7 +1060,7 @@ export function loadFromJSON(
                   `Failed to find a junction (ID ${id}) attached to a symbol (ID ${s.objectID}).`
                )
             } else {
-               ;(j as Junction).attachTo(newSymbol)
+               ;(j as Junction).attachTo(symbol)
             }
          }
       } else {
@@ -1034,12 +1090,14 @@ export function loadFromJSON(
          )
       }
       if (lineType && start && end) {
-         let newSegment = new Segment(
+         let segment = new Segment(
             lineType,
             start,
             end,
             Axis.fromVector(new Vector(s.axis.x, s.axis.y)) as Axis
          )
+         segment.tags = new Set(s.tags)
+         segment.properties = new Set(s.properties)
          for (let id of s.attachments || []) {
             let j = vertexMap.get(id)
             if (!j) {
@@ -1047,11 +1105,11 @@ export function loadFromJSON(
                   `Failed to find a junction (ID ${id}) attached to a segment (ID ${s.objectID}).`
                )
             } else {
-               ;(j as Junction).attachTo(newSegment)
+               ;(j as Junction).attachTo(segment)
             }
          }
-         newSegment.isFrozen = s.isFrozen
-         segmentMap.set(s.objectID, newSegment)
+         segment.isFrozen = s.isFrozen
+         segmentMap.set(s.objectID, segment)
       }
    })
    // Pass 2: Set the crossing type of each segment pair.

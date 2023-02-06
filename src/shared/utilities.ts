@@ -65,6 +65,12 @@ export class DefaultWeakMap<K extends Object, V> extends WeakMap<K, V> {
    }
 }
 
+export function sameSet(s1: Set<any>, s2: Set<any>): boolean {
+   if (s1.size !== s2.size) return false
+   for (let e of s1) if (!s2.has(e)) return false
+   return true
+}
+
 export class ToggleSet<K> extends Set<K> {
    toggle(key: K) {
       if (this.has(key)) {

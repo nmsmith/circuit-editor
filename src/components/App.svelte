@@ -26,6 +26,12 @@
       paste,
       duplicate,
       GlyphOrientation,
+      Property,
+      PropertyString,
+      Tag,
+      parseProperty,
+      emptyTag,
+      emptyPropertyString,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -43,7 +49,7 @@
       closestSegmentTo,
    } from "~/shared/geometry"
    import * as Geometry from "~/shared/geometry"
-   import { DefaultMap } from "~/shared/utilities"
+   import { DefaultMap, sameSet } from "~/shared/utilities"
    import CircuitLine from "~/components/CircuitLine.svelte"
    import RectSelectBox from "~/components/RectSelectBox.svelte"
    import Button from "~/components/ToolButton.svelte"
@@ -52,6 +58,7 @@
    import type { WorkerInterface, CircuitHistory } from "~/saveLoadWorker"
    import GlyphSelectionBox from "./GlyphSelectionBox.svelte"
    import FakeRadioButton from "./FakeRadioButton.svelte"
+   import TextBox from "./TextBox.svelte"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -1198,7 +1205,7 @@
       crossingGlyphKinds = ["auto", null, ...crossingGlyphs]
    }
    let inspectorItemSummary: string
-   let inspector:
+   type InspectorMode =
       | {
            mode: "vertex"
            vertices: Set<Vertex>
@@ -1211,17 +1218,85 @@
            glyphs: Set<GlyphKind>
         }
       | { mode: "symbol"; symbols: Set<SymbolInstance>; canFlip: boolean }
+      | { mode: "mixed" }
+   type TagInfo = { tag: Tag; count: number }
+   type PropertyInfo = { property: Property; count: number }
+   let inspector:
+      | (InspectorMode & {
+           items: Set<Interactable>
+           tags: TagInfo[]
+           properties: PropertyInfo[]
+        })
       | { mode: null }
+   let tagSortOrder: Tag[] = []
+   let propertySortOrder: PropertyString[] = []
    $: {
+      // Before resetting variables, ensure that if a property is being edited
+      // in the (outdated) inspector right now, the edited value is saved.
+      // (A crucial assumption here is that whenever this code is being
+      // executed, it is acceptable to de-focus the current input element.)
+      let e = document.activeElement
+      if (e instanceof HTMLInputElement && e.classList.contains("textBoxInput"))
+         e.blur()
+      // Reset the sort orders whenever the items being inspected have changed.
+      let itemsToInspect = new Set(amassed.items)
+      if (inspector?.mode && !sameSet(itemsToInspect, inspector.items)) {
+         tagSortOrder = []
+         propertySortOrder = []
+      }
+      // Reset variables.
       inspectorItemSummary = ""
       inspector = { mode: null }
-      let items = [...amassed.items]
+
+      // Gather the tags and properties of the inspected items.
+      let tagCounts = new DefaultMap<Tag, number>(() => 0)
+      let propertyCounts = new DefaultMap<PropertyString, number>(() => 0)
+      for (let item of itemsToInspect) {
+         if (item instanceof Crossing) continue
+         for (let tag of item.tags) tagCounts.set(tag, tagCounts.read(tag) + 1)
+         for (let prop of item.properties)
+            propertyCounts.set(prop, propertyCounts.read(prop) + 1)
+      }
+      let tags: TagInfo[] = []
+      // If there is a pre-existing order, display tags in that order.
+      for (let tag of tagSortOrder) {
+         if (tagCounts.has(tag)) {
+            tags.push({ tag, count: tagCounts.read(tag) })
+            tagCounts.delete(tag)
+         }
+      }
+      // Otherwise (or for remaining tags), display them lexicographically.
+      for (let tag of [...tagCounts.keys()].sort()) {
+         tags.push({ tag, count: tagCounts.read(tag) })
+      }
+      let properties: PropertyInfo[] = []
+      // If there is a pre-existing order, display properties in that order.
+      for (let prop of propertySortOrder) {
+         if (propertyCounts.has(prop)) {
+            properties.push({
+               property: parseProperty(prop),
+               count: propertyCounts.read(prop),
+            })
+            propertyCounts.delete(prop)
+         }
+      }
+      // Otherwise (or for remaining properties), display them lexicographically
+      for (let prop of [...propertyCounts.keys()].sort()) {
+         properties.push({
+            property: parseProperty(prop),
+            count: propertyCounts.read(prop),
+         })
+      }
+      // Group items by their type.
+      let items = [...itemsToInspect]
       let $vertices = items.filter((i) => isVertex(i)) as Vertex[]
       let $crossings = items.filter((i) => i instanceof Crossing) as Crossing[]
       let $segments = items.filter((i) => i instanceof Segment) as Segment[]
       let $symbols = items.filter(
          (i) => i instanceof SymbolInstance
       ) as SymbolInstance[]
+
+      // Compute the summary text.
       let vertexText =
          $vertices.length > 1 ? `${$vertices.length} vertices` : "1 vertex"
       let crossingText =
@@ -1247,6 +1322,7 @@
          }
          inspectorItemSummary += "."
       }
+
       if (data.length === 1) {
          // Show configuration options specific to the type of item selected.
          if ($vertices.length > 0) {
@@ -1263,9 +1339,9 @@
             if ($vertices.every((v) => v.glyphOrientation === "fixed")) {
                glyphOrientations = "fixed"
             } else if (
-               $vertices.every((v) => v.glyphOrientation === "withSegment")
+               $vertices.every((v) => v.glyphOrientation === "inherit")
             ) {
-               glyphOrientations = "withSegment"
+               glyphOrientations = "inherit"
             } else {
                glyphOrientations = "both"
             }
@@ -1274,6 +1350,9 @@
                vertices: new Set($vertices),
                glyphs,
                glyphOrientations,
+               items: itemsToInspect,
+               tags,
+               properties,
             }
          } else if ($crossings.length > 0) {
             let glyphs = new Set<GlyphKind>(
@@ -1291,13 +1370,32 @@
                mode: "crossing",
                crossings: new Set($crossings),
                glyphs,
+               items: itemsToInspect,
+               tags,
+               properties,
             }
          } else if ($symbols.length > 0) {
             let canFlip = $symbols.every((symbol) => symbol.edges().size === 0)
-            inspector = { mode: "symbol", symbols: new Set($symbols), canFlip }
+            inspector = {
+               mode: "symbol",
+               symbols: new Set($symbols),
+               canFlip,
+               items: itemsToInspect,
+               tags,
+               properties,
+            }
+         } else {
+            // Show generic configuration options.
+            inspector = {
+               mode: "mixed",
+               items: itemsToInspect,
+               tags,
+               properties,
+            }
          }
       } else if (data.length > 1) {
          // Show generic configuration options.
+         inspector = { mode: "mixed", items: itemsToInspect, tags, properties }
       }
    }
    function setVertexGlyphs(kind: GlyphKind) {
@@ -1457,6 +1555,105 @@
       for (let symbol of targets) symbol.applyBringToFront()
       commitState("bring to front")
       SymbolInstance.s = SymbolInstance.s
+   }
+   function addEmptyTag() {
+      if (!inspector.mode) return
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         item.tags.add(emptyTag)
+      }
+      tagSortOrder = [emptyTag] // Put the new tag first.
+      for (let { tag } of inspector.tags) tagSortOrder.push(tag)
+      commitState("add tag")
+      amassed.items = amassed.items
+   }
+   function addEmptyProperty() {
+      if (!inspector.mode) return
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         item.properties.add(emptyPropertyString)
+      }
+      propertySortOrder = [emptyPropertyString] // Put the new property first.
+      for (let { property } of inspector.properties)
+         propertySortOrder.push(property.serialize())
+      commitState("add property")
+      amassed.items = amassed.items
+   }
+   function replaceTag(old: Tag, new_: Tag) {
+      if (!inspector.mode || old === new_) return
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         if (item.tags.has(old)) {
+            item.tags.delete(old)
+            item.tags.add(new_)
+         }
+      }
+      // Store the current order of the inspector tags, so that when the
+      // inspector is refreshed, the tag that was edited is able to retain
+      // its position, instead of being sorted lexicographically.
+      tagSortOrder = []
+      for (let { tag } of inspector.tags) {
+         if (tag === old) {
+            tagSortOrder.push(new_)
+         } else {
+            tagSortOrder.push(tag)
+         }
+      }
+      commitState("replace tag")
+      amassed.items = amassed.items
+   }
+   function replacePropertyName(prop: Property, newName: string) {
+      if (prop.name !== newName)
+         replaceProperty(prop, new Property(newName, prop.value))
+   }
+   function replacePropertyValue(prop: Property, newValue: string) {
+      if (prop.value !== newValue)
+         replaceProperty(prop, new Property(prop.name, newValue))
+   }
+   function replaceProperty(prop: Property, newProp: Property) {
+      if (!inspector.mode) return
+      let oldPropString = prop.serialize()
+      let newPropString = newProp.serialize()
+      // Update the properties of the inspected items.
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         if (item.properties.has(oldPropString)) {
+            item.properties.delete(oldPropString)
+            item.properties.add(newPropString)
+         }
+      }
+      // Store the current order of the inspector properties, so that when the
+      // inspector is refreshed, the property that was edited is able to retain
+      // its position, instead of being sorted lexicographically.
+      propertySortOrder = []
+      for (let { property } of inspector.properties) {
+         if (property === prop) {
+            propertySortOrder.push(newPropString)
+         } else {
+            propertySortOrder.push(property.serialize())
+         }
+      }
+      commitState("replace property")
+      amassed.items = amassed.items
+   }
+   function removeTag(tag: Tag) {
+      if (!inspector.mode) return
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         item.tags.delete(tag)
+      }
+      commitState("remove tag")
+      amassed.items = amassed.items
+   }
+   function removeProperty(prop: Property) {
+      if (!inspector.mode) return
+      let propString = prop.serialize()
+      for (let item of inspector.items) {
+         if (item instanceof Crossing) continue
+         item.properties.delete(propString)
+      }
+      commitState("remove property")
+      amassed.items = amassed.items
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
@@ -3487,13 +3684,18 @@
    on:mousemove={updateModifierKeys}
    on:keydown={(event) => {
       updateModifierKeys(event)
-      if (keyInfo.read(Control).pressing) {
-         if (command(event.code, event.repeat) === "recognized")
-            event.preventDefault()
-      } else if (!event.repeat /* Ignore auto-repeated key presses */) {
-         keyPressed(event.code)
+      let inputElementActive =
+         document.activeElement?.tagName.toLowerCase() === "input" ||
+         document.activeElement?.tagName.toLowerCase() === "textarea"
+      if (!inputElementActive) {
+         if (keyInfo.read(Control).pressing) {
+            if (command(event.code, event.repeat) === "recognized")
+               event.preventDefault()
+         } else if (!event.repeat) {
+            keyPressed(event.code)
+         }
+         if (event.code === "Space") event.preventDefault() // Don't scroll
       }
-      if (event.code === "Space") event.preventDefault() // Don't trigger scroll
    }}
    on:keyup={(event) => {
       updateModifierKeys(event)
@@ -3619,7 +3821,6 @@
          }
       }}
       on:mousedown={(event) => {
-         event.preventDefault() // Disable selection of nearby text elements.
          if (leftMouseIsDown(event)) keyPressed(LMB)
          if (middleMouseIsDown(event)) keyPressed(MMB)
          if (rightMouseIsDown(event)) keyPressed(RMB)
@@ -3902,16 +4103,18 @@
                />
                <div class="spacer" />
                <div class="inspectorSubtitle">Glyph orientation</div>
-               <FakeRadioButton
-                  label="Fixed"
-                  checked={inspector.glyphOrientations === "fixed"}
-                  onClick={() => orientVertexGlyphs("fixed")}
-               />
-               <FakeRadioButton
-                  label="With segment"
-                  checked={inspector.glyphOrientations === "withSegment"}
-                  onClick={() => orientVertexGlyphs("withSegment")}
-               />
+               <div class="radioButtons">
+                  <FakeRadioButton
+                     label="Fixed"
+                     checked={inspector.glyphOrientations === "fixed"}
+                     onClick={() => orientVertexGlyphs("fixed")}
+                  />
+                  <FakeRadioButton
+                     label="Inherit from segment"
+                     checked={inspector.glyphOrientations === "inherit"}
+                     onClick={() => orientVertexGlyphs("inherit")}
+                  />
+               </div>
             {:else if inspector.mode === "crossing"}
                <div class="inspectorSubtitle">Glyph</div>
                <GlyphSelectionBox
@@ -3958,6 +4161,47 @@
                >
                   Bring to front
                </div>
+            {/if}
+            {#if inspector.mode}
+               <button on:click={addEmptyTag}>New tag</button>
+               {#each inspector.tags as { tag, count }}
+                  <div class="tag">
+                     <div class="count">{count}</div>
+                     <TextBox
+                        width={110}
+                        text={tag}
+                        onSubmit={(value) => replaceTag(tag, value)}
+                     />
+                     <div
+                        class="removeProperty"
+                        on:click={() => removeTag(tag)}
+                     >
+                        ×
+                     </div>
+                  </div>
+               {/each}
+               <button on:click={addEmptyProperty}>New property</button>
+               {#each inspector.properties as { property, count }}
+                  <div class="property">
+                     <div class="count">{count}</div>
+                     <TextBox
+                        text={property.name}
+                        onSubmit={(value) =>
+                           replacePropertyName(property, value)}
+                     />
+                     <TextBox
+                        text={property.value}
+                        onSubmit={(value) =>
+                           replacePropertyValue(property, value)}
+                     />
+                     <div
+                        class="removeProperty"
+                        on:click={() => removeProperty(property)}
+                     >
+                        ×
+                     </div>
+                  </div>
+               {/each}
             {/if}
          </div>
       </div>
@@ -4291,10 +4535,12 @@
    }
    .inspectorPane {
       flex-grow: 1;
-      max-height: 240px;
+      max-height: 360px;
       padding: 5px 4px;
       user-select: none;
       -webkit-user-select: none;
+      overflow-x: hidden;
+      overflow-y: scroll;
    }
    .inspectorItemSummary {
       font-weight: 550;
@@ -4366,6 +4612,31 @@
    :global(.glyphSelectionItem.multiHighlight),
    .lineGridItem.selected {
       background-color: #999;
+   }
+   .radioButtons {
+      display: flex;
+      flex-direction: column;
+      align-items: start;
+      gap: 3px;
+   }
+   .tag,
+   .property {
+      display: flex;
+      flex-direction: row;
+      gap: 4px;
+   }
+   .count {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      width: 15px;
+   }
+   .removeProperty {
+      display: flex;
+      align-items: center;
+      font-size: 22px;
+      font-weight: 700;
+      color: #444;
    }
    .symbolPane {
       min-height: 100px;
@@ -4490,6 +4761,8 @@
       width: 100%;
       height: 100%;
       background-color: rgb(193, 195, 199);
+      user-select: none;
+      -webkit-user-select: none;
    }
    .cursor-amass {
       cursor: default;
