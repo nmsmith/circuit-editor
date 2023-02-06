@@ -1,26 +1,39 @@
 <script lang="ts">
    export let width = 86
    export let text: string
+   export let shouldFocus: boolean = false
+   export let onFocus: () => void = () => {}
    export let onSubmit: (value: string) => void = () => {}
 
-   let input: HTMLInputElement
    let shouldSubmit = true
 
-   function keydown(event: KeyboardEvent) {
+   function keydown(this: HTMLInputElement, event: KeyboardEvent) {
       if (event.key === "Enter" || event.key === "Tab") {
-         input.blur()
+         this.blur()
       } else if (event.key === "Escape") {
          shouldSubmit = false
-         input.blur()
+         this.blur()
       }
    }
-   function focus() {
-      input.value = text
+   function onFocus_(this: HTMLInputElement) {
+      this.value = text
       shouldSubmit = true
+      onFocus()
    }
-   function blur() {
-      if (shouldSubmit) onSubmit(input.value)
-      input.value = ""
+   function onBlur(this: HTMLInputElement) {
+      if (shouldSubmit) onSubmit(this.value)
+      this.value = ""
+   }
+   function change(node: HTMLInputElement, focus: boolean): any {
+      if (focus) {
+         node.focus()
+         node.select()
+      }
+      return {
+         // Svelte calls this returned "update" function whenever the element is
+         // modified. When this happens, we just call "change" again.
+         update: (focus_: boolean) => change(node, focus_),
+      }
    }
 </script>
 
@@ -29,10 +42,10 @@
    <input
       type="text"
       class="textBoxInput"
-      bind:this={input}
       on:keydown={keydown}
-      on:focus={focus}
-      on:blur={blur}
+      on:focus={onFocus_}
+      on:blur={onBlur}
+      use:change={shouldFocus}
    />
 </div>
 

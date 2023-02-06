@@ -1228,6 +1228,8 @@
            properties: PropertyInfo[]
         })
       | { mode: null }
+   let newlyAddedTag: Tag | undefined
+   let newlyAddedProperty: PropertyString | undefined
    let tagSortOrder: Tag[] = []
    let propertySortOrder: PropertyString[] = []
    $: {
@@ -1241,6 +1243,8 @@
       // Reset the sort orders whenever the items being inspected have changed.
       let itemsToInspect = new Set(amassed.items)
       if (inspector?.mode && !sameSet(itemsToInspect, inspector.items)) {
+         newlyAddedTag = undefined
+         newlyAddedProperty = undefined
          tagSortOrder = []
          propertySortOrder = []
       }
@@ -1556,24 +1560,37 @@
       commitState("bring to front")
       SymbolInstance.s = SymbolInstance.s
    }
-   function addEmptyTag() {
+   function randomTag(): Tag {
+      let tag = ""
+      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      const numbers = "0123456789"
+      for (let i = 0; i < 2; ++i)
+         tag += letters.charAt(Math.floor(Math.random() * letters.length))
+      tag += "-"
+      for (let i = 0; i < 2; ++i)
+         tag += numbers.charAt(Math.floor(Math.random() * numbers.length))
+      return tag
+   }
+   function addNewTag() {
       if (!inspector.mode) return
+      newlyAddedTag = randomTag()
       for (let item of inspector.items) {
          if (item instanceof Crossing) continue
-         item.tags.add(emptyTag)
+         item.tags.add(newlyAddedTag)
       }
-      tagSortOrder = [emptyTag] // Put the new tag first.
+      tagSortOrder = [newlyAddedTag] // Put the new tag first.
       for (let { tag } of inspector.tags) tagSortOrder.push(tag)
       commitState("add tag")
       amassed.items = amassed.items
    }
    function addEmptyProperty() {
       if (!inspector.mode) return
+      newlyAddedProperty = emptyPropertyString
       for (let item of inspector.items) {
          if (item instanceof Crossing) continue
-         item.properties.add(emptyPropertyString)
+         item.properties.add(newlyAddedProperty)
       }
-      propertySortOrder = [emptyPropertyString] // Put the new property first.
+      propertySortOrder = [newlyAddedProperty] // Put the new property first.
       for (let { property } of inspector.properties)
          propertySortOrder.push(property.serialize())
       commitState("add property")
@@ -1654,6 +1671,10 @@
       }
       commitState("remove property")
       amassed.items = amassed.items
+   }
+   function propertyFocused() {
+      newlyAddedTag = undefined
+      newlyAddedProperty = undefined
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
@@ -4163,13 +4184,15 @@
                </div>
             {/if}
             {#if inspector.mode}
-               <button on:click={addEmptyTag}>New tag</button>
+               <button on:click={addNewTag}>New tag</button>
                {#each inspector.tags as { tag, count }}
                   <div class="tag">
                      <div class="count">{count}</div>
                      <TextBox
                         width={110}
                         text={tag}
+                        shouldFocus={newlyAddedTag === tag}
+                        onFocus={propertyFocused}
                         onSubmit={(value) => replaceTag(tag, value)}
                      />
                      <div
@@ -4186,11 +4209,15 @@
                      <div class="count">{count}</div>
                      <TextBox
                         text={property.name}
+                        shouldFocus={newlyAddedProperty ===
+                           property.serialize()}
+                        onFocus={propertyFocused}
                         onSubmit={(value) =>
                            replacePropertyName(property, value)}
                      />
                      <TextBox
                         text={property.value}
+                        onFocus={propertyFocused}
                         onSubmit={(value) =>
                            replacePropertyValue(property, value)}
                      />
