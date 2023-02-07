@@ -994,6 +994,7 @@
       originalPositions: DefaultMap<Movable, Point>
       originalRotations: DefaultMap<SymbolInstance, Rotation>
       start: Point
+      highlightPort: Port | null // to indicate when Ports have snapped together
    }
    let amassRect: null | {
       mode: "add" | "remove"
@@ -1164,6 +1165,10 @@
                touchLight.add(touching)
             }
          }
+      }
+      if (warp?.highlightPort) {
+         // A highlighting edge-case: indicate when ports have snapped together.
+         touchLight.add(warp.highlightPort)
       }
    }
    let amassLight: Set<Interactable>
@@ -3477,6 +3482,7 @@
          originalPositions: copyPositions(),
          originalRotations: copySymbolRotations(),
          start: partGrabbed,
+         highlightPort: null,
       }
    }
    function updateWarp() {
@@ -3493,6 +3499,7 @@
                ;(m.rotation as Rotation) = warp.originalRotations.read(m)
             }
          }
+         warp.highlightPort = null
       }
       if (warp.mode === "pan") {
          updatePan()
@@ -3506,7 +3513,46 @@
       let d = mouseOnCanvas.displacementFrom(warp.start)
       for (let movable of warp.movables) movable.moveBy(d)
 
-      if (config.angleSnap.state === "on") {
+      // If panning a lone symbol, we will attempt to snap its ports to other
+      // ports.
+      let loneSymbol: SymbolInstance | undefined
+      if (warp.movables.size === 1) {
+         let item = [...warp.movables][0]
+         if (item instanceof SymbolInstance && item.edges().size === 0) {
+            loneSymbol = item
+         }
+      }
+
+      if (loneSymbol) {
+         // Try snapping the ports of the symbol to other ports.
+         let closest: Port | undefined
+         let reference: Port | undefined
+         let sqDistance = Infinity
+         for (let referencePort of loneSymbol.ports) {
+            for (let port of Port.s) {
+               if (port.symbol === loneSymbol) continue
+               let sqD = port.sqDistanceFrom(referencePort)
+               if (sqD < sqDistance) {
+                  closest = port
+                  reference = referencePort
+                  sqDistance = sqD
+               }
+            }
+         }
+         if (closest && reference) {
+            let displacement = closest.displacementFrom(reference)
+            if (sqDistance < sqSnapRadius) {
+               loneSymbol.moveBy(displacement)
+               warp.highlightPort = reference // Highlight the snapped port.
+            } else if (sqDistance < sqEaseRadius) {
+               loneSymbol.moveBy(
+                  displacement
+                     .direction()
+                     ?.scaledBy(easeFn(Math.sqrt(sqDistance))) as Vector
+               )
+            }
+         }
+      } else if (config.angleSnap.state === "on") {
          // Gather the axes of interest.
          let neighbourAxes = new Set(
             [...warp.incidentEdges].flatMap(([s, neighbour]) =>
