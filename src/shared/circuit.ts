@@ -86,7 +86,7 @@ export class Junction extends Point implements Deletable {
       }
       this.edges_.clear()
       this.detach()
-      for (let group of groups) group.items.delete(this)
+      amassed.items.delete(this)
       return neighbours
    }
    moveTo(point: Point) {
@@ -164,10 +164,8 @@ export class Junction extends Point implements Deletable {
          segs[0].attachments.forEach((a) => a.attachTo(mergedSegment))
          segs[1].attachments.forEach((a) => a.attachTo(mergedSegment))
          mergedSegment.isFrozen = segs[0].isFrozen && segs[1].isFrozen
-         for (let group of groups) {
-            if (group.items.has(segs[0]) || group.items.has(segs[1]))
-               group.items.add(mergedSegment)
-         }
+         if (amassed.items.has(segs[0]) || amassed.items.has(segs[1]))
+            amassed.items.add(mergedSegment)
          // Merge the crossing types of the old segments into the new one.
          for (let s of Segment.s) {
             let i = currentCrossings.read(s).has(segs[0]) ? 0 : 1
@@ -347,7 +345,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       this.start.removeEdge(this.edgeS)
       this.end.removeEdge(this.edgeE)
       this.attachments.forEach((a) => a.detach())
-      for (let group of groups) group.items.delete(this)
+      amassed.items.delete(this)
       let junctions = new Set<Junction>()
       if (this.start instanceof Junction) junctions.add(this.start)
       if (this.end instanceof Junction) junctions.add(this.end)
@@ -364,9 +362,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
          let sameFacing = thisDisp.dot(segDisp) > 0
          // Copy the state of this segment.
          newSegment.isFrozen = this.isFrozen
-         for (let group of groups) {
-            if (group.items.has(this)) group.items.add(newSegment)
-         }
+         if (amassed.items.has(this)) amassed.items.add(newSegment)
          // Copy the crossing types associated with this segment.
          for (let s of Segment.s) {
             // Copy how "s" crosses "this".
@@ -667,7 +663,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
          }
       }
       this.attachments.forEach((a) => a.detach())
-      for (let group of groups) group.items.delete(this)
+      amassed.items.delete(this)
       return new Set()
    }
    edges(): Set<Edge> {
@@ -735,14 +731,9 @@ function namespaceIDs(svg: SVGElement, suffix: string) {
    }
 }
 
-// Groups that circuit elements can belong to.
+// Amassed items.
 export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
-export type Group = { name: string; items: Set<Interactable> }
-export const groups = new Set<Group>()
-// The following "group" is not persisted, but is placed here for consistency:
-const amassedGroupName = "amassed"
-export const amassed: Group = { name: amassedGroupName, items: new Set() }
-groups.add(amassed)
+export const amassed = { items: new Set<Interactable>() }
 
 // Cut/copy/paste functionality.
 let clipboard = new Set<Segment | SymbolInstance>()
@@ -903,27 +894,22 @@ type SymbolJSON = {
    scale: { x: number; y: number }
 }
 
-type GroupItem =
+type AmassedJSON =
    | { type: "crossing"; seg1ID: number; seg2ID: number }
    | { type: "other"; objectID: number }
-
-type GroupJSON = {
-   name: string
-   items: GroupItem[]
-}
 
 export type CircuitJSON = {
    junctions: JunctionJSON[]
    segments: SegmentJSON[]
    symbols: SymbolJSON[]
-   groups: GroupJSON[]
+   amassedItems: AmassedJSON[]
 }
 
 export const emptyCircuitJSON: CircuitJSON = {
    junctions: [],
    segments: [],
    symbols: [],
-   groups: [],
+   amassedItems: [],
 }
 
 // Save the current circuit state to a JSON object.
@@ -981,21 +967,16 @@ export function saveToJSON(): CircuitJSON {
          scale: { x: s.scale.x, y: s.scale.y },
       }
    })
-   let groups_: GroupJSON[] = [...groups].map((g) => {
-      return {
-         name: g.name,
-         items: [...g.items].map((i) =>
-            i instanceof Crossing
-               ? {
-                    type: "crossing",
-                    seg1ID: i.seg1.objectID,
-                    seg2ID: i.seg2.objectID,
-                 }
-               : { type: "other", objectID: i.objectID }
-         ),
-      }
-   })
-   return { junctions, segments, symbols, groups: groups_ }
+   let amassedItems: AmassedJSON[] = [...amassed.items].map((i) =>
+      i instanceof Crossing
+         ? {
+              type: "crossing",
+              seg1ID: i.seg1.objectID,
+              seg2ID: i.seg2.objectID,
+           }
+         : { type: "other", objectID: i.objectID }
+   )
+   return { junctions, segments, symbols, amassedItems }
 }
 
 // Load the circuit state from a JSON object.
@@ -1012,8 +993,6 @@ export function loadFromJSON(
    Segment.s = new Set()
    SymbolInstance.s = []
    amassed.items = new Set()
-   groups.clear()
-   groups.add(amassed)
    let vertexMap = new Map<number, Vertex>()
    let segmentMap = new Map<number, Segment>()
    let symbolMap = new Map<number, SymbolInstance>()
@@ -1122,40 +1101,33 @@ export function loadFromJSON(
          s1.crossingKinds.set(s2, crossing.crossing)
       }
    })
-   circuit.groups.forEach((g) => {
-      let items = new Set<Interactable>()
-      for (let item of g.items) {
-         if (item.type === "crossing") {
-            let seg1 = segmentMap.get(item.seg1ID)
-            let seg2 = segmentMap.get(item.seg2ID)
-            let crossPoint = seg1 && seg2 ? seg1.intersection(seg2) : undefined
-            if (seg1 && seg2 && crossPoint) {
-               let crossing = new Crossing(seg1, seg2, crossPoint)
-               crossingMap.getOrCreate(seg1).set(seg2, crossing)
-               items.add(crossing)
-            } else {
-               console.error(
-                  `Failed to assign the crossing of two segments (ID ${item.seg1ID} and ID ${item.seg2ID}) to group "${g.name}" because at least one of these segments does not exist.`
-               )
-            }
+   amassed.items = new Set<Interactable>()
+   for (let item of circuit.amassedItems) {
+      if (item.type === "crossing") {
+         let seg1 = segmentMap.get(item.seg1ID)
+         let seg2 = segmentMap.get(item.seg2ID)
+         let crossPoint = seg1 && seg2 ? seg1.intersection(seg2) : undefined
+         if (seg1 && seg2 && crossPoint) {
+            let crossing = new Crossing(seg1, seg2, crossPoint)
+            crossingMap.getOrCreate(seg1).set(seg2, crossing)
+            amassed.items.add(crossing)
          } else {
-            let object =
-               vertexMap.get(item.objectID) ||
-               segmentMap.get(item.objectID) ||
-               symbolMap.get(item.objectID)
-            if (object) {
-               items.add(object)
-            } else {
-               console.error(
-                  `Failed to assign an object (ID ${item.objectID}) to group "${g.name}" because no object with that ID exists.`
-               )
-            }
+            console.error(
+               `Failed to assign the crossing of two segments (ID ${item.seg1ID} and ID ${item.seg2ID}) to the set of amassed items because at least one of these segments does not exist.`
+            )
+         }
+      } else {
+         let object =
+            vertexMap.get(item.objectID) ||
+            segmentMap.get(item.objectID) ||
+            symbolMap.get(item.objectID)
+         if (object) {
+            amassed.items.add(object)
+         } else {
+            console.error(
+               `Failed to assign an object (ID ${item.objectID}) to the set of amassed items because no object with that ID exists.`
+            )
          }
       }
-      if (g.name === amassedGroupName) {
-         amassed.items = items
-      } else {
-         groups.add({ name: g.name, items })
-      }
-   })
+   }
 }
