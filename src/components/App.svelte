@@ -1571,9 +1571,9 @@
          tag += numbers.charAt(Math.floor(Math.random() * numbers.length))
       return tag
    }
-   function addNewTag() {
+   function addEmptyTag() {
       if (!inspector.mode) return
-      newlyAddedTag = randomTag()
+      newlyAddedTag = emptyTag
       for (let item of inspector.items) {
          if (item instanceof Crossing) continue
          item.tags.add(newlyAddedTag)
@@ -1581,6 +1581,11 @@
       tagSortOrder = [newlyAddedTag] // Put the new tag first.
       for (let { tag } of inspector.tags) tagSortOrder.push(tag)
       commitState("add tag")
+      // The tag could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function addEmptyProperty() {
@@ -1594,6 +1599,11 @@
       for (let { property } of inspector.properties)
          propertySortOrder.push(property.serialize())
       commitState("add property")
+      // The property could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function replaceTag(old: Tag, new_: Tag) {
@@ -1617,6 +1627,11 @@
          }
       }
       commitState("replace tag")
+      // The tag could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function replacePropertyName(prop: Property, newName: string) {
@@ -1651,6 +1666,11 @@
          }
       }
       commitState("replace property")
+      // The property could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function removeTag(tag: Tag) {
@@ -1660,6 +1680,11 @@
          item.tags.delete(tag)
       }
       commitState("remove tag")
+      // The tag could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function removeProperty(prop: Property) {
@@ -1670,11 +1695,32 @@
          item.properties.delete(propString)
       }
       commitState("remove property")
+      // The property could belong to anything, so we need to flag everything.
+      Junction.s = Junction.s
+      Port.s = Port.s
+      Segment.s = Segment.s
+      SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
    function propertyFocused() {
       newlyAddedTag = undefined
       newlyAddedProperty = undefined
+   }
+   let allTags: Set<Tag>
+   let allPropertyNames: Set<string>
+   let allPropertyValues: Set<string>
+   $: {
+      allTags = new Set()
+      allPropertyNames = new Set()
+      allPropertyValues = new Set()
+      for (let thing of [...allVertices(), ...Segment.s, ...SymbolInstance.s]) {
+         for (let tag of thing.tags) allTags.add(tag)
+         for (let prop of thing.properties) {
+            let { name, value } = parseProperty(prop)
+            allPropertyNames.add(name)
+            allPropertyValues.add(value)
+         }
+      }
    }
    $: specialAttachPointsVisible =
       toolToUse === "draw" &&
@@ -4183,15 +4229,17 @@
                   Bring to front
                </div>
             {/if}
-            {#if inspector.mode}
-               <button on:click={addNewTag}>New tag</button>
+            {#if inspector.mode && inspector.mode !== "crossing"}
+               <button on:click={addEmptyTag}>New tag</button>
                {#each inspector.tags as { tag, count }}
                   <div class="tag">
                      <div class="count">{count}</div>
                      <TextBox
                         width={110}
                         text={tag}
-                        shouldFocus={newlyAddedTag === tag}
+                        textCompletion={allTags}
+                        autoFocus={newlyAddedTag === tag}
+                        autoFocusText={randomTag}
                         onFocus={propertyFocused}
                         onSubmit={(value) => replaceTag(tag, value)}
                      />
@@ -4209,8 +4257,8 @@
                      <div class="count">{count}</div>
                      <TextBox
                         text={property.name}
-                        shouldFocus={newlyAddedProperty ===
-                           property.serialize()}
+                        textCompletion={allPropertyNames}
+                        autoFocus={newlyAddedProperty === property.serialize()}
                         onFocus={propertyFocused}
                         onSubmit={(value) =>
                            replacePropertyName(property, value)}
