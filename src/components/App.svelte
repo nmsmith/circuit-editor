@@ -1860,10 +1860,8 @@
       // Determine what vertex glyphs need to be drawn.
       for (let v of allVertices()) {
          // First, determine how/whether the glyph should be rotated.
-         let vertexRotation: number
-         if (v.glyphOrientation === "fixed") {
-            vertexRotation = 0
-         } else {
+         let vertexRotation = 0
+         if (v.glyphOrientation === "inherit" && v.edges().size > 0) {
             // Consider the edge with the smallest rotation.
             let zero = Direction.positiveX
             let edgeAngles = [...v.edges()].map(
