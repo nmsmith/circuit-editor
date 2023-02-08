@@ -2,13 +2,23 @@
    import { strokeHighlightThickness, LineType } from "~/shared/circuit"
    import type { LineSegment } from "~/shared/geometry"
    export let type: LineType
+   export let color: string = "" // If given, this overrides the LineType color.
    export let segment: LineSegment
    export let render: "segment" | "highlight" | "rigid" = "segment"
    const rigidThickness = 12
+
+   let strokeColor: string
+   $: {
+      if (render === "segment") {
+         strokeColor = color.length > 0 ? color : type.color
+      } else {
+         strokeColor = "currentColor"
+      }
+   }
 </script>
 
 <line
-   stroke={render === "segment" ? type.color : "currentColor"}
+   stroke={strokeColor}
    stroke-width={render === "segment"
       ? type.thickness
       : render === "highlight"

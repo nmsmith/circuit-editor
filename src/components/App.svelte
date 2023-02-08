@@ -1222,6 +1222,7 @@
            crossings: Set<Crossing>
            glyphs: Set<GlyphKind>
         }
+      | { mode: "segment"; segments: Set<Segment>; color: string | "mixed" }
       | { mode: "symbol"; symbols: Set<SymbolInstance>; canFlip: boolean }
       | { mode: "mixed" }
    type TagInfo = { tag: Tag; count: number }
@@ -1383,6 +1384,19 @@
                tags,
                properties,
             }
+         } else if ($segments.length > 0) {
+            let firstColor = $segments[0].color
+            let color = $segments.every((seg) => seg.color === firstColor)
+               ? firstColor
+               : "mixed"
+            inspector = {
+               mode: "segment",
+               segments: new Set($segments),
+               color,
+               items: itemsToInspect,
+               tags,
+               properties,
+            }
          } else if ($symbols.length > 0) {
             let canFlip = $symbols.every((symbol) => symbol.edges().size === 0)
             inspector = {
@@ -1536,6 +1550,19 @@
             ? "rotate crossing glyphs"
             : "rotate crossing glyph"
       )
+      Segment.s = Segment.s
+   }
+   function setColorOfSegments(color: string) {
+      if (inspector.mode !== "segment") return
+      if (color === "mixed") return //This string was for informational purposes
+      let somethingChanged = false
+      for (let segment of inspector.segments) {
+         if (segment.color !== color) {
+            segment.color = color
+            somethingChanged = true
+         }
+      }
+      if (somethingChanged) commitState("change segment color")
       Segment.s = Segment.s
    }
    function flipSymbols() {
@@ -1740,6 +1767,7 @@
       position: Point
       rotation: number // in degrees
       style: HighlightStyle
+      inheritedColor: string // A vertex may inherit a color from its edges.
    }
    type CrossingGlyph = {
       type: "crossing glyph"
@@ -1748,6 +1776,7 @@
       position: Point
       rotation: number // in degrees
       style: HighlightStyle
+      inheritedColor: string // A crossing may inherit a color from its segment.
    }
    type Glyph = VertexGlyph | CrossingGlyph
    let segmentsToDraw: Map<Segment, Section[]>
@@ -1816,11 +1845,12 @@
                )
                glyphsToDraw.add({
                   type: "crossing glyph",
+                  segment,
                   glyph: render.glyph,
                   position,
                   rotation: rotation.toDegrees(),
                   style: styleOf(crossing) || styleOf(segment),
-                  segment,
+                  inheritedColor: segment.renderColor(),
                })
                renderedCrossings.add(crossing)
             }
@@ -1853,6 +1883,7 @@
                   ),
                   rotation: 0,
                   style: styleOf(crossing),
+                  inheritedColor: "",
                })
             }
          }
@@ -1873,6 +1904,19 @@
                Infinity
             )
          }
+         // Then, determine the color that it should inherit from its edges.
+         let inheritedColor = ""
+         if (v.edges().size > 0) {
+            // Find the most frequent edge color.
+            let counts = new DefaultMap<string, number>(() => 0)
+            for (let [segment] of v.edges()) {
+               let color = segment.renderColor()
+               counts.set(color, counts.read(color) + 1)
+            }
+            inheritedColor = [...counts].reduce((prev, curr) =>
+               curr[1] > prev[1] ? curr : prev
+            )[0]
+         }
          // Now, determine the glyph to draw.
          if (v.glyph.type === "manual") {
             let glyph = findVertexGlyph(v.glyph.glyph)
@@ -1884,6 +1928,7 @@
                   position: v,
                   rotation: vertexRotation,
                   style: styleOf(v),
+                  inheritedColor,
                })
             } else if (
                v instanceof Junction &&
@@ -1898,6 +1943,7 @@
                   position: v,
                   rotation: 0,
                   style: styleOf(v),
+                  inheritedColor,
                })
             }
          } else if (v instanceof Junction) {
@@ -1990,6 +2036,7 @@
                   position: v,
                   rotation: vertexRotation,
                   style: styleOf(v),
+                  inheritedColor,
                })
             } else if (
                vertexMarkerGlyph &&
@@ -2009,6 +2056,7 @@
                   position: v,
                   rotation: 0,
                   style: styleOf(v),
+                  inheritedColor,
                })
             }
          } else if (
@@ -2024,6 +2072,7 @@
                position: v,
                rotation: 0,
                style: styleOf(v),
+               inheritedColor,
             })
          }
       }
@@ -2042,6 +2091,7 @@
                   position: p,
                   rotation: 0,
                   style: styleOf(p),
+                  inheritedColor: "",
                })
          }
       }
@@ -4029,7 +4079,11 @@
             {#each [...segmentsToDraw] as [segment, sections]}
                {#if !willBeDeleted(segment) && !(segment.isTether() && config.showTethers.state == "off")}
                   {#each sections as section}
-                     <CircuitLine type={segment.type} segment={section} />
+                     <CircuitLine
+                        type={segment.type}
+                        color={segment.renderColor()}
+                        segment={section}
+                     />
                   {/each}
                {/if}
             {/each}
@@ -4066,18 +4120,16 @@
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "lower" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.ports[0]}
-                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
-                     color="blue"
+                     color={glyph.inheritedColor}
                      transform="translate({glyph.position.x} {glyph.position
                         .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
                      <use href="#{glyph.glyph.fileName}" />
                   </g>
                {:else if glyph.type === "crossing glyph" && !willBeDeleted(glyph)}
-                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
-                     color="blue"
+                     color={glyph.inheritedColor}
                      transform="translate({glyph.position.x} {glyph.position
                         .y}) rotate({glyph.rotation})"
                   >
@@ -4117,9 +4169,8 @@
             {#each [...glyphsToDraw] as glyph}
                {#if glyph.type === "vertex glyph" && layerOf(glyph.position) === "upper" && !willBeDeleted(glyph)}
                   {@const port = glyph.glyph.ports[0]}
-                  <!-- TODO: Inherit "color" more intelligently.-->
                   <g
-                     color="blue"
+                     color={glyph.inheritedColor}
                      transform="translate({glyph.position.x} {glyph.position
                         .y}) rotate({glyph.rotation}) translate({-port.x}, {-port.y})"
                   >
@@ -4249,6 +4300,13 @@
                      ↻
                   </div>
                </div>
+            {:else if inspector.mode === "segment"}
+               <div class="inspectorSubtitle">Segment color</div>
+               <TextBox
+                  width={110}
+                  text={inspector.color}
+                  onSubmit={(color) => setColorOfSegments(color)}
+               />
             {:else if inspector.mode === "symbol"}
                {#if inspector.canFlip}
                   <div class="symbolMoveButton flip" on:mousedown={flipSymbols}>

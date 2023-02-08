@@ -291,6 +291,7 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    tags = new Set<Tag>()
    properties = new Set<PropertyString>()
    type: LineType
+   color: string = "" // CSS color. Empty string means inherit from line type.
    attachments = new Set<Junction>() // should only be modified from Junction class
    isFrozen = false
    readonly crossingKinds = new DefaultWeakMap<Segment, CrossingGlyphKind>(
@@ -317,6 +318,17 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       rememberAxis(this.axis)
       this.start.addEdge(this.edgeS)
       this.end.addEdge(this.edgeE)
+   }
+   renderColor(): string {
+      // If this.color is valid, use it. Otherwise, use this.type.color.
+      let color = this.type.color
+      if (this.color.length > 0) {
+         // Check if this.color is a valid CSS color, using a dummy element.
+         let test = new Option().style
+         test.color = this.color
+         if (test.color !== "") color = this.color
+      }
+      return color
    }
    isTether(): boolean {
       return this.type.name === tetherLineTypeName
@@ -790,6 +802,7 @@ export function copy_(
          segment.axis,
          !toClipboard
       )
+      copiedSegment.color = segment.color
       copiedSegment.isFrozen = segment.isFrozen
       copiedSegments.set(segment, copiedSegment)
    }
@@ -873,6 +886,7 @@ type SegmentJSON = {
    tags: Tag[]
    properties: PropertyString[]
    type: string // must be a LineType.name
+   color: string
    attachments?: number[]
    isFrozen: boolean
    crossingKinds: { segmentID: number; crossing: CrossingGlyphKind }[]
@@ -937,6 +951,7 @@ export function saveToJSON(): CircuitJSON {
          tags: [...s.tags],
          properties: [...s.properties],
          type: s.type.name,
+         color: s.color,
          attachments: [...s.attachments].map((j) => j.objectID),
          isFrozen: s.isFrozen,
          crossingKinds,
@@ -1077,6 +1092,7 @@ export function loadFromJSON(
          )
          segment.tags = new Set(s.tags)
          segment.properties = new Set(s.properties)
+         segment.color = s.color
          for (let id of s.attachments || []) {
             let j = vertexMap.get(id)
             if (!j) {

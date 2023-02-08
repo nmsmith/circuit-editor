@@ -99,12 +99,19 @@
          update: (focus_: boolean) => svelteChange(node, focus_),
       }
    }
+   let textBoxColorStyle = ""
+   $: {
+      if (textCompletion) {
+         if (inputMatchesSuggestion) {
+            textBoxColorStyle = "inputMatchesSuggestion"
+         } else {
+            textBoxColorStyle = "inputUnknown"
+         }
+      }
+   }
 </script>
 
-<div
-   class="textBox {inputMatchesSuggestion ? 'matchesSuggestion' : ''}"
-   style="width: {width}px"
->
+<div class="textBox {textBoxColorStyle}" style="width: {width}px">
    <div class="submittedText">{text}</div>
    <input
       type="text"
@@ -158,9 +165,11 @@
       color: transparent; /* inherited by the child text */
       border-width: 2px;
       margin: 0px;
+   }
+   .textBox.inputUnknown:focus-within {
       background-color: #f3d402;
    }
-   .textBox.matchesSuggestion:focus-within {
+   .textBox.inputMatchesSuggestion:focus-within {
       background-color: #7ef382;
    }
    .textBox:hover:not(:focus-within) {
