@@ -294,6 +294,18 @@
          ? "upper"
          : "lower"
    }
+   // Computes the most frequent color amongst the edges of the given vertex.
+   function colorOf(vertex: Vertex, ignoreTypeColor: boolean): string {
+      if (vertex.edges().size === 0) return ""
+      let counts = new DefaultMap<string, number>(() => 0)
+      for (let [segment] of vertex.edges()) {
+         let color = ignoreTypeColor ? segment.color : segment.renderColor()
+         counts.set(color, counts.read(color) + 1)
+      }
+      return [...counts].reduce((prev, curr) =>
+         curr[1] > prev[1] ? curr : prev
+      )[0]
+   }
    $: willBeDeleted = (item?: Segment | SymbolInstance | Glyph): boolean => {
       if (!item || !eraseRect) return false
       if (item instanceof Segment || item instanceof SymbolInstance) {
@@ -1893,19 +1905,6 @@
                Infinity
             )
          }
-         // Then, determine the color that it should inherit from its edges.
-         let inheritedColor = ""
-         if (v.edges().size > 0) {
-            // Find the most frequent edge color.
-            let counts = new DefaultMap<string, number>(() => 0)
-            for (let [segment] of v.edges()) {
-               let color = segment.renderColor()
-               counts.set(color, counts.read(color) + 1)
-            }
-            inheritedColor = [...counts].reduce((prev, curr) =>
-               curr[1] > prev[1] ? curr : prev
-            )[0]
-         }
          // Now, determine the glyph to draw.
          if (v.glyph.type === "manual") {
             let glyph = findVertexGlyph(v.glyph.glyph)
@@ -1917,7 +1916,7 @@
                   position: v,
                   rotation: vertexRotation,
                   style: styleOf(v),
-                  inheritedColor,
+                  inheritedColor: colorOf(v, false),
                })
             } else if (
                v instanceof Junction &&
@@ -1932,7 +1931,7 @@
                   position: v,
                   rotation: 0,
                   style: styleOf(v),
-                  inheritedColor,
+                  inheritedColor: colorOf(v, false),
                })
             }
          } else if (v instanceof Junction) {
@@ -2025,7 +2024,7 @@
                   position: v,
                   rotation: vertexRotation,
                   style: styleOf(v),
-                  inheritedColor,
+                  inheritedColor: colorOf(v, false),
                })
             } else if (
                vertexMarkerGlyph &&
@@ -2045,7 +2044,7 @@
                   position: v,
                   rotation: 0,
                   style: styleOf(v),
-                  inheritedColor,
+                  inheritedColor: colorOf(v, false),
                })
             }
          } else if (
@@ -2061,7 +2060,7 @@
                position: v,
                rotation: 0,
                style: styleOf(v),
-               inheritedColor,
+               inheritedColor: colorOf(v, false),
             })
          }
       }
@@ -2682,7 +2681,9 @@
    function newDraw(type: LineType, start: Vertex, axis: Axis) {
       let mode: DrawMode = selectedDrawMode()
       let end = new Junction(start)
+      let color = colorOf(start, true)
       let segment = new Segment(type, start, end, axis)
+      segment.color = color
       draw = {
          mode,
          segment,
