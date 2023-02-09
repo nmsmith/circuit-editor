@@ -313,17 +313,6 @@
          return item.segment ? eraseRect.items.has(item.segment) : false
       }
    }
-   function shouldExtendTheSegmentAt(
-      junction: Junction,
-      drawAxis: Axis
-   ): boolean {
-      return (
-         junction.edges().size === 1 &&
-         [...junction.edges()][0][0].attachments.size === 0 &&
-         !junction.host() &&
-         junction.axes()[0] === drawAxis
-      )
-   }
    function isMoreHorizontal(subject: Segment, other: Segment): boolean {
       let rSeg = subject.axis.scalarRejectionFrom(Axis.horizontal)
       let rOther = other.axis.scalarRejectionFrom(Axis.horizontal)
@@ -2644,7 +2633,10 @@
          let continuedDraw = false
          if (
             vertex instanceof Junction &&
-            shouldExtendTheSegmentAt(vertex, specialDrawAxis)
+            vertex.edges().size === 1 &&
+            [...vertex.edges()][0][0].attachments.size === 0 &&
+            !vertex.host() &&
+            vertex.axes()[0] === specialDrawAxis
          ) {
             // Extend the segment.
             continueDraw([...vertex.edges()][0][0], vertex)
@@ -2804,16 +2796,14 @@
                endVertex = new Junction(endObject)
                endVertex.attachTo(endObject.object)
             }
-            // Check whether there is an existing segment incident to the
-            // endVertex (before we attach the new one), that has the same axis.
-            let extend =
-               endVertex instanceof Junction &&
-               shouldExtendTheSegmentAt(endVertex, segment.axis)
             // Replace the drawn segment with one that ends at the endVertex.
             segment.sliceOut(segment.start, endVertex)
             segment.delete()
-            // Consider fusing the segment with an existing segment.
-            if (extend && !willChainDraw) (endVertex as Junction).fuse()
+            if (endVertex.edges().size === 2 && !willChainDraw) {
+               // Try fusing the drawn segment with the other segment at the
+               // vertex.
+               ;(endVertex as Junction).fuse()
+            }
          } else {
             endVertex = draw.end
          }

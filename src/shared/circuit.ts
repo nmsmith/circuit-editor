@@ -126,7 +126,8 @@ export class Junction extends Point implements Deletable {
    // calling this method, all references to the junction should be discarded.
    // If the edges can't be fused, calling this method will have no effect.
    fuse(): Set<Segment> | undefined {
-      if (this.edges_.size !== 2 && this.edges_.size !== 4) return
+      if (this.host() || (this.edges_.size !== 2 && this.edges_.size !== 4))
+         return
       // Gather all pairs of colinear edges.
       let ax = new DefaultMap<Axis, Segment[]>(() => [])
       for (let edge of this.edges_) ax.getOrCreate(edge[0].axis).push(edge[0])
