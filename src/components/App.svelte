@@ -359,8 +359,8 @@
    }
    function copyPositions(): DefaultMap<Movable, Point> {
       let positions = new DefaultMap<Movable, Point>(() => Point.zero)
-      for (let j of Junction.s) positions.set(j, j.clone())
-      for (let s of SymbolInstance.s) positions.set(s, s.position.clone())
+      for (let j of Junction.s) positions.set(j, j.copy())
+      for (let s of SymbolInstance.s) positions.set(s, s.position.copy())
       return positions
    }
    function copySymbolRotations(): DefaultMap<SymbolInstance, Rotation> {
@@ -2625,9 +2625,9 @@
                   : [segment.end, segment.start]
             let jMove = new Junction(attach.closestPart)
             let jOther = new Junction(attach.closestPart)
-            let move = new Segment(segment.type, newStart, jMove, segment.axis)
-            let other = new Segment(segment.type, otherV, jOther, segment.axis)
-            segment.replaceWith(move, other)
+            let move = segment.sliceOut(newStart, jMove)
+            let other = segment.sliceOut(otherV, jOther)
+            segment.delete()
             continueDraw(move, jMove)
          } else {
             let junction = new Junction(attach.closestPart)
@@ -2656,19 +2656,15 @@
                if (other.displacementFrom(vertex).dot(dragVector) <= 0) continue
                // Unplug this segment from the vertex.
                let junction = new Junction(vertex)
-               let newSegment = new Segment(
-                  segment.type,
-                  other,
-                  junction,
-                  segment.axis
-               )
-               segment.replaceWith(newSegment)
+               let newSegment = segment.sliceOut(other, junction)
+               segment.delete()
                if (
                   vertex instanceof Junction &&
                   vertex.edges().size === 2 &&
                   !vertex.host()
-               )
-                  vertex.convertToCrossing(crossingMap)
+               ) {
+                  vertex.fuse()
+               }
                // Allow the user to move the unplugged segment around.
                continueDraw(newSegment, junction)
                continuedDraw = true
@@ -2713,14 +2709,11 @@
          segment = drawSegment
       } else {
          // Flip the segment around.
-         segment = new Segment(
-            drawSegment.type,
-            drawSegment.end,
-            end,
-            drawSegment.axis
-         )
-         drawSegment.replaceWith(segment)
+         segment = drawSegment.sliceOut(drawSegment.end, end)
+         drawSegment.delete()
       }
+      // Ensure the segment being drawn is not amassed.
+      amassed.items.delete(segment)
       // This function should never be called on a segment with attachments,
       // but if it is, remove the attachments. (There's no good alternative.)
       segment.attachments.forEach((a) => a.detach())
@@ -2817,12 +2810,10 @@
                endVertex instanceof Junction &&
                shouldExtendTheSegmentAt(endVertex, segment.axis)
             // Replace the drawn segment with one that ends at the endVertex.
-            segment.replaceWith(
-               new Segment(segment.type, segment.start, endVertex, segment.axis)
-            )
+            segment.sliceOut(segment.start, endVertex)
+            segment.delete()
             // Consider fusing the segment with an existing segment.
-            if (extend && !willChainDraw)
-               (endVertex as Junction).convertToCrossing(crossingMap)
+            if (extend && !willChainDraw) (endVertex as Junction).fuse()
          } else {
             endVertex = draw.end
          }
@@ -3067,7 +3058,7 @@
          mode: selectedSlideMode(),
          originalPositions: copyPositions(),
          grabbed,
-         start: atPart.clone(),
+         start: atPart.copy(),
          axis: slideAxis,
          posInstructions,
          negInstructions,
@@ -3817,14 +3808,13 @@
       for (let key of keyInfo.keys()) keyAborted(key)
    }
    function deleteItems(items: Iterable<Interactable>) {
-      let junctionsToConvert = new Set<Junction>()
+      let junctionsToFuse = new Set<Junction>()
       for (let thing of items) {
          if (thing instanceof Port || thing instanceof Crossing) continue
-         thing.delete().forEach((neighbor) => junctionsToConvert.add(neighbor))
+         thing.delete().forEach((neighbor) => junctionsToFuse.add(neighbor))
       }
-      for (let junction of junctionsToConvert) {
-         if (junction.edges().size === 2 && !junction.host())
-            junction.convertToCrossing(crossingMap)
+      for (let junction of junctionsToFuse) {
+         if (junction.edges().size === 2 && !junction.host()) junction.fuse()
       }
       // Tell Svelte all of these things could have changed.
       Junction.s = Junction.s

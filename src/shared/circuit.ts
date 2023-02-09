@@ -61,20 +61,13 @@ export class Junction extends Point implements Deletable {
    readonly objectID: number // for serialization
    tags = new Set<Tag>()
    properties = new Set<PropertyString>()
-   glyph: VertexGlyphKind
-   glyphOrientation: GlyphOrientation
+   glyph: VertexGlyphKind = { type: "auto" }
+   glyphOrientation: GlyphOrientation = "fixed"
    private readonly edges_ = new Set<Edge>()
    private host_: Segment | SymbolInstance | null = null
-   constructor(
-      point: Point,
-      glyph: VertexGlyphKind = { type: "auto" },
-      glyphOrientation: GlyphOrientation = "fixed",
-      addToCircuit = true
-   ) {
+   constructor(point: Point, addToCircuit = true) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
-      this.glyph = glyph
-      this.glyphOrientation = glyphOrientation
       if (addToCircuit) Junction.s.add(this)
    }
    delete(): Set<Junction> {
@@ -128,11 +121,11 @@ export class Junction extends Point implements Deletable {
          this.host_ = null
       }
    }
-   // If the junction is an X-junction or a straight line, convert it to a
-   // crossing. Thereafter, all references to the junction should be discarded.
-   convertToCrossing(
-      currentCrossings: DefaultMap<Segment, Map<Segment, Crossing>>
-   ) {
+   // If the edges at the junction form a straight line, fuse them together.
+   // If instead the junction is an X-junction, convert it to a crossing. After
+   // calling this method, all references to the junction should be discarded.
+   // If the edges can't be fused, calling this method will have no effect.
+   fuse(): Set<Segment> | undefined {
       if (this.edges_.size !== 2 && this.edges_.size !== 4) return
       // Gather all pairs of colinear edges.
       let ax = new DefaultMap<Axis, Segment[]>(() => [])
@@ -143,50 +136,31 @@ export class Junction extends Point implements Deletable {
          if (pair[0].type !== pair[1].type) return // can't merge diff types
          pairs.add([pair[0], pair[1]])
       }
-      // Merge each pair of segments into a single segment.
-      // NOTE: We need to make sure that all of the properties that are
-      // preserved at segment.replaceWith() are addressed here too.
-      let crossing = []
-      for (let segs of pairs) {
-         let mergedSegment = new Segment(
-            segs[0].type,
-            this === segs[0].start ? segs[0].end : segs[0].start,
-            this === segs[1].start ? segs[1].end : segs[1].start,
-            segs[0].axis
+      // Fuse each pair of segments into a single segment.
+      let fusedSegments = new Set<Segment>()
+      for (let [seg1, seg2] of pairs) {
+         fusedSegments.add(
+            Segment.byMerging(
+               seg1,
+               seg2,
+               this === seg1.start ? seg1.end : seg1.start,
+               this === seg2.start ? seg2.end : seg2.start
+            )
          )
-         crossing.push(mergedSegment)
-         // Compare the orientation of the merged segments to the original segs.
-         let seg0D = segs[0].end.displacementFrom(segs[0].start)
-         let seg1D = segs[1].end.displacementFrom(segs[1].start)
-         let mergedD = mergedSegment.end.displacementFrom(mergedSegment.start)
-         let sameFacing = [seg0D.dot(mergedD) > 0, seg1D.dot(mergedD) > 0]
-         // Merge the state of the old segments into the new one.
-         segs[0].attachments.forEach((a) => a.attachTo(mergedSegment))
-         segs[1].attachments.forEach((a) => a.attachTo(mergedSegment))
-         mergedSegment.isFrozen = segs[0].isFrozen && segs[1].isFrozen
-         if (amassed.items.has(segs[0]) || amassed.items.has(segs[1]))
-            amassed.items.add(mergedSegment)
-         // Merge the crossing types of the old segments into the new one.
-         for (let s of Segment.s) {
-            let i = currentCrossings.read(s).has(segs[0]) ? 0 : 1
-            s.crossingKinds.set(mergedSegment, s.crossingKinds.read(segs[i]))
-            let segCrossS = segs[i].crossingKinds.read(s)
-            if (segCrossS.type === "auto" || sameFacing[i]) {
-               mergedSegment.crossingKinds.set(s, segCrossS)
-            } else {
-               let not = { left: "right", right: "left" } as const
-               mergedSegment.crossingKinds.set(s, {
-                  type: "manual",
-                  glyph: segCrossS.glyph,
-                  facing: not[segCrossS.facing],
-               })
-            }
-         }
          // Get rid of the old segments.
-         segs[0].delete()
-         segs[1].delete()
+         seg1.delete()
+         seg2.delete()
       }
       this.delete()
+      return fusedSegments
+   }
+   clone(addToCircuit = true): Junction {
+      let junction = new Junction(this, addToCircuit)
+      junction.tags = new Set(this.tags)
+      junction.properties = new Set(this.properties)
+      junction.glyph = this.glyph
+      junction.glyphOrientation = this.glyphOrientation
+      return junction
    }
 }
 
@@ -201,11 +175,11 @@ export class PortKind extends Point {
 export class Port extends Point {
    static s = new Set<Port>()
    readonly objectID: number // for serialization
-   tags = new Set<Tag>()
-   properties = new Set<PropertyString>()
    readonly symbol: SymbolInstance
    readonly kind: PortKind
-   glyph: VertexGlyphKind
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
+   glyph: VertexGlyphKind = { type: "auto" }
    glyphOrientation: GlyphOrientation = "fixed"
    private readonly edges_ = new Set<Edge>()
    constructor(
@@ -218,7 +192,6 @@ export class Port extends Point {
       this.objectID = nextObjectID++
       this.symbol = symbol
       this.kind = kind
-      this.glyph = { type: "auto" }
       if (addToCircuit) Port.s.add(this)
    }
    edges(): Set<Edge> {
@@ -234,6 +207,26 @@ export class Port extends Point {
    }
    removeEdge(edge: Edge) {
       this.edges_.delete(edge)
+   }
+   // Unlike Junctions, Ports cannot have a clone() method, because a cloned
+   // Port needs to belong to a different Symbol. Thus, we make it the
+   // responsibility of the SymbolInstance constructor to create new Ports, and
+   // we use the following method to transfer properties from existing Ports.
+   copyFrom(port: Port) {
+      this.tags = new Set(port.tags)
+      this.properties = new Set(port.properties)
+      this.glyph = port.glyph
+      this.glyphOrientation = port.glyphOrientation
+   }
+   // This is like clone(), except it converts the Port to a Junction. We need
+   // this when the Symbol that a Port belongs to is deleted.
+   cloneAsJunction(addToCircuit = true): Junction {
+      let junction = new Junction(this, addToCircuit)
+      junction.tags = new Set(this.tags)
+      junction.properties = new Set(this.properties)
+      junction.glyph = this.glyph
+      junction.glyphOrientation = this.glyphOrientation
+      return junction
    }
 }
 
@@ -288,17 +281,17 @@ export class SpecialAttachPoint extends Point {
 export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
    static s = new Set<Segment>()
    readonly objectID: number // for serialization
+   type: LineType
    tags = new Set<Tag>()
    properties = new Set<PropertyString>()
-   type: LineType
    color: string = "" // CSS color. Empty string means inherit from line type.
-   attachments = new Set<Junction>() // should only be modified from Junction class
    isFrozen = false
    readonly crossingKinds = new DefaultWeakMap<Segment, CrossingGlyphKind>(
       () => {
          return { type: "auto" }
       }
    )
+   attachments = new Set<Junction>() // should only be modified from Junction class
    private readonly edgeS: Edge
    private readonly edgeE: Edge
    constructor(
@@ -363,57 +356,109 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       if (this.end instanceof Junction) junctions.add(this.end)
       return junctions
    }
-   // Replace this segment with another (or several), transferring all of its
-   // properties. Thereafter, all references to the segment should be discarded.
-   replaceWith(...newSegments: Segment[]) {
-      // NOTE: Whatever properties are preserved here, should also be preserved
-      // at Junction.convertToCrossing().
-      let thisDisp = this.end.displacementFrom(this.start)
-      for (let newSegment of newSegments) {
-         let segDisp = newSegment.end.displacementFrom(newSegment.start)
-         let sameFacing = thisDisp.dot(segDisp) > 0
-         // Copy the state of this segment.
-         newSegment.isFrozen = this.isFrozen
-         if (amassed.items.has(this)) amassed.items.add(newSegment)
-         // Copy the crossing types associated with this segment.
-         for (let s of Segment.s) {
-            // Copy how "s" crosses "this".
-            s.crossingKinds.set(newSegment, s.crossingKinds.read(this))
-            // Copy how "this" crosses "s". The facing might need to be flipped.
-            let thisCrossS = this.crossingKinds.read(s)
-            if (thisCrossS.type === "auto" || sameFacing) {
-               newSegment.crossingKinds.set(s, thisCrossS)
+   // Split the segment at the given point, which is assumed to lie on the
+   // segment. Thereafter, all references to the segment should be discarded.
+   splitAt(point: Junction): [Segment, Segment] {
+      let slice1 = this.sliceOut(this.start, point)
+      let slice2 = this.sliceOut(point, this.end)
+      this.delete()
+      return [slice1, slice2]
+   }
+   // Copy all the crossing information relating to the "source" segment to the
+   // "target" segment.
+   private static copyCrossings(
+      source: Segment,
+      target: Segment,
+      allSegments: Iterable<Segment>
+   ) {
+      // First, check if the segments are facing in opposite directions. If they
+      // are, some crossing glyphs may have to be flipped when they are copied.
+      let sourceDir = source.end.displacementFrom(source.start)
+      let targetDir = target.end.displacementFrom(target.start)
+      let sameFacing = sourceDir.dot(targetDir) > 0
+      for (let other of allSegments) {
+         let c12 = source.crossingKinds.get(other)
+         if (c12) {
+            if (sameFacing || c12.type === "auto") {
+               target.crossingKinds.set(other, c12)
             } else {
                let not = { left: "right", right: "left" } as const
-               newSegment.crossingKinds.set(s, {
+               target.crossingKinds.set(other, {
                   type: "manual",
-                  glyph: thisCrossS.glyph,
-                  facing: not[thisCrossS.facing],
+                  glyph: c12.glyph,
+                  facing: not[c12.facing],
                })
             }
          }
+         let c21 = other.crossingKinds.get(source)
+         if (c21) other.crossingKinds.set(target, c21)
       }
-      // Migrate each attachment to the segment that it is closest to.
-      for (let attachment of this.attachments) {
-         let segmentsWithDistance = newSegments.map((segment) => {
-            return { segment, d: segment.sqDistanceFrom(attachment) }
-         })
-         let closest = segmentsWithDistance.reduce((prev, curr) =>
-            curr.d < prev.d ? curr : prev
-         )
-         if (closest) attachment.attachTo(closest.segment)
-      }
-      this.attachments.clear()
-      this.delete()
    }
-   // Split the segment at the given point, which is assumed to lie on the
-   // segment. Thereafter, all references to the segment should be discarded.
-   splitAt(point: Junction) {
-      let { start, end, axis } = this
-      this.replaceWith(
-         new Segment(this.type, point, start, axis),
-         new Segment(this.type, point, end, axis)
-      )
+   // Clone the segment. This only copies the segment's "intrinsic" properties
+   // — it doesn't copy the endpoint vertices. We allow the endpoint vertices
+   // to be swapped out during cloning, because it's useful. But the axis of
+   // the new endpoints is assumed to be the same as the original endpoints!
+   clone(start = this.start, end = this.end, addToCircuit = true): Segment {
+      let segment = new Segment(this.type, start, end, this.axis, addToCircuit)
+      segment.tags = new Set(this.tags)
+      segment.properties = new Set(this.properties)
+      segment.color = this.color
+      segment.isFrozen = this.isFrozen
+      Segment.copyCrossings(this, segment, Segment.s)
+      // Note: attachments are _intentionally_ not copied, because multiple
+      // segments cannot share an attachment.
+      return segment
+   }
+   // The following method is a variant of clone() that can be used to REPLACE
+   // a segment with one or more other segments.
+   // The main difference is that it transfers attachments to the new segment.
+   sliceOut(start: Vertex, end: Vertex): Segment {
+      let segment = this.clone(start, end)
+      // Preserve selection state.
+      if (amassed.items.has(this)) amassed.items.add(segment)
+      // Transfer attachments that fall within the slice.
+      for (let attachment of this.attachments) {
+         if (attachment.projectsOnto(segment)) attachment.attachTo(segment)
+      }
+      return segment
+   }
+   // This method is similar to sliceOut(), except instead of copying properties
+   // from one segment, we copy from two, and resolve conflicts where required.
+   static byMerging(
+      seg1: Segment,
+      seg2: Segment,
+      start: Vertex,
+      end: Vertex
+   ): Segment {
+      let mergedSegment = new Segment(seg1.type, start, end, seg1.axis)
+      // Merge the properties of the old segments into the new one.
+      mergedSegment.tags = new Set([...seg1.tags, ...seg2.tags])
+      mergedSegment.properties = new Set([
+         ...seg1.properties,
+         ...seg2.properties,
+      ])
+      mergedSegment.color = seg1.color
+      mergedSegment.isFrozen = seg1.isFrozen && seg2.isFrozen
+      // For each segment in the circuit that intersects seg1, use seg1's
+      // crossing information. For the rest, use seg2's crossing information.
+      let segmentsIntersectingSeg1 = new Set<Segment>()
+      let remainingSegments = new Set<Segment>()
+      for (let segment of Segment.s) {
+         if (seg1.intersection(segment)) {
+            segmentsIntersectingSeg1.add(segment)
+         } else {
+            remainingSegments.add(segment)
+         }
+      }
+      Segment.copyCrossings(seg1, mergedSegment, segmentsIntersectingSeg1)
+      Segment.copyCrossings(seg2, mergedSegment, remainingSegments)
+      // Transfer selection state.
+      if (amassed.items.has(seg1) || amassed.items.has(seg2))
+         amassed.items.add(mergedSegment)
+      // Transfer attachments.
+      seg1.attachments.forEach((a) => a.attachTo(mergedSegment))
+      seg2.attachments.forEach((a) => a.attachTo(mergedSegment))
+      return mergedSegment
    }
 }
 
@@ -665,11 +710,10 @@ export class SymbolInstance extends Rectangle implements Deletable {
          Port.s.delete(port)
          if (port.edges().size > 0) {
             // Convert the Port to a Junction, and replace the Port's segments.
-            let junction = new Junction(port)
+            let junction = port.cloneAsJunction()
             for (let [oldSegment, v] of port.edges()) {
-               oldSegment.replaceWith(
-                  new Segment(oldSegment.type, junction, v, oldSegment.axis)
-               )
+               oldSegment.sliceOut(junction, v)
+               oldSegment.delete()
             }
             port.edges().clear()
          }
@@ -724,6 +768,18 @@ export class SymbolInstance extends Rectangle implements Deletable {
          new Point(x.high, y.high),
          new Point(x.low, y.high),
       ].map((p) => this.fromRectCoordinates(p))
+   }
+   clone(addToCircuit = true): SymbolInstance {
+      let symbol = new SymbolInstance(
+         this.kind,
+         this.position,
+         this.rotation,
+         this.scale,
+         addToCircuit
+      )
+      symbol.tags = new Set(this.tags)
+      symbol.properties = new Set(this.properties)
+      return symbol
    }
 }
 
@@ -783,43 +839,28 @@ export function copy_(
    let copiedSegments = new Map<Segment, Segment>()
    let copiedJunctions = new Map<Junction, Junction>()
    for (let symbol of symbols) {
-      let copiedSymbol = new SymbolInstance(
-         symbol.kind,
-         symbol.position,
-         symbol.rotation,
-         symbol.scale,
-         !toClipboard
-      )
+      let copiedSymbol = symbol.clone(!toClipboard)
       copiedSymbols.set(symbol, copiedSymbol)
-      for (let i = 0; i < symbol.ports.length; ++i)
+      for (let i = 0; i < symbol.ports.length; ++i) {
+         copiedSymbol.ports[i].copyFrom(symbol.ports[i])
          copiedPorts.set(symbol.ports[i], copiedSymbol.ports[i])
+      }
    }
    for (let segment of segments) {
-      let copiedSegment = new Segment(
-         segment.type,
+      let copiedSegment = segment.clone(
          getCopied(segment.start),
          getCopied(segment.end),
-         segment.axis,
          !toClipboard
       )
-      copiedSegment.color = segment.color
-      copiedSegment.isFrozen = segment.isFrozen
       copiedSegments.set(segment, copiedSegment)
    }
+   // Initialize the crossingKinds between each pair of copied segments.
+   // (If toClipboard = true, the copied segments are not part of the Segment.s
+   // set, so Segment.clone() will not have initialized their crossingKinds.)
    for (let [seg1, copiedSeg1] of copiedSegments) {
-      // Establish the crossingKinds between each pair of copied segments
-      // (which if toClipboard = true, are not part of the Segment.s set).
       for (let [seg2, copiedSeg2] of copiedSegments) {
          let c = seg1.crossingKinds.get(seg2)
          if (c) copiedSeg1.crossingKinds.set(copiedSeg2, c)
-      }
-      // Establish the crossingKinds between the copied segments and the
-      // pre-existing segments of the circuit.
-      for (let seg2 of Segment.s) {
-         let c12 = seg1.crossingKinds.get(seg2)
-         if (c12) copiedSeg1.crossingKinds.set(seg2, c12)
-         let c21 = seg2.crossingKinds.get(seg1)
-         if (c21) seg2.crossingKinds.set(copiedSeg1, c21)
       }
    }
    // For copied Junctions whose host (if any) was also copied, ensure that
@@ -839,22 +880,17 @@ export function copy_(
          copiedJunctions.get(vertex as Junction) ||
          copiedPorts.get(vertex as Port)
       if (!copiedVertex) {
-         // [If the vertex is a Junction]: Junctions are being copied lazily.
-         // We haven't found a pre-existing copy of the Junction, so we will
-         // copy it now.
-         // [If the vertex is a Port]: Symbols have already been copied at the
-         // time of this call, and so have their Ports. Thus, the fact that we
-         // couldn't find a copy of the Port means that its Symbol is not part
-         // of the selection. We will replace it with a Junction.
-         copiedVertex = new Junction(
-            vertex,
-            vertex.glyph,
-            vertex.glyphOrientation,
-            !toClipboard
-         )
          if (vertex instanceof Junction) {
+            // Junctions are being copied lazily. We haven't found a
+            // pre-existing copy of the Junction, so we will copy it now.
+            copiedVertex = vertex.clone(!toClipboard)
             copiedJunctions.set(vertex, copiedVertex)
          } else {
+            // Symbols have already been copied at the time of this call, and
+            // so have their Ports. Thus, the fact that we couldn't find a copy
+            // of the Port means that its Symbol is not part of the selection.
+            // We will replace it with a Junction.
+            copiedVertex = vertex.cloneAsJunction(!toClipboard)
             copiedPorts.set(vertex, copiedVertex)
          }
       }
@@ -883,13 +919,13 @@ type PortJSON = {
 
 type SegmentJSON = {
    objectID: number
+   type: string // must be a LineType.name
    tags: Tag[]
    properties: PropertyString[]
-   type: string // must be a LineType.name
    color: string
-   attachments?: number[]
    isFrozen: boolean
    crossingKinds: { segmentID: number; crossing: CrossingGlyphKind }[]
+   attachments?: number[]
    startID: number
    endID: number
    axis: { x: number; y: number }
@@ -948,13 +984,13 @@ export function saveToJSON(): CircuitJSON {
       }
       return {
          objectID: s.objectID,
+         type: s.type.name,
          tags: [...s.tags],
          properties: [...s.properties],
-         type: s.type.name,
          color: s.color,
-         attachments: [...s.attachments].map((j) => j.objectID),
          isFrozen: s.isFrozen,
          crossingKinds,
+         attachments: [...s.attachments].map((j) => j.objectID),
          startID: s.start.objectID,
          endID: s.end.objectID,
          axis: { x: s.axis.x, y: s.axis.y },
@@ -1012,19 +1048,18 @@ export function loadFromJSON(
    let segmentMap = new Map<number, Segment>()
    let symbolMap = new Map<number, SymbolInstance>()
    circuit.junctions.forEach((j) => {
-      let junction = new Junction(
-         new Point(j.position.x, j.position.y),
-         j.glyph,
-         j.glyphOrientation
-      )
+      // This initialization should mimic Junction.clone().
+      let junction = new Junction(new Point(j.position.x, j.position.y))
       junction.tags = new Set(j.tags)
       junction.properties = new Set(j.properties)
+      junction.glyph = j.glyph
+      junction.glyphOrientation = j.glyphOrientation
       vertexMap.set(j.objectID, junction)
    })
    circuit.symbols.forEach((s) => {
       let kind = symbolKinds.get(s.fileName)
       if (kind) {
-         // Load the symbol.
+         // This initialization should mimic SymbolInstance.clone().
          let symbol = new SymbolInstance(
             kind,
             new Point(s.position.x, s.position.y),
@@ -1039,6 +1074,7 @@ export function loadFromJSON(
          s.ports.forEach((p) => {
             let port = portsByID.get(p.svgID)
             if (port) {
+               // This initialization should mimic Port.copyFrom().
                port.tags = new Set(p.tags)
                port.properties = new Set(p.properties)
                port.glyph = p.glyph
@@ -1084,6 +1120,7 @@ export function loadFromJSON(
          )
       }
       if (lineType && start && end) {
+         // This initialization should mimic Segment.clone().
          let segment = new Segment(
             lineType,
             start,
@@ -1093,6 +1130,7 @@ export function loadFromJSON(
          segment.tags = new Set(s.tags)
          segment.properties = new Set(s.properties)
          segment.color = s.color
+         segment.isFrozen = s.isFrozen
          for (let id of s.attachments || []) {
             let j = vertexMap.get(id)
             if (!j) {
@@ -1103,7 +1141,6 @@ export function loadFromJSON(
                ;(j as Junction).attachTo(segment)
             }
          }
-         segment.isFrozen = s.isFrozen
          segmentMap.set(s.objectID, segment)
       }
    })

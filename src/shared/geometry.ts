@@ -146,10 +146,10 @@ export class Point extends Object2D {
       this.y = y
    }
    center(): Point {
-      return this
+      return new Point(this.x, this.y)
    }
    partClosestTo(point: Point): Point {
-      return this
+      return this.center()
    }
    override sqDistanceFrom(p: Point): number {
       let dx = this.x - p.x
@@ -174,9 +174,6 @@ export class Point extends Object2D {
    rotatedAround(p: Point, r: Rotation): Point {
       return p.displacedBy(this.displacementFrom(p).rotatedBy(r))
    }
-   clone(): Point {
-      return new Point(this.x, this.y)
-   }
    // A copy of Vector.relativeTo().
    relativeTo(axis: Vector): Point {
       let [cos, sin] = [axis.x, axis.y]
@@ -188,6 +185,17 @@ export class Point extends Object2D {
       let [cos, sin] = [axis.x, axis.y]
       let [x, y] = [this.x, this.y]
       return new Point(cos * x - sin * y, sin * x + cos * y)
+   }
+   // Returns whether the orthogonal projection of the point onto the segment
+   // lies on the segment (as opposed to lying beyond the segment's endpoints).
+   projectsOnto(segment: LineSegment): boolean {
+      let d = segment.end.displacementFrom(segment.start)
+      let p = this.displacementFrom(segment.start).projectionOnto(d)
+      return (
+         Math.sign(p.x) === Math.sign(d.x) &&
+         Math.sign(p.y) === Math.sign(d.y) &&
+         p.sqLength() <= d.sqLength()
+      )
    }
    // Arithmetic mean.
    static mean(points: Point[]): Point {
@@ -206,6 +214,11 @@ export class Point extends Object2D {
       let ys = points.map((p) => p.y).sort((a, b) => a - b)
       let i = Math.floor(points.length / 2)
       return new Point(xs[i], ys[i])
+   }
+   // Note: This method isn't called "clone", because sub-classes of Point
+   // contain a clone() method, and I don't want this method to be overridden.
+   copy(): Point {
+      return new Point(this.x, this.y)
    }
 }
 
