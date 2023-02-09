@@ -165,6 +165,7 @@
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
    type Attachable = Junction | Port | Segment | SpecialAttachPoint // Things a segment can attach to.
+   type HasProperties = Vertex | Segment | SymbolInstance
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -191,6 +192,11 @@
    function* allMovables(): Generator<Movable> {
       for (let m of Junction.s) yield m
       for (let m of SymbolInstance.s) yield m
+   }
+   function* allThingsWithProperties(): Generator<HasProperties> {
+      for (let vertex of allVertices()) yield vertex
+      for (let segment of Segment.s) yield segment
+      for (let symbol of SymbolInstance.s) yield symbol
    }
    function closestNearTo<T extends Object2D>(
       point: Point,
@@ -1735,6 +1741,38 @@
       SymbolInstance.s = SymbolInstance.s
       amassed.items = amassed.items
    }
+   function narrowAmassmentToTag(tag: Tag) {
+      for (let item of amassed.items) {
+         if (item instanceof Crossing) continue
+         if (!item.tags.has(tag)) amassed.items.delete(item)
+      }
+      commitState("narrow amassment")
+      amassed.items = amassed.items
+   }
+   function narrowAmassmentToProperty(prop: Property) {
+      for (let item of amassed.items) {
+         if (item instanceof Crossing) continue
+         if (!item.properties.has(prop.serialize())) amassed.items.delete(item)
+      }
+      commitState("narrow amassment")
+      amassed.items = amassed.items
+   }
+   function amassAllWithTag(tag: Tag) {
+      amassed.items.clear()
+      for (let item of allThingsWithProperties()) {
+         if (item.tags.has(tag)) amassed.items.add(item)
+      }
+      commitState("amass objects with tag")
+      amassed.items = amassed.items
+   }
+   function amassAllWithProperty(prop: Property) {
+      amassed.items.clear()
+      for (let item of allThingsWithProperties()) {
+         if (item.properties.has(prop.serialize())) amassed.items.add(item)
+      }
+      commitState("amass objects with property")
+      amassed.items = amassed.items
+   }
    function propertyFocused() {
       newlyAddedTag = undefined
       newlyAddedProperty = undefined
@@ -1746,7 +1784,7 @@
       allTags = new Set()
       allPropertyNames = new Set()
       allPropertyValues = new Set()
-      for (let thing of [...allVertices(), ...Segment.s, ...SymbolInstance.s]) {
+      for (let thing of allThingsWithProperties()) {
          for (let tag of thing.tags) allTags.add(tag)
          for (let prop of thing.properties) {
             let { name, value } = parseProperty(prop)
@@ -4332,6 +4370,18 @@
                      >
                         ×
                      </div>
+                     <div
+                        class="selectIcon"
+                        on:click={() => narrowAmassmentToTag(tag)}
+                     >
+                        must
+                     </div>
+                     <div
+                        class="selectIcon"
+                        on:click={() => amassAllWithTag(tag)}
+                     >
+                        all
+                     </div>
                   </div>
                {/each}
                <button on:click={addEmptyProperty}>New property</button>
@@ -4357,6 +4407,18 @@
                         on:click={() => removeProperty(property)}
                      >
                         ×
+                     </div>
+                     <div
+                        class="selectIcon"
+                        on:click={() => narrowAmassmentToProperty(property)}
+                     >
+                        must
+                     </div>
+                     <div
+                        class="selectIcon"
+                        on:click={() => amassAllWithProperty(property)}
+                     >
+                        all
                      </div>
                   </div>
                {/each}
@@ -4795,6 +4857,14 @@
       font-size: 22px;
       font-weight: 700;
       color: #444;
+   }
+   .selectIcon {
+      display: flex;
+      align-items: center;
+      font-weight: 600;
+      text-decoration: underline;
+   }
+   .selectIcon {
    }
    .symbolPane {
       min-height: 100px;
