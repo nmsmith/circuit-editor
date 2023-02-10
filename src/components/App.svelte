@@ -1001,7 +1001,8 @@
       originalPositions: DefaultMap<Movable, Point>
       originalRotations: DefaultMap<SymbolInstance, Rotation>
       start: Point
-      highlightPort: Port | null // to indicate when Ports have snapped together
+      splice: null | { source: Port | [Port, Port]; target: Segment }
+      highlight: Set<Port | Segment> // highlight for splicing and port snapping
    }
    let amassRect: null | {
       mode: "add" | "remove"
@@ -1173,9 +1174,9 @@
             }
          }
       }
-      if (warp?.highlightPort) {
-         // A highlighting edge-case: indicate when ports have snapped together.
-         touchLight.add(warp.highlightPort)
+      // A bit of extra highlighting.
+      if (warp?.highlight) {
+         for (let thing of warp.highlight) touchLight.add(thing)
       }
    }
    let amassLight: Set<Interactable>
@@ -3550,14 +3551,15 @@
          originalPositions: copyPositions(),
          originalRotations: copySymbolRotations(),
          start: partGrabbed,
-         highlightPort: null,
+         splice: null,
+         highlight: new Set(),
       }
    }
    function updateWarp() {
       if (!warp) return
       if (warp.mode !== selectedWarpMode()) {
          let { grabbed } = warp
-         endWarp()
+         // Re-initialize the warp.
          beginWarp(grabbed, mouseOnCanvas)
       } else {
          // Revert the operation; it will be redone from scratch.
@@ -3567,7 +3569,8 @@
                ;(m.rotation as Rotation) = warp.originalRotations.read(m)
             }
          }
-         warp.highlightPort = null
+         warp.splice = null
+         warp.highlight.clear()
       }
       if (warp.mode === "pan") {
          updatePan()
@@ -3578,9 +3581,10 @@
    function updatePan() {
       if (!warp) return
       // Start by moving everything as if it was following the mouse.
-      let d = mouseOnCanvas.displacementFrom(warp.start)
-      for (let movable of warp.movables) movable.moveBy(d)
-
+      {
+         let displacement = mouseOnCanvas.displacementFrom(warp.start)
+         for (let movable of warp.movables) movable.moveBy(displacement)
+      }
       // If panning a lone symbol, we will attempt to snap its ports to other
       // ports.
       let loneSymbol: SymbolInstance | undefined
@@ -3590,38 +3594,134 @@
             loneSymbol = item
          }
       }
-
       if (loneSymbol) {
-         // Try snapping the ports of the symbol to other ports.
-         let closest: Port | undefined
-         let reference: Port | undefined
-         let sqDistance = Infinity
-         for (let referencePort of loneSymbol.ports) {
-            for (let port of Port.s) {
-               if (port.symbol === loneSymbol) continue
-               let sqD = port.sqDistanceFrom(referencePort)
-               if (sqD < sqDistance) {
-                  closest = port
-                  reference = referencePort
-                  sqDistance = sqD
+         // Try easing the symbol toward a segment that it can be spliced into.
+         // We can either splice a _single_ port into a segment, or a _pair_
+         // of ports. To splice a pair of ports, the ports must lie on the
+         // same axis as the segment they are being spliced into. Thus, we
+         // begin by iterating over all of the "snapAxes", and identify the
+         // port pairs that lie on that axis. There are some subtle challenges:
+         // — If 3+ ports are colinear, then it is not clear which pair should
+         //   be spliced. Thus, we will not attempt to splice any of them.
+         // — We should only splice a single port if it is _not_ part of a pair.
+         // The code below addresses these challenges. For each axis, it finds
+         // the ports and port pairs that it is acceptable to splice with.
+         let acceptableSegmentSnaps = new DefaultMap<
+            Axis,
+            Set<Port | [Port, Port]>
+         >(() => new Set())
+         for (let axis of snapAxes) {
+            let pairs = new Set<[Port, Port]>()
+            let timesUsed = new DefaultMap<Port, number>(() => 0)
+            for (let i = 0; i < loneSymbol.ports.length; ++i) {
+               let p1 = loneSymbol.ports[i]
+               for (let j = i + 1; j < loneSymbol.ports.length; ++j) {
+                  let p2 = loneSymbol.ports[j]
+                  if (Axis.fromVector(p2.displacementFrom(p1)) !== axis)
+                     continue // Only consider pairs that lie on the axis.
+                  pairs.add([p1, p2])
+                  timesUsed.set(p1, timesUsed.read(p1) + 1)
+                  timesUsed.set(p2, timesUsed.read(p2) + 1)
+               }
+            }
+            let snaps = new Set<Port | [Port, Port]>()
+            // We can only snap to a pair of ports if it is not colinear with
+            // any other pair. (If a port has been used in multiple pairs,
+            // then those pairs are colinear. And vice versa.)
+            for (let [p1, p2] of pairs) {
+               if (timesUsed.read(p1) === 1 && timesUsed.read(p2) === 1)
+                  snaps.add([p1, p2])
+            }
+            // We can only snap to a single port if it is not part of a pair.
+            for (let port of loneSymbol.ports) {
+               if (timesUsed.read(port) === 0) snaps.add(port)
+            }
+            acceptableSegmentSnaps.set(axis, snaps)
+         }
+         // Now that we've identified all of the acceptable ports and port-pairs
+         // to snap/splice onto a segment, iterate over all segments to find the
+         // closest snap.
+         let snapToSegment:
+            | { source: Port | [Port, Port]; target: Segment }
+            | undefined
+         let sqDistanceForSegmentSnap = Infinity
+         for (let target of Segment.s) {
+            for (let source of acceptableSegmentSnaps.read(target.axis)) {
+               if (source instanceof Port) {
+                  if (source.projectsOnto(target)) {
+                     let sqDistance = target.sqDistanceFrom(source)
+                     if (sqDistance < sqDistanceForSegmentSnap) {
+                        snapToSegment = { source, target }
+                        sqDistanceForSegmentSnap = sqDistance
+                     }
+                  }
+               } else {
+                  let [p1, p2] = source
+                  if (p1.projectsOnto(target) && p2.projectsOnto(target)) {
+                     let sqDistance = target.sqDistanceFrom(p1)
+                     if (sqDistance < sqDistanceForSegmentSnap) {
+                        snapToSegment = { source, target }
+                        sqDistanceForSegmentSnap = sqDistance
+                     }
+                  }
                }
             }
          }
-         if (closest && reference) {
-            let displacement = closest.displacementFrom(reference)
-            if (sqDistance < sqSnapRadius) {
-               loneSymbol.moveBy(displacement)
-               warp.highlightPort = reference // Highlight the snapped port.
-            } else if (sqDistance < sqEaseRadius) {
+         // We now have the information required to snap/splice the symbol's
+         // port pairs onto the closest segment. But we are also interested in
+         // snapping the symbol's ports onto other ports in the circuit. We will
+         // compute this information next.
+         let snapToPort: { source: Port; target: Port } | undefined
+         let sqDistanceForPortSnap = Infinity
+         for (let source of loneSymbol.ports) {
+            for (let target of Port.s) {
+               if (target.symbol === loneSymbol) continue
+               let sqDistance = target.sqDistanceFrom(source)
+               if (sqDistance < sqDistanceForPortSnap) {
+                  snapToPort = { source, target }
+                  sqDistanceForPortSnap = sqDistance
+               }
+            }
+         }
+         // Do whichever snapping operation requires the smallest displacement.
+         if (
+            snapToSegment &&
+            sqDistanceForSegmentSnap < sqDistanceForPortSnap
+         ) {
+            let { source, target } = snapToSegment
+            let itemsToHighlight =
+               source instanceof Port ? [source, target] : [...source, target]
+            let d =
+               source instanceof Port
+                  ? target.partClosestTo(source).displacementFrom(source)
+                  : target.partClosestTo(source[0]).displacementFrom(source[0])
+            if (d.sqLength() < sqSnapRadius) {
+               loneSymbol.moveBy(d)
+               for (let thing of itemsToHighlight) warp.highlight.add(thing)
+               // In addition to snapping immediately, save the info we need to
+               // splice the symbol. This will occur when the mouse is released.
+               warp.splice = { source, target }
+            } else if (d.sqLength() < sqEaseRadius) {
                loneSymbol.moveBy(
-                  displacement
-                     .direction()
-                     ?.scaledBy(easeFn(Math.sqrt(sqDistance))) as Vector
+                  d.direction()?.scaledBy(easeFn(d.length())) as Vector
+               )
+            }
+         } else if (snapToPort) {
+            let d = snapToPort.target.displacementFrom(snapToPort.source)
+            if (d.sqLength() < sqSnapRadius) {
+               loneSymbol.moveBy(d)
+               warp.highlight.add(snapToPort.source)
+            } else if (d.sqLength() < sqEaseRadius) {
+               loneSymbol.moveBy(
+                  d.direction()?.scaledBy(easeFn(d.length())) as Vector
                )
             }
          }
       } else if (config.angleSnap.state === "on") {
-         // Gather the axes of interest.
+         // Try easing the edges incident to the warped items (i.e. the
+         // segments being stretched) toward "nice" axes.
+
+         // Begin by gathering the axes of interest.
          let neighbourAxes = new Set(
             [...warp.incidentEdges].flatMap(([s, neighbour]) =>
                [...neighbour.edges()]
@@ -3749,6 +3849,14 @@
       amassed.items = amassed.items
    }
    function endWarp() {
+      if (!warp) return
+      if (warp.splice) {
+         if (warp.splice.source instanceof Port) {
+            warp.splice.target.splitAt(warp.splice.source)
+         } else {
+            warp.splice.target.spliceAt(warp.splice.source)
+         }
+      }
       warp = null
    }
    function beginAmassRect(start: Point) {

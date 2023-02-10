@@ -357,11 +357,26 @@ export class Segment extends Geometry.LineSegment<Vertex> implements Deletable {
       if (this.end instanceof Junction) junctions.add(this.end)
       return junctions
    }
-   // Split the segment at the given point, which is assumed to lie on the
-   // segment. Thereafter, all references to the segment should be discarded.
-   splitAt(point: Junction): [Segment, Segment] {
-      let slice1 = this.sliceOut(this.start, point)
-      let slice2 = this.sliceOut(point, this.end)
+   // Split the segment at the given vertex, which is assumed to lie on the
+   // segment. The original segment is deleted, so all references to it should
+   // be discarded.
+   splitAt(vertex: Vertex): [Segment, Segment] {
+      let slice1 = this.sliceOut(this.start, vertex)
+      let slice2 = this.sliceOut(vertex, this.end)
+      this.delete()
+      return [slice1, slice2]
+   }
+   // Remove a chunk from the segment between the given vertices, which are
+   // assumed to line on the segment. The original segment is deleted, so all
+   // references to it should be discarded.
+   spliceAt(vertices: [Vertex, Vertex]): [Segment, Segment] {
+      let [v1, v2] =
+         vertices[0].sqDistanceFrom(this.start) <
+         vertices[1].sqDistanceFrom(this.start)
+            ? [vertices[0], vertices[1]]
+            : [vertices[1], vertices[0]]
+      let slice1 = this.sliceOut(this.start, v1)
+      let slice2 = this.sliceOut(v2, this.end)
       this.delete()
       return [slice1, slice2]
    }
@@ -710,13 +725,15 @@ export class SymbolInstance extends Rectangle implements Deletable {
       for (let port of this.ports) {
          Port.s.delete(port)
          if (port.edges().size > 0) {
-            // Convert the Port to a Junction, and replace the Port's segments.
+            // Convert the Port to a Junction, and replace the Port's edges.
             let junction = port.cloneAsJunction()
             for (let [oldSegment, v] of port.edges()) {
                oldSegment.sliceOut(junction, v)
                oldSegment.delete()
             }
             port.edges().clear()
+            // Try fusing the edges together.
+            if (junction.edges().size === 2) junction.fuse()
          }
       }
       this.attachments.forEach((a) => a.detach())
