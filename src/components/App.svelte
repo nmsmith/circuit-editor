@@ -179,8 +179,20 @@
    }
    function* specialAttachPoints(): Generator<SpecialAttachPoint> {
       for (let seg of Segment.s) if (seg.isTether()) yield seg.centerPoint()
-      for (let symbol of SymbolInstance.s)
+      // If the user is currently drawing outward from a port or attachment
+      // point of a symbol, hide the attachment points of the symbol.
+      // (This is the "nuclear" option — the rest of the code base won't be
+      // able to detect the existence of these points.)
+      let ignoreSymbol
+      if (draw?.segment.start instanceof Port) {
+         ignoreSymbol = draw?.segment.start.symbol
+      } else if (draw?.segment.start.host() instanceof SymbolInstance) {
+         ignoreSymbol = draw?.segment.start.host()
+      }
+      for (let symbol of SymbolInstance.s) {
+         if (symbol === ignoreSymbol) continue
          for (let p of symbol.specialAttachPoints) yield p
+      }
    }
    function* allCrossings(): Generator<Crossing> {
       for (let [seg1, map] of crossingMap) {
@@ -879,7 +891,12 @@
       let target = drawTarget(
          toolBeingUsed ? toolBeingUsed.canvasDownPosition : mouseOnCanvas
       )
-      if (toolToUse === "draw" && target && isVertex(target.object)) {
+      if (
+         toolToUse === "draw" &&
+         target &&
+         isVertex(target.object) &&
+         selectedLineType !== tetherLineType
+      ) {
          let typeNames = new Set(
             [...target.object.edges()]
                .map(([segment]) => segment.type.name)
@@ -2414,7 +2431,7 @@
                break
             }
             case "erase": {
-               if (erasedOnMouseDown || endEraseRect()) commitState("erase")
+               if (endEraseRect() || erasedOnMouseDown) commitState("erase")
                break
             }
             case "freeze":
@@ -2872,10 +2889,14 @@
             // Replace the drawn segment with one that ends at the endVertex.
             segment.sliceOut(segment.start, endVertex)
             segment.delete()
-            if (endVertex.edges().size === 2 && !willChainDraw) {
+            if (
+               endVertex instanceof Junction &&
+               endVertex.edges().size === 2 &&
+               !willChainDraw
+            ) {
                // Try fusing the drawn segment with the other segment at the
-               // vertex.
-               ;(endVertex as Junction).fuse()
+               // junction.
+               endVertex.fuse()
             }
          } else {
             endVertex = draw.end
