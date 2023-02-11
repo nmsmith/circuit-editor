@@ -113,9 +113,8 @@
          canvasHeight = canvas.getBoundingClientRect().height
       }
    }
-   const row1Tools = ["warp", "erase", "rButton"] as const
-   const row2Tools = ["slide", "draw", "freeze"] as const
-   const tools = [...row1Tools, ...row2Tools] as const
+   // Editor tools. (The empty string reserves a blank space in the UI.)
+   const tools = ["warp", "erase", "", "slide", "draw", "freeze"] as const
    type Tool = typeof tools[number]
    // Input constants
    const panSpeed = 1.5 // when panning with trackpad
@@ -4473,18 +4472,18 @@
                <div class="spacer" />
                <div class="inspectorSubtitle">Glyph orientation</div>
                <div class="rotateButtons">
-                  <div
+                  <button
                      class="rotateButton"
                      on:mousedown={() => rotateCrossingGlyphs("anticlockwise")}
                   >
                      ↺
-                  </div>
-                  <div
+                  </button>
+                  <button
                      class="rotateButton"
                      on:mousedown={() => rotateCrossingGlyphs("clockwise")}
                   >
                      ↻
-                  </div>
+                  </button>
                </div>
             {:else if inspector.mode === "segment"}
                <div class="inspectorSubtitle">Segment color</div>
@@ -4495,27 +4494,31 @@
                />
             {:else if inspector.mode === "symbol"}
                {#if inspector.canFlip}
-                  <div class="symbolMoveButton flip" on:mousedown={flipSymbols}>
+                  <button
+                     class="symbolMoveButton flip"
+                     on:mousedown={flipSymbols}
+                  >
                      Flip
-                  </div>
+                  </button>
                {:else}
                   <div style="display: flex; gap: 5px;">
-                     <div class="symbolMoveButton flip disabled">Flip</div>
+                     <button class="symbolMoveButton flip disabled">Flip</button
+                     >
                      <div class="flipMessage">Symbols must be unconnected.</div>
                   </div>
                {/if}
-               <div
+               <button
                   class="symbolMoveButton send"
                   on:mousedown={sendSymbolsToBack}
                >
                   Send to back
-               </div>
-               <div
+               </button>
+               <button
                   class="symbolMoveButton bring"
                   on:mousedown={bringSymbolsToFront}
                >
                   Bring to front
-               </div>
+               </button>
             {/if}
             {#if inspector.mode && inspector.mode !== "crossing"}
                <button on:click={addEmptyTag}>New tag</button>
@@ -4666,45 +4669,13 @@
                   <div
                      class="configTooltip"
                      style="left: {mouseInClient.x +
-                        8}px; top: {mouseInClient.y + 18}px"
+                        12}px; top: {mouseInClient.y - 10}px"
                   >
                      {item.tooltip}
                   </div>
                {/if}
             </div>
          {/each}
-      </div>
-      <div class="toolbox">
-         <div class="toolButtons">
-            {#each row1Tools as tool}
-               <Button
-                  label={labelOfButton(tool)}
-                  isSelected={toolToUse === tool}
-                  isHeld={heldTool?.tool === tool}
-                  isBound={boundTool === tool &&
-                     (heldTool === null ||
-                        heldTool.tool === tool ||
-                        heldTool.shouldBind === false)}
-                  on:mousedown={() => {
-                     boundTool = tool
-                  }}
-               />
-            {/each}
-            {#each row2Tools as tool}
-               <Button
-                  label={labelOfButton(tool)}
-                  isSelected={toolToUse === tool}
-                  isHeld={heldTool?.tool === tool}
-                  isBound={boundTool === tool &&
-                     (heldTool === null ||
-                        heldTool.tool === tool ||
-                        heldTool.shouldBind === false)}
-                  on:mousedown={() => {
-                     boundTool = tool
-                  }}
-               />
-            {/each}
-         </div>
       </div>
    </div>
    <div
@@ -4765,6 +4736,28 @@
                </p>
             </div>
          {/if}
+      </div>
+   </div>
+   <div class="toolbox">
+      <div class="toolButtons">
+         {#each tools as tool}
+            {#if tool === ""}
+               <div />
+            {:else}
+               <Button
+                  label={labelOfButton(tool)}
+                  isSelected={toolToUse === tool}
+                  isHeld={heldTool?.tool === tool}
+                  isBound={boundTool === tool &&
+                     (heldTool === null ||
+                        heldTool.tool === tool ||
+                        heldTool.shouldBind === false)}
+                  on:mousedown={() => {
+                     boundTool = tool
+                  }}
+               />
+            {/if}
+         {/each}
       </div>
    </div>
    {#if grabbedSymbol}
@@ -4946,23 +4939,14 @@
    }
    .rotateButtons {
       display: grid;
-      grid-template-rows: 22px;
-      grid-template-columns: 22px 22px;
+      grid-template-rows: 26px;
+      grid-template-columns: 26px 26px;
       gap: 3px;
-   }
-   .rotateButtons,
-   .symbolMoveButton {
-      filter: drop-shadow(0 1.5px 1.5px rgb(0, 0, 0, 0.6));
    }
    .rotateButton {
       font-size: 24px;
-      font-weight: 500;
-   }
-   .symbolMoveButton {
-      font-weight: 500;
-      height: 20px;
-      line-height: 20px;
-      box-sizing: border-box;
+      font-weight: 530;
+      padding: 0;
    }
    .symbolMoveButton.flip {
       width: 37px;
@@ -4972,25 +4956,12 @@
    }
    .flipMessage {
       font-size: 14px;
-      line-height: 20px;
+      display: flex;
+      align-items: center;
    }
    .symbolMoveButton.send,
    .symbolMoveButton.bring {
       width: 96px;
-   }
-   .rotateButton,
-   .symbolMoveButton {
-      background-color: rgb(231, 234, 237);
-      border-radius: 3px;
-      user-select: none;
-      -webkit-user-select: none;
-      text-align: center;
-   }
-   .rotateButton:active,
-   .symbolMoveButton:active:not(.disabled) {
-      box-shadow: 1px 1px 2px 0px #00000077 inset;
-      padding-left: 2px;
-      padding-top: 1px;
    }
    :global(.glyphSelectionItem.uniqueHighlight),
    .lineGridItem.toUse {
@@ -5104,7 +5075,6 @@
       user-select: none;
       -webkit-user-select: none;
       background-color: rgb(231, 234, 237);
-      border-bottom: 1px solid rgb(156, 156, 156);
    }
    .configItem {
       flex: 1;
@@ -5130,17 +5100,19 @@
    }
    .configItem:hover .configTooltip {
       visibility: visible;
-      width: 136px;
+      width: 122px;
       padding: 2px;
       background-color: white;
       box-shadow: 0 0 8px 0 rgb(0, 0, 0, 0.3);
    }
    .toolbox {
+      position: absolute;
+      bottom: 4px;
+      left: calc(250px + 4px);
       z-index: 1;
       flex-shrink: 0;
       display: flex;
       justify-content: center;
-      background-color: rgb(231, 234, 237);
       user-select: none;
       -webkit-user-select: none;
    }
@@ -5150,7 +5122,8 @@
       grid-template-columns: repeat(3, 53px);
       gap: 3px;
       padding: 5px;
-      filter: drop-shadow(0 1px 2.5px rgb(0, 0, 0, 0.9));
+      filter: drop-shadow(0 2px 2px rgb(0, 0, 0, 0.3))
+         drop-shadow(0 2px 4px rgb(0, 0, 0, 0.2));
    }
    .canvas {
       width: 100%;
