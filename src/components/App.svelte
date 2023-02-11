@@ -113,8 +113,8 @@
          canvasHeight = canvas.getBoundingClientRect().height
       }
    }
-   const row1Tools = ["qButton", "warp", "erase", "rButton"] as const
-   const row2Tools = ["amass", "slide", "draw", "freeze"] as const
+   const row1Tools = ["warp", "erase", "rButton"] as const
+   const row2Tools = ["slide", "draw", "freeze"] as const
    const tools = [...row1Tools, ...row2Tools] as const
    type Tool = typeof tools[number]
    // Input constants
@@ -308,9 +308,12 @@
          let color = ignoreTypeColor ? segment.color : segment.renderColor()
          counts.set(color, counts.read(color) + 1)
       }
-      return [...counts].reduce((prev, curr) =>
-         curr[1] > prev[1] ? curr : prev
-      )[0]
+      let largestCount = Math.max(...counts.values())
+      // To break ties, choose the color that is lexicographically the smallest.
+      let mostFrequentColors = [...counts]
+         .flatMap(([color, count]) => (count === largestCount ? [color] : []))
+         .sort()
+      return mostFrequentColors[0]
    }
    $: willBeDeleted = (item?: Segment | SymbolInstance | Glyph): boolean => {
       if (!item || !eraseRect) return false
@@ -672,11 +675,8 @@
       ["Space", { type: "pan", pressing: false }],
       ["Backspace", { type: "delete", pressing: false }],
       ["Delete", { type: "delete", pressing: false }],
-      //["KeyQ", { type: "holdTool", tool: "query", pressing: false }],
       ["KeyW", { type: "holdTool", tool: "warp", pressing: false }],
       ["KeyE", { type: "holdTool", tool: "erase", pressing: false }],
-      //["KeyR", { type: "holdTool", tool: "rButton", pressing: false }],
-      ["KeyA", { type: "holdTool", tool: "amass", pressing: false }],
       ["KeyS", { type: "holdTool", tool: "slide", pressing: false }],
       ["KeyD", { type: "holdTool", tool: "draw", pressing: false }],
       ["KeyF", { type: "holdTool", tool: "freeze", pressing: false }],
@@ -1008,6 +1008,7 @@
       mode: "add" | "remove"
       start: Point
       items: Set<Interactable>
+      clearedOnBegin: boolean
    } = null
    let eraseRect: null | {
       start: Point
@@ -1165,12 +1166,12 @@
             touching = freezeTarget(touchLocation)?.object
          }
          if (touching) {
-            // If touching part of an amassment, highlight all of it.
-            // Otherwise, just highlight the thing being touched.
-            if (tool !== "amass" && amassed.items.has(touching as any)) {
+            // Highlight the thing being touched — unless it has been flagged.
+            if (touching !== doNotLightUp.item) touchLight.add(touching)
+            // With some tools, if we are touching part of an amassment,
+            // we should highlight all of it.
+            if (tool === "erase" && amassed.items.has(touching as any)) {
                for (let item of amassed.items) touchLight.add(item)
-            } else if (touching !== doNotLightUp.item) {
-               touchLight.add(touching)
             }
          }
       }
@@ -2168,14 +2169,12 @@
    }
 
    // ---------------------------- Primary events -----------------------------
-   let amassedOnMouseDown = false
    let erasedOnMouseDown = false
    let frozeOnMouseDown: false | "freeze" | "unfreeze" = false
    function keyPressed(name: string) {
       let key = keyInfo.getOrCreate(name)
       if (key.pressing) return // in case we missed a release
       key.pressing = true
-      amassedOnMouseDown = false
       erasedOnMouseDown = false
       frozeOnMouseDown = false
       // Update the state of double-tap actions.
@@ -2218,39 +2217,7 @@
             heldTool.shouldBind = false // The tool is being used temporarily.
          }
          // Actions to perform immediately:
-         if (toolToUse === "amass") {
-            let target = amassTarget(mouseOnCanvas)
-            let shift = keyInfo.read(Shift).pressing
-            let alt = keyInfo.read(Alt).pressing
-            if (target) {
-               if (shift) {
-                  if (amassed.items.has(target.object)) {
-                     amassed.items.delete(target.object)
-                  } else {
-                     amassed.items.add(target.object)
-                     if (target.object instanceof Segment) {
-                        // The segment's crossings should be unselected.
-                        for (let [_, cross] of crossingMap.read(target.object))
-                           amassed.items.delete(cross)
-                     } else if (target.object instanceof Crossing) {
-                        // The crossing's segments should be unselected.
-                        amassed.items.delete(target.object.seg1)
-                        amassed.items.delete(target.object.seg2)
-                     }
-                  }
-               } else if (alt) amassed.items.delete(target.object)
-               else amassed.items = new Set([target.object])
-               amassed.items = amassed.items
-               amassedOnMouseDown = true
-               doNotLightUp = {
-                  item: target.object,
-                  clientPosition: mouseInClient,
-               }
-            } else if (amassed.items.size > 0 && !shift && !alt) {
-               amassed.items = new Set()
-               amassedOnMouseDown = true
-            }
-         } else if (toolToUse === "erase") {
+         if (toolToUse === "erase") {
             let target = eraseTarget(mouseOnCanvas)
             if (target) {
                if (amassed.items.has(target.object)) {
@@ -2260,7 +2227,15 @@
                }
                erasedOnMouseDown = true
             }
+            if (amassed.items.size > 0) {
+               amassed.items = new Set()
+               commitState("clear amassment")
+            }
          } else if (toolToUse === "freeze") {
+            if (amassed.items.size > 0) {
+               amassed.items = new Set()
+               commitState("clear amassment")
+            }
             let target = freezeTarget(mouseOnCanvas)
             if (target) {
                target.object.isFrozen = !target.object.isFrozen
@@ -2392,24 +2367,27 @@
          }
       } else if (key.type === "useTool" && toolBeingUsed) {
          switch (toolBeingUsed.tool) {
-            case "amass": {
-               let workWasDone =
-                  amassedOnMouseDown || (amassRect && amassRect.items.size > 0)
-               endAmassRect()
-               if (workWasDone) commitState("amass")
-               break
-            }
             case "warp":
                if (warp) {
                   endWarp()
                   commitState("warp")
                   grabbedSymbol = null
+               } else if (amassRect) {
+                  if (endAmassRect()) commitState("amass")
+               } else {
+                  let target = warpTarget(toolBeingUsed.canvasDownPosition)
+                  amassClick(target?.object)
                }
                break
             case "slide":
                if (slide) {
                   endSlide()
                   commitState("slide")
+               } else if (amassRect) {
+                  if (endAmassRect()) commitState("amass")
+               } else {
+                  let target = slideTarget(toolBeingUsed.canvasDownPosition)
+                  amassClick(target?.object)
                }
                break
             case "draw": {
@@ -2417,25 +2395,23 @@
                   endDraw()
                   commitState("draw segment")
                } else if (!toolBeingUsed.chainDrawFromEnd) {
-                  //drawButtonTapped()
+                  let target = drawTarget(toolBeingUsed.canvasDownPosition)
+                  if (!(target?.object instanceof SpecialAttachPoint))
+                     amassClick(target?.object)
                }
                break
             }
             case "erase": {
-               let workWasDone =
-                  erasedOnMouseDown || (eraseRect && eraseRect.items.size > 0)
-               endEraseRect()
-               if (workWasDone) commitState("erase")
+               if (erasedOnMouseDown || endEraseRect()) commitState("erase")
                break
             }
             case "freeze":
-               if (freezeRect && freezeRect.items.size > 0) {
+               if (freezeRect) {
                   let message =
                      freezeRect.mode === "add"
                         ? "freeze region"
                         : "unfreeze region"
-                  endFreezeRect()
-                  commitState(message)
+                  if (endFreezeRect()) commitState(message)
                } else if (frozeOnMouseDown) {
                   commitState(frozeOnMouseDown)
                }
@@ -2445,6 +2421,40 @@
          toolBeingUsed = null
       }
       keyInfo = keyInfo
+
+      function amassClick(target?: Interactable) {
+         if (target) {
+            if (keyInfo.read(Shift).pressing) {
+               if (amassed.items.has(target)) {
+                  amassed.items.delete(target)
+               } else {
+                  amassed.items.add(target)
+                  if (target instanceof Segment) {
+                     // The segment's crossings should be unselected.
+                     for (let [_, cross] of crossingMap.read(target))
+                        amassed.items.delete(cross)
+                  } else if (target instanceof Crossing) {
+                     // The crossing's segments should be unselected.
+                     amassed.items.delete(target.seg1)
+                     amassed.items.delete(target.seg2)
+                  }
+               }
+            } else if (keyInfo.read(Alt).pressing) {
+               amassed.items.delete(target)
+            } else {
+               amassed.items = new Set([target])
+            }
+            amassed.items = amassed.items
+            doNotLightUp = {
+               item: target,
+               clientPosition: mouseInClient,
+            }
+            commitState("amass")
+         } else if (amassed.items.size > 0) {
+            amassed.items = new Set()
+            commitState("clear amassment")
+         }
+      }
    }
    function keyAborted(name: string) {
       let key = keyInfo.getOrCreate(name)
@@ -2513,11 +2523,19 @@
          let longDrag = dragVector.sqLength() >= sqLongDragDelay
          let { tool } = toolBeingUsed
          if (tool === "draw" && !draw && longDrag) {
+            if (amassed.items.size > 0) {
+               amassed.items = new Set()
+               commitState("clear amassment")
+            }
             beginDraw(dragVector)
-         } else if (tool === "warp" && !warp && shortDrag) {
+         } else if (tool === "warp" && !warp && !amassRect && shortDrag) {
             let target = warpTarget(toolBeingUsed.canvasDownPosition)
-            if (target) beginWarp(target.object, target.closestPart)
-         } else if (tool === "slide" && !slide && longDrag) {
+            if (target) {
+               beginWarp(target.object, target.closestPart)
+            } else {
+               beginAmassRect(toolBeingUsed.canvasDownPosition)
+            }
+         } else if (tool === "slide" && !slide && !amassRect && longDrag) {
             let dragAxis = Axis.fromVector(dragVector)
             let target = slideTarget(toolBeingUsed.canvasDownPosition)
             if (dragAxis && target) {
@@ -2536,9 +2554,9 @@
                   slideAxis = nearestAxis(dragAxis, axes)
                }
                beginSlide(slideAxis, target.object, target.closestPart)
+            } else {
+               beginAmassRect(toolBeingUsed.canvasDownPosition)
             }
-         } else if (tool === "amass" && !amassRect && shortDrag) {
-            beginAmassRect(toolBeingUsed.canvasDownPosition)
          } else if (tool === "erase" && !eraseRect && shortDrag) {
             beginEraseRect(toolBeingUsed.canvasDownPosition)
          } else if (tool === "freeze" && !freezeRect && shortDrag) {
@@ -3860,10 +3878,18 @@
       warp = null
    }
    function beginAmassRect(start: Point) {
+      let shift = keyInfo.read(Shift).pressing
+      let alt = keyInfo.read(Alt).pressing
+      let clearedOnBegin = false
+      if (!shift && !alt && amassed.items.size > 0) {
+         amassed.items = new Set()
+         clearedOnBegin = true
+      }
       amassRect = {
-         mode: keyInfo.read(Alt).pressing ? "remove" : "add",
+         mode: alt ? "remove" : "add",
          start,
          items: new Set(),
+         clearedOnBegin,
       }
    }
    function beginEraseRect(start: Point) {
@@ -3909,37 +3935,61 @@
       for (let segment of Segment.s)
          if (range.intersects(segment)) freezeRect.items.add(segment)
    }
-   function endAmassRect() {
-      if (!amassRect) return
+   function endAmassRect(): boolean {
+      if (!amassRect) return false
+      let workWasDone = amassRect.clearedOnBegin
       if (amassRect.mode === "remove") {
-         for (let item of amassRect.items) amassed.items.delete(item)
+         for (let item of amassRect.items) {
+            if (amassed.items.has(item)) {
+               amassed.items.delete(item)
+               workWasDone = true
+            }
+         }
       } else {
          for (let item of amassRect.items) {
-            amassed.items.add(item)
-            if (item instanceof Segment) {
-               // The segment's crossings should be unselected.
-               for (let [_, cross] of crossingMap.read(item))
-                  amassed.items.delete(cross)
+            if (!amassed.items.has(item)) {
+               amassed.items.add(item)
+               workWasDone = true
+               if (item instanceof Segment) {
+                  // The segment's crossings should be unselected.
+                  for (let [_, cross] of crossingMap.read(item))
+                     amassed.items.delete(cross)
+               }
             }
          }
       }
       amassed.items = amassed.items
       amassRect = null
+      return workWasDone
    }
-   function endEraseRect() {
-      if (!eraseRect) return
+   function endEraseRect(): boolean {
+      if (!eraseRect) return false
+      let workWasDone = eraseRect.items.size > 0
       deleteItems(eraseRect.items)
       eraseRect = null
+      return workWasDone
    }
-   function endFreezeRect() {
-      if (!freezeRect) return
+   function endFreezeRect(): boolean {
+      if (!freezeRect) return false
+      let workWasDone = false
       if (freezeRect.mode === "remove") {
-         for (let item of freezeRect.items) item.isFrozen = false
+         for (let item of freezeRect.items) {
+            if (item.isFrozen) {
+               item.isFrozen = false
+               workWasDone = true
+            }
+         }
       } else {
-         for (let item of freezeRect.items) item.isFrozen = true
+         for (let item of freezeRect.items) {
+            if (!item.isFrozen) {
+               item.isFrozen = true
+               workWasDone = true
+            }
+         }
       }
       Segment.s = Segment.s
       freezeRect = null
+      return workWasDone
    }
    function abortAllButtons() {
       for (let key of keyInfo.keys()) keyAborted(key)
@@ -5088,7 +5138,7 @@
    .toolButtons {
       display: grid;
       grid-template-rows: 53px 53px;
-      grid-template-columns: repeat(4, 53px);
+      grid-template-columns: repeat(3, 53px);
       gap: 3px;
       padding: 5px;
       filter: drop-shadow(0 1px 2.5px rgb(0, 0, 0, 0.9));
