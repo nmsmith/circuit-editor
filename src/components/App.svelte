@@ -165,7 +165,7 @@
    type Movable = Junction | SymbolInstance // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
    type Attachable = Junction | Port | Segment | SpecialAttachPoint // Things a segment can attach to.
-   type HasProperties = Vertex | Segment | SymbolInstance
+   type HasProperties = Vertex | Segment | SymbolInstance // Has tags/properties
    function isMovable(thing: any): thing is Movable {
       return thing instanceof Junction || thing instanceof SymbolInstance
    }
@@ -243,6 +243,24 @@
          )
       )
    }
+   function closestAttachableOrCrossing(
+      point: Point
+   ): ClosenessResult<Attachable | Crossing> {
+      return (
+         closestNearTo<Vertex | Crossing>(
+            point,
+            allVertices(),
+            allCrossings()
+         ) ||
+         (specialAttachPointsVisible
+            ? closestNearTo(point, specialAttachPoints())
+            : undefined) ||
+         closestNearTo(
+            point,
+            [...Segment.s].filter((s) => !s.isTether())
+         )
+      )
+   }
    function closestGrabbable(point: Point): ClosenessResult<Grabbable> {
       let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
       return (
@@ -251,29 +269,14 @@
          closestNearTo(point, Segment.s)
       )
    }
-   function closestInteractable(point: Point): ClosenessResult<Interactable> {
-      let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
-      return (
-         closestNearTo<Vertex | Crossing>(
-            point,
-            allVertices(),
-            allCrossings()
-         ) ||
-         closestNearTo(point, symbols) ||
-         closestNearTo(point, Segment.s)
-      )
-   }
-   function amassTarget(point: Point): ClosenessResult<Interactable> {
-      return closestInteractable(point)
-   }
    function warpTarget(point: Point): ClosenessResult<Grabbable> {
       return closestGrabbable(point)
    }
    function slideTarget(point: Point): ClosenessResult<Grabbable> {
       return closestGrabbable(point)
    }
-   function drawTarget(point: Point): ClosenessResult<Attachable> {
-      return closestAttachable(point)
+   function drawTarget(point: Point): ClosenessResult<Attachable | Crossing> {
+      return closestAttachableOrCrossing(point)
    }
    function eraseTarget(point: Point): ClosenessResult<Grabbable> {
       return closestGrabbable(point)
@@ -1097,7 +1100,9 @@
          orderedLineTypes = [...lineTypes]
       }
    }
-   let crossingMap: DefaultMap<Segment, Map<Segment, Crossing>>
+   let crossingMap = new DefaultMap<Segment, Map<Segment, Crossing>>(
+      () => new Map()
+   )
    $: /* Determine which Segments are crossing, and where they cross. */ {
       let oldCrossingMap = crossingMap
       crossingMap = new DefaultMap(() => new Map())
@@ -1148,9 +1153,7 @@
          let tool = toolBeingUsed?.tool || toolToUse
          let touchLocation = toolBeingUsed?.canvasDownPosition || mouseOnCanvas
          let touching: Interactable | SpecialAttachPoint | undefined
-         if (tool === "amass" && !amassRect) {
-            touching = amassTarget(touchLocation)?.object
-         } else if (tool === "warp") {
+         if (tool === "warp") {
             touching = warp ? warp.grabbed : warpTarget(touchLocation)?.object
          } else if (tool === "slide") {
             touching = slide
@@ -1170,7 +1173,10 @@
             if (touching !== doNotLightUp.item) touchLight.add(touching)
             // With some tools, if we are touching part of an amassment,
             // we should highlight all of it.
-            if (tool === "erase" && amassed.items.has(touching as any)) {
+            if (
+               (warp || slide || tool === "erase") &&
+               amassed.items.has(touching as any)
+            ) {
                for (let item of amassed.items) touchLight.add(item)
             }
          }
@@ -2640,6 +2646,9 @@
       }
       // Otherwise, start the draw operation at the closest attachable.
       let attach = drawTarget(toolBeingUsed.canvasDownPosition)
+      if (attach?.object instanceof Crossing) {
+         return // Can't start drawing from a crossing.
+      }
       // First, determine the axis the draw operation should begin along.
       let dragAxis = Axis.fromVector(dragVector) as Axis
       let regularDrawAxis, specialDrawAxis
