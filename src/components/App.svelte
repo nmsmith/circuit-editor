@@ -20,7 +20,6 @@
       SpecialAttachPoint,
       LineTypeConfig,
       VertexGlyphKind,
-      CrossingGlyphKind,
       cut,
       copy,
       paste,
@@ -1606,17 +1605,17 @@
       commitState("bring to front")
       SymbolInstance.s = SymbolInstance.s
    }
-   function randomTag(): Tag {
-      let tag = ""
-      const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-      const numbers = "0123456789"
-      for (let i = 0; i < 2; ++i)
-         tag += letters.charAt(Math.floor(Math.random() * letters.length))
-      tag += "-"
-      for (let i = 0; i < 2; ++i)
-         tag += numbers.charAt(Math.floor(Math.random() * numbers.length))
-      return tag
-   }
+   // function randomTag(): Tag {
+   //    let tag = ""
+   //    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+   //    const numbers = "0123456789"
+   //    for (let i = 0; i < 2; ++i)
+   //       tag += letters.charAt(Math.floor(Math.random() * letters.length))
+   //    tag += "-"
+   //    for (let i = 0; i < 2; ++i)
+   //       tag += numbers.charAt(Math.floor(Math.random() * numbers.length))
+   //    return tag
+   // }
    function addEmptyTag() {
       if (!inspector.mode) return
       newlyAddedTag = emptyTag
@@ -2217,12 +2216,20 @@
             heldTool = { tool: key.tool, shouldBind: true }
          }
       } else if (key.type === "useTool") {
-         toolBeingUsed = { tool: toolToUse, canvasDownPosition: mouseOnCanvas }
+         let tool: Tool
+         if (toolToUse === "slide" && keyInfo.read(Alt).pressing) {
+            // If Alt is being held, the user is probably intending to
+            // duplicate by dragging. But only the Warp tool can do this.
+            tool = "warp"
+         } else {
+            tool = toolToUse
+         }
+         toolBeingUsed = { tool, canvasDownPosition: mouseOnCanvas }
          if (heldTool) {
             heldTool.shouldBind = false // The tool is being used temporarily.
          }
          // Actions to perform immediately:
-         if (toolToUse === "erase") {
+         if (tool === "erase") {
             let target = eraseTarget(mouseOnCanvas)
             if (target) {
                if (amassed.items.has(target.object)) {
@@ -2236,7 +2243,7 @@
                amassed.items = new Set()
                commitState("clear amassment")
             }
-         } else if (toolToUse === "freeze") {
+         } else if (tool === "freeze") {
             if (amassed.items.size > 0) {
                amassed.items = new Set()
                commitState("clear amassment")
@@ -2297,7 +2304,7 @@
          return "recognized"
       } else if (name === "KeyV" || name === "KeyD") {
          let didPaste = name === "KeyV"
-         let items = didPaste ? paste() : duplicate(amassedCopyables)
+         let items = didPaste ? paste() : duplicate(amassedCopyables).items
          // Gather all of the Movables that were pasted.
          let thingsToMove = new Set<Movable>()
          for (let item of items) {
@@ -2536,7 +2543,7 @@
          } else if (tool === "warp" && !warp && !amassRect && shortDrag) {
             let target = warpTarget(toolBeingUsed.canvasDownPosition)
             if (target) {
-               beginWarp(target.object, target.closestPart)
+               beginWarp(target.object, target.closestPart, true)
             } else {
                beginAmassRect(toolBeingUsed.canvasDownPosition)
             }
@@ -2576,7 +2583,7 @@
       )
       let symbol = new SymbolInstance(kind, spawnPosition)
       toolBeingUsed = { tool: "warp", canvasDownPosition: mouseOnCanvas }
-      beginWarp(symbol, mouseOnCanvas)
+      beginWarp(symbol, mouseOnCanvas, false)
    }
    function executeZoom(magnitude: number) {
       let newZoom = cameraZoom * 2 ** magnitude
@@ -3465,10 +3472,41 @@
       Port.s = Port.s
       amassed.items = amassed.items
    }
-   function beginWarp(grabbed: Grabbable, partGrabbed: Point) {
+   function beginWarp(
+      grabbed: Grabbable,
+      partGrabbed: Point,
+      allowDuplication: boolean
+   ) {
+      // First, check if the Alt key is being held. If it is, we are supposed
+      // to Warp a duplicated version of the grabbed items.
+      // We avoid this operation if "grabbed" is a junction, because junctions
+      // are not necessarily duplicable. (A junction only gets duplicated if one
+      // of its edges gets duplicated.)
+      if (
+         keyInfo.read(Alt).pressing &&
+         !(grabbed instanceof Junction) &&
+         allowDuplication
+      ) {
+         let dupe
+         if (amassed.items.has(grabbed)) {
+            dupe = duplicate(amassedCopyables)
+            amassed.items = dupe.items
+         } else {
+            dupe = duplicate([grabbed])
+         }
+         if (grabbed instanceof Segment) {
+            grabbed = dupe.segments.get(grabbed) as Segment
+         } else {
+            grabbed = dupe.symbols.get(grabbed) as SymbolInstance
+         }
+         if (!grabbed) {
+            console.error("Something impossible happened.")
+            return
+         }
+      }
+      // Gather all the Movables that should be warped.
       let movables = new Set<Movable>()
       let rigidSegments = new Set<Segment>()
-      // Gather all the Movables that should be warped.
       if (amassed.items.has(grabbed)) {
          amassed.items.forEach((item) => add(item))
       } else if (isNextToAmassed(grabbed)) {
@@ -3586,7 +3624,7 @@
       if (warp.mode !== selectedWarpMode()) {
          let { grabbed } = warp
          // Re-initialize the warp.
-         beginWarp(grabbed, mouseOnCanvas)
+         beginWarp(grabbed, mouseOnCanvas, false)
       } else {
          // Revert the operation; it will be redone from scratch.
          for (let m of warp.movables) {
@@ -4530,7 +4568,6 @@
                         text={tag}
                         textCompletion={allTags}
                         autoFocus={newlyAddedTag === tag}
-                        autoFocusText={randomTag}
                         onFocus={propertyFocused}
                         onSubmit={(value) => replaceTag(tag, value)}
                      />

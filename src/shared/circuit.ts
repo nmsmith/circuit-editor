@@ -822,27 +822,34 @@ export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
 export const amassed = { items: new Set<Interactable>() }
 
 // Cut/copy/paste functionality.
+type CopiedItems = {
+   items: Set<Segment | SymbolInstance>
+   segments: Map<Segment, Segment>
+   symbols: Map<SymbolInstance, SymbolInstance>
+   junctions: Map<Junction, Junction>
+   ports: Map<Port, Vertex> // Ports may be converted to junctions when copied.
+}
 let clipboard = new Set<Segment | SymbolInstance>()
 export function cut(items: Iterable<Segment | SymbolInstance>) {
-   clipboard = new Set(copy_(items, true))
+   clipboard = copy_(items, true).items
    for (let item of items) item.delete()
 }
 export function copy(items: Iterable<Segment | SymbolInstance>) {
-   clipboard = new Set(copy_(items, true))
+   clipboard = copy_(items, true).items
 }
 export function duplicate(
    items: Iterable<Segment | SymbolInstance>
-): Iterable<Segment | SymbolInstance> {
+): CopiedItems {
    return copy_(items, false)
 }
 export function paste(): Iterable<Segment | SymbolInstance> {
-   return copy_(clipboard, false)
+   return copy_(clipboard, false).items
 }
 // Copy circuit items — either to the clipboard, or into the circuit.
 export function copy_(
    items: Iterable<Segment | SymbolInstance>,
    toClipboard: boolean
-): Iterable<Segment | SymbolInstance> {
+): CopiedItems {
    if (toClipboard && clipboard.size > 0) {
       // Delete the existing clipboard items.
       for (let item of clipboard) item.delete()
@@ -914,7 +921,13 @@ export function copy_(
       }
       return copiedVertex
    }
-   return [...copiedSegments.values(), ...copiedSymbols.values()]
+   return {
+      items: new Set([...copiedSegments.values(), ...copiedSymbols.values()]),
+      segments: copiedSegments,
+      symbols: copiedSymbols,
+      junctions: copiedJunctions,
+      ports: copiedPorts,
+   }
 }
 
 type JunctionJSON = {
