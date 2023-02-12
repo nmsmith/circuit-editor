@@ -2,7 +2,7 @@
 
 This app is an editor for electrical & hydraulic circuit diagrams.
 
-Some basic features are still missing, so it is not yet "production ready".
+It has been designed for the needs of a particular client, so I make no promises about its usefulness to others!
 
 # User guide
 
@@ -21,9 +21,29 @@ To prepare the app for drawing, click on the "choose a project folder" button in
 
 The symbols that have been loaded will appear in the sidebar. To place a symbol on the canvas, drag it out of the sidebar.
 
+## Navigating the canvas
+
+### Using a mouse
+
+To pan the canvas using a mouse, hold down the middle mouse button and then move the mouse in the direction you want to pan.
+
+To zoom the canvas using a mouse, place the mouse cursor at the location you wish to zoom toward, and then rotate the scroll wheel.
+
+### Using a trackpad
+
+If you are using a trackpad, you can pan the canvas by performing a panning gesture (e.g. two-finger swipe), and zoom the canvas by performing a zooming gesture (e.g. pinch-to-zoom).
+
+### Using the keyboard
+
+Panning can also be performed by holding the spacebar and then moving the mouse cursor in the direction you want to pan.
+
+### Resetting the camera
+
+Double-tapping the spacebar will move the camera back to the center of the diagram. You will find this useful if you accidentally pan away from the diagram and cannot find it again.
+
 ## Using the tools
 
-There are currently six tools implemented: draw, erase, warp, slide, amass, and freeze.
+There are currently five tools implemented: draw, erase, warp, slide, and freeze.
 
 A tool can be equipped by pressing its button in the GUI, or by using a keyboard shortcut.
 
@@ -33,7 +53,6 @@ The keyboard shortcuts are:
 -  `E`: erase
 -  `W`: warp
 -  `S`: slide
--  `A`: amass
 -  `F`: freeze
 
 It is also possible to switch to another tool _temporarily_. To do so, hold down the key of the desired tool and perform the operations you desire. When the key is released, the editor will automatically switch back to the previous tool.
@@ -60,6 +79,8 @@ If the Shift key is held, the object will be rotated. Otherwise, it will be tran
 
 By default, rotation will snap towards "nice" orientations for the object, e.g. horizontal and vertical. In addition, if the object being warped has line segments attached to it, then the movement will snap toward "nice" orientations for those line segments. This snapping behaviour can be disabled, as explained later in this guide.
 
+If you hold Alt (Windows) or Option (Mac) while using the warp tool, the object (or selection) will be duplicated upon being dragged.
+
 ### The slide tool
 
 The slide tool allows you to move an object (or a selection of objects) while ensuring it remains a "standard distance" apart from other objects on the canvas. Roughly, the slide tool "pushes" objects, without letting them touch or pass one another.
@@ -68,50 +89,50 @@ By default, the moved object(s) will push all objects in their path. However, if
 
 A slide operation occurs along a particular axis. For the most part, an object can only be slid along an axes shared by one or more line segment(s) it is attached to. As the object is slid, those line segments will then stretch and/or shrink.
 
-### The amass tool
-
-The amass tool allow you to select (i.e. _amass_) multiple circuit elements, for the purpose of applying operations to them simultaneously. Amassed items are indicated by a bright glow/outline.
-
-The amass tool has similar controls to the "select" and/or "move" tools of popular CAD apps. To amass a single item, click on it. To amass a rectangular region of items, click on an empty part of the canvas and then drag to specify the region.
-
-By default, the previous amassment will be cleared each time you amass new items. If you instead wish to _add_ to the current amassment, hold Shift before beginning the operation. (An exception: Shift-clicking on a single item will _toggle_ it, rather than add it.) If you wish to _remove_ from the current amassment, hold Alt/Opt before beginning the operation. To _clear_ the current amassment, click on an empty part of the canvas.
-
-Items remained amassed even after changing to another tool. This gives you the opportunity to manipulate the amassment using multiple tools (such as _warp_ and _slide_) without having to re-select the items after each tool change.
-
-When using one of the movement tools to manipulate the circuit diagram, the amassment—if it exists—moves _rigidly_. In other words, if the movement operation causes an amassed item to move, then _all other_ amassed items will move by exactly the same amount. You may find this behaviour helpful in the following scenarios:
-
--  You want to move the amassment as a single unit.
--  You want to move _other_ parts of the circuit, and you want to keep the amassment undisturbed.
-
 ### The freeze tool
 
 The freeze tool allows you to make line segments _rigid_, meaning their length cannot be changed by subsequent warping and sliding.
 
-The controls for freezing are identical to those for amassing, with the exception that the Shift key is "stuck on" by default. This is because freezing is intended to be more-or-less permanent — freezing a segment signals that its length is "finalized" and needs to be preserved. Just like with the amass tool, segments can be bulk-unfrozen by holding Alt/Opt and dragging.
+To toggle the freeze state of a line segment, click on it. Alternatively, you can click and drag to freeze a rectangular region. To _unfreeze_ a rectangular region, hold Alt/Option while dragging.
 
 ## Configuring snapping behaviour
 
 To aid you in creating clean and precise diagrams, many operations will snap the objects being manipulated toward a standard angle and/or distance apart. This behaviour can be customized or disabled by toggling the respective icons in the sidebar.
 
-## Navigating the canvas
+## Selecting objects
 
-### Using a mouse
+When using the warp, slide, and draw tools, it is possible to _select_ one or more objects. Selected objects are indicated by a bright glow/outline.
 
-To pan the canvas using a mouse, hold down the middle mouse button and then move the mouse in the direction you want to pan.
+There are two reasons you may wish to select objects:
 
-To zoom the canvas using a mouse, place the mouse cursor at the location you wish to zoom toward, and then rotate the scroll wheel.
+-  When selected objects are moved using warp/slide, they are moved _in bulk_.
+-  Selected objects are able to have their properties edited in the inspector. (The inspector is described in the next section.)
 
-### Using a trackpad
+Objects can be selected either by clicking (while using the warp/slide/draw tools) or by clicking and dragging (while using the warp/slide tools). The latter gesture selects all objects within a rectangular region.
 
-If you are using a trackpad, you can pan the canvas by performing a panning gesture (e.g. two-finger swipe), and zoom the canvas by performing a zooming gesture (e.g. pinch-to-zoom).
+By default, the previous selection will be cleared each time you select new objects. If you instead wish to _add_ to the current selection, hold Shift before beginning the operation. (An exception: Shift-clicking on a single object will _toggle_ it, rather than add it.) If you wish to _remove_ from the current selection, hold Alt/Option before beginning the operation. To _clear_ the current selection, click on an empty part of the canvas.
 
-### Using the keyboard
+Some objects are only able to be selected using a certain tool. For example, the ports of symbols are only able to be selected while using the draw tool. If you find yourself unable to select a certain object, try switching to a different tool.
 
-Panning can also be performed by holding the spacebar and then moving the mouse cursor in the direction you want to pan.
+Objects remained selected even after changing to another tool. This gives you the opportunity to manipulate the selection using multiple tools without having to re-select the objects after each tool change.
 
-### Resetting the camera
+## Using the inspector
 
-Double-tapping the spacebar will move the camera back to the center of the diagram. You will find this useful if you accidentally pan away from the diagram and cannot find it again.
+Objects can have _tags_ and _properties_. You can use these to add arbitrary metadata to objects. This metadata is saved to the project file, such that it can be read by other tools.
+
+-  A _tag_ is specified by a string. You can use tags to assign objects to "groups".
+-  A _property_ is specified by a pair of strings. You can use properties to represent data such as "author: Nick" or "color: blue".
+
+The inspector pane lists the aggregated tags and properties of all of the items that are currently selected, and allows them to be edited. To the left of each tag/property is a small number. This indicates how many of the selected objects have that property.
+
+In addition to tags and properties, certain kinds of object have "special" properties that serve a purpose within the editor. Specifically:
+
+-  Line segments have a "color" property, which can be used to change their color.
+-  _Vertices_ (i.e. the endpoints of segments, and the ports of symbols) have a "glyph" property, which can be used to change the glyph that is displayed at the vertex. The glyphs available to select are those that were placed in the "vertex glyphs" subfolder of the project folder.
+-  _Crossings_ (i.e. the places where two line segments intersect) also have a "glyph" property. The glyphs available to select are those that were placed in the "crossing glyphs" subfolder.
+-  For symbols, the inspector offers buttons that can be used to change the "depth" at which the symbol is rendered, and a button that can be used to mirror the symbol.
+
+The inspector features buttons labelled "new tag" and "new property". Clicking these buttons will add a new tag/property to _every object currently selected_. Similarly, editing or deleting an existing tag/property will affect every selected object that has that property.
 
 ## Resource file formats
 
@@ -257,7 +278,7 @@ And a symbol can be positioned midway between two lines as follows:
 
 <img src="./user-guide-images/equal-spacing.png" width="400px">
 
-These pink dots are visible whenever the tether line type is selected. You can use them to align symbols and/or tethers. In this example, the bottom-midpoint of the symbol has been aligned with the midpoint of the horizontal tether by drawing a vertical tether between them. The horizontal tether will act as if it has been frozen using the Freeze tool for as long as the vertical tether remains attached to it. This ensures that the alignment is preserved throughout subsequent operations.
+These pink dots are visible whenever the tether line type is selected. You can use them to align symbols and/or tethers. In this example, the bottom-midpoint of the symbol has been aligned with the midpoint of the horizontal tether by drawing a vertical tether between them. The horizontal tether will act as if it has been frozen using the freeze tool for as long as the vertical tether remains attached to it. This ensures that the alignment is preserved throughout subsequent operations.
 
 ## Q&A
 
