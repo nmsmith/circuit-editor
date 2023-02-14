@@ -99,23 +99,22 @@
          update: (focus_: boolean) => svelteChange(node, focus_),
       }
    }
-   let textBoxColorStyle = ""
+   let textFieldColorStyle = ""
    $: {
       if (textCompletion) {
          if (inputMatchesSuggestion) {
-            textBoxColorStyle = "inputMatchesSuggestion"
+            textFieldColorStyle = "inputMatchesSuggestion"
          } else {
-            textBoxColorStyle = "inputUnknown"
+            textFieldColorStyle = "inputUnknown"
          }
       }
    }
 </script>
 
-<div class="textBox {textBoxColorStyle}" style="width: {width}px">
+<div class="textField {textFieldColorStyle}" style="width: {width}px">
    <div class="submittedText">{text}</div>
    <input
       type="text"
-      class="textBoxInput"
       on:keydown={onKeydown}
       on:input={onInput}
       on:focus={onFocus_}
@@ -154,25 +153,25 @@
 <svelte:window on:scroll|capture|passive={somethingWasScrolled} />
 
 <style>
-   .textBox {
+   .textField {
       position: relative; /*Sets an origin for the position:absolute elements.*/
       height: 1em;
       padding: 2px 3px;
       border: 1px solid #222;
       margin: 1px;
    }
-   .textBox:focus-within {
+   .textField:focus-within {
       color: transparent; /* inherited by the child text */
       border-width: 2px;
       margin: 0px;
    }
-   .textBox.inputUnknown:focus-within {
+   .textField.inputUnknown:focus-within {
       background-color: #f3d402;
    }
-   .textBox.inputMatchesSuggestion:focus-within {
+   .textField.inputMatchesSuggestion:focus-within {
       background-color: #7ef382;
    }
-   .textBox:hover:not(:focus-within) {
+   .textField:hover:not(:focus-within) {
       background-color: #fff3;
    }
    .submittedText {

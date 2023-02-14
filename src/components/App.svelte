@@ -9,6 +9,7 @@
       Crossing,
       SymbolKind,
       SymbolInstance,
+      TextBox,
       LineType,
       Interactable,
       amassed,
@@ -31,6 +32,8 @@
       parseProperty,
       emptyTag,
       emptyPropertyString,
+      Copyable,
+      isCopyable,
    } from "~/shared/circuit"
    import {
       rememberAxis,
@@ -57,7 +60,7 @@
    import type { WorkerInterface, CircuitHistory } from "~/saveLoadWorker"
    import GlyphSelectionBox from "./GlyphSelectionBox.svelte"
    import FakeRadioButton from "./FakeRadioButton.svelte"
-   import TextBox from "./TextBox.svelte"
+   import TextField from "./TextField.svelte"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -159,13 +162,24 @@
    function asAny(x: any): any {
       return x
    }
-   type Grabbable = Junction | Segment | SymbolInstance // Grabbed for moving.
-   type Movable = Junction | SymbolInstance // Things that actually move.
+   type Grabbable = Junction | Segment | SymbolInstance | TextBox // Grabbed for moving.
+   type Movable = Junction | SymbolInstance | TextBox // Things that actually move.
    type Pushable = Junction | Segment | SymbolInstance // Recipients of pushes.
    type Attachable = Junction | Port | Segment | SpecialAttachPoint // Things a segment can attach to.
-   type HasProperties = Vertex | Segment | SymbolInstance // Has tags/properties
+   type HasProperties = Vertex | Segment | SymbolInstance | TextBox // Has tags/properties
    function isMovable(thing: any): thing is Movable {
-      return thing instanceof Junction || thing instanceof SymbolInstance
+      return (
+         thing instanceof Junction ||
+         thing instanceof SymbolInstance ||
+         thing instanceof TextBox
+      )
+   }
+   function isPushable(thing: any): thing is Pushable {
+      return (
+         thing instanceof Junction ||
+         thing instanceof Segment ||
+         thing instanceof SymbolInstance
+      )
    }
    function movableAt(vertex: Vertex): Movable {
       return vertex instanceof Junction ? vertex : vertex.symbol
@@ -179,19 +193,20 @@
    }
    function* specialAttachPoints(): Generator<SpecialAttachPoint> {
       for (let seg of Segment.s) if (seg.isTether()) yield seg.centerPoint()
-      // If the user is currently drawing outward from a port or attachment
-      // point of a symbol, hide the attachment points of the symbol.
+      // If currently drawing, ignore the attachment points of the object the
+      // user began the drawing operation at. This prevents undesired snapping.
       // (This is the "nuclear" option — the rest of the code base won't be
       // able to detect the existence of these points.)
-      let ignoreSymbol
-      if (draw?.segment.start instanceof Port) {
-         ignoreSymbol = draw?.segment.start.symbol
-      } else if (draw?.segment.start.host() instanceof SymbolInstance) {
-         ignoreSymbol = draw?.segment.start.host()
-      }
+      let start = draw?.segment.start
+      let ignoreObject = start instanceof Port ? start.symbol : start?.host()
+
       for (let symbol of SymbolInstance.s) {
-         if (symbol === ignoreSymbol) continue
+         if (symbol === ignoreObject) continue
          for (let p of symbol.specialAttachPoints) yield p
+      }
+      for (let textBox of TextBox.es) {
+         if (textBox === ignoreObject) continue
+         for (let p of textBox.specialAttachPoints) yield p
       }
    }
    function* allCrossings(): Generator<Crossing> {
@@ -202,11 +217,13 @@
    function* allMovables(): Generator<Movable> {
       for (let m of Junction.s) yield m
       for (let m of SymbolInstance.s) yield m
+      for (let m of TextBox.es) yield m
    }
    function* allThingsWithProperties(): Generator<HasProperties> {
       for (let vertex of allVertices()) yield vertex
       for (let segment of Segment.s) yield segment
       for (let symbol of SymbolInstance.s) yield symbol
+      for (let textBox of TextBox.es) yield textBox
    }
    function closestNearTo<T extends Object2D>(
       point: Point,
@@ -275,7 +292,7 @@
       let symbols = config.showSymbols.state === "on" ? SymbolInstance.s : []
       return (
          closestNearTo(point, Junction.s) ||
-         closestNearTo(point, symbols) ||
+         closestNearTo<SymbolInstance | TextBox>(point, symbols, TextBox.es) ||
          closestNearTo(point, Segment.s)
       )
    }
@@ -328,9 +345,15 @@
          .sort()
       return mostFrequentColors[0]
    }
-   $: willBeDeleted = (item?: Segment | SymbolInstance | Glyph): boolean => {
+   $: willBeDeleted = (
+      item?: Segment | SymbolInstance | TextBox | Glyph
+   ): boolean => {
       if (!item || !eraseRect) return false
-      if (item instanceof Segment || item instanceof SymbolInstance) {
+      if (
+         item instanceof Segment ||
+         item instanceof SymbolInstance ||
+         item instanceof TextBox
+      ) {
          return eraseRect.items.has(item)
       } else if (item.type === "vertex glyph") {
          if (item.vertex instanceof SpecialAttachPoint) {
@@ -384,14 +407,15 @@
       let positions = new DefaultMap<Movable, Point>(() => Point.zero)
       for (let j of Junction.s) positions.set(j, j.copy())
       for (let s of SymbolInstance.s) positions.set(s, s.position.copy())
+      for (let t of TextBox.es) positions.set(t, t.position.copy())
       return positions
    }
-   function copySymbolRotations(): DefaultMap<SymbolInstance, Rotation> {
-      let rotations = new DefaultMap<SymbolInstance, Rotation>(
+   function copyRotations(): DefaultMap<SymbolInstance | TextBox, Rotation> {
+      let rotations = new DefaultMap<SymbolInstance | TextBox, Rotation>(
          () => Rotation.zero
       )
-      for (let symbol of SymbolInstance.s)
-         rotations.set(symbol, symbol.rotation)
+      for (let s of SymbolInstance.s) rotations.set(s, s.rotation)
+      for (let t of TextBox.es) rotations.set(t, t.rotation)
       return rotations
    }
    // Returns the "shadow" each circuit element casts onto the given vector.
@@ -656,6 +680,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
 
@@ -1017,7 +1042,7 @@
       affectedSegments: Set<Segment> // segments that may be altered by the warp
       rigidSegments: Set<Segment> //segments whose rigidity affects the movement
       originalPositions: DefaultMap<Movable, Point>
-      originalRotations: DefaultMap<SymbolInstance, Rotation>
+      originalRotations: DefaultMap<SymbolInstance | TextBox, Rotation>
       start: Point
       splice: null | { source: Port | [Port, Port]; target: Segment }
       highlight: Set<Port | Segment> // highlight for splicing and port snapping
@@ -1030,7 +1055,7 @@
    } = null
    let eraseRect: null | {
       start: Point
-      items: Set<Segment | SymbolInstance>
+      items: Set<Segment | SymbolInstance | TextBox>
    } = null
    $: {
       for (let symbol of SymbolInstance.s) {
@@ -1254,6 +1279,7 @@
         }
       | { mode: "segment"; segments: Set<Segment>; color: string | "mixed" }
       | { mode: "symbol"; symbols: Set<SymbolInstance>; canFlip: boolean }
+      | { mode: "textBox"; textBoxes: Set<TextBox> }
       | { mode: "mixed" }
    type TagInfo = { tag: Tag; count: number }
    type PropertyInfo = { property: Property; count: number }
@@ -1335,6 +1361,7 @@
       let $symbols = items.filter(
          (i) => i instanceof SymbolInstance
       ) as SymbolInstance[]
+      let $textBoxes = items.filter((i) => i instanceof TextBox) as TextBox[]
 
       // Compute the summary text.
       let vertexText =
@@ -1345,11 +1372,16 @@
          $segments.length > 1 ? `${$segments.length} segments` : "1 segment"
       let symbolText =
          $symbols.length > 1 ? `${$symbols.length} symbols` : "1 symbol"
+      let textBoxText =
+         $textBoxes.length > 1
+            ? `${$textBoxes.length} text boxes`
+            : "1 text box"
       let data = [
          [$vertices.length, vertexText] as const,
          [$crossings.length, crossingText] as const,
          [$segments.length, segmentText] as const,
          [$symbols.length, symbolText] as const,
+         [$textBoxes.length, textBoxText] as const,
       ]
          .filter((d) => d[0] > 0)
          .map((d) => d[1])
@@ -1433,6 +1465,14 @@
                mode: "symbol",
                symbols: new Set($symbols),
                canFlip,
+               items: itemsToInspect,
+               tags,
+               properties,
+            }
+         } else if ($textBoxes.length > 0) {
+            inspector = {
+               mode: "textBox",
+               textBoxes: new Set($textBoxes),
                items: itemsToInspect,
                tags,
                properties,
@@ -1648,6 +1688,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function addEmptyProperty() {
@@ -1666,6 +1707,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function replaceTag(old: Tag, new_: Tag) {
@@ -1694,6 +1736,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function replacePropertyName(prop: Property, newName: string) {
@@ -1733,6 +1776,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function removeTag(tag: Tag) {
@@ -1747,6 +1791,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function removeProperty(prop: Property) {
@@ -1762,6 +1807,7 @@
       Port.s = Port.s
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function narrowAmassmentToTag(tag: Tag) {
@@ -2148,7 +2194,7 @@
    let attachmentErrors: Set<{ source: Point; target: Point }> // for debugging
    $: {
       attachmentErrors = new Set()
-      for (let object of [...Segment.s, ...SymbolInstance.s]) {
+      for (let object of [...Segment.s, ...SymbolInstance.s, ...TextBox.es]) {
          for (let attachment of object.attachments) {
             let target = object.partClosestTo(attachment)
             if (attachment.sqDistanceFrom(target) > sqErr) {
@@ -2180,12 +2226,11 @@
          rigidlyMovedSegments = warp.rigidSegments
       }
    }
-   let amassedCopyables = new Set<Segment | SymbolInstance>()
+   let amassedCopyables = new Set<Copyable>()
    $: {
       amassedCopyables = new Set()
       for (let item of amassed.items) {
-         if (item instanceof Segment || item instanceof SymbolInstance)
-            amassedCopyables.add(item)
+         if (isCopyable(item)) amassedCopyables.add(item)
       }
    }
 
@@ -2314,6 +2359,7 @@
          Segment.s = Segment.s
          SymbolInstance.s = SymbolInstance.s
          Port.s = Port.s
+         TextBox.es = TextBox.es
          amassed.items = amassed.items
          return "recognized"
       } else if (name === "KeyC") {
@@ -2335,7 +2381,7 @@
          // Find their centroid.
          let v = zeroVector
          for (let m of thingsToMove) {
-            let p = m instanceof SymbolInstance ? m.center() : m
+            let p = m instanceof Junction ? m : m.center()
             v = v.add(p.displacementFrom(Point.zero))
          }
          let centroid = Point.zero.displacedBy(
@@ -2354,6 +2400,7 @@
          Segment.s = Segment.s
          SymbolInstance.s = SymbolInstance.s
          Port.s = Port.s
+         TextBox.es = TextBox.es
          return "recognized"
       } else if (name === "KeyA") {
          if (!repeat) {
@@ -2361,6 +2408,7 @@
             amassed.items = new Set()
             for (let segment of Segment.s) amassed.items.add(segment)
             for (let symbol of SymbolInstance.s) amassed.items.add(symbol)
+            for (let textBox of TextBox.es) amassed.items.add(textBox)
             commitState("amass all")
          }
          return "recognized"
@@ -2912,6 +2960,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
 
       return endVertex
@@ -3002,7 +3051,7 @@
                   }
                }
             }
-            if (shouldPushNonConnected) {
+            if (shouldPushNonConnected && isPushable(movable)) {
                pushNonConnected(movable) // Movable pushes things in its path.
             }
             // Propagate the movement along the Movable's edges.
@@ -3045,15 +3094,12 @@
                   if (rigidityMatters) rigidSegments.set(segment, delay)
                }
             }
-            if (movable instanceof SymbolInstance) {
-               // Attachments must move with their host.
-               for (let a of movable.attachments) proposeTo(a, delay, isPush)
-            } else if (movable instanceof Junction) {
+            if (movable instanceof Junction) {
                // Hosts must move with their attachments.
                let host = movable.host()
-               if (host instanceof SymbolInstance) {
+               if (isMovable(host)) {
                   proposeTo(host, delay, isPush)
-               } else if (host instanceof Segment) {
+               } else if (host) {
                   let canStretch = host.axis === slideAxis && !host.isRigid()
                   let rigidityMatters = host.axis == slideAxis && host.isRigid()
                   if (canStretch) {
@@ -3076,6 +3122,9 @@
                      if (rigidityMatters) rigidSegments.set(host, delay)
                   }
                }
+            } else {
+               // Attachments must move with their host.
+               for (let a of movable.attachments) proposeTo(a, delay, isPush)
             }
             // Check whether amassed items should be moved at the same time as
             // this Movable. Amassed items move rigidly together.
@@ -3299,7 +3348,7 @@
             if (somethingAlreadyAttached) {
                return false // Should interact with the attachment instead.
             }
-            if (p.object instanceof SymbolInstance) {
+            if (isMovable(p.object)) {
                let orthoDisp = p
                   .displacementFrom(mouseOnCanvas)
                   .scalarProjectionOnto(draw!.segment.axis.orthogonal())
@@ -3491,6 +3540,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function beginWarp(
@@ -3517,8 +3567,11 @@
          }
          if (grabbed instanceof Segment) {
             grabbed = dupe.segments.get(grabbed) as Segment
-         } else {
+         } else if (grabbed instanceof SymbolInstance) {
             grabbed = dupe.symbols.get(grabbed) as SymbolInstance
+         }
+         else {
+            grabbed = dupe.textBoxes.get(grabbed) as TextBox
          }
          if (!grabbed) {
             console.error("Something impossible happened.")
@@ -3550,18 +3603,18 @@
       function addMovable(m: Movable) {
          if (movables.has(m)) return // avoid infinite loops
          movables.add(m)
-         if (m instanceof SymbolInstance) {
-            // Attachments must move with their host.
-            for (let a of m.attachments) addMovable(a)
-         } else if (m instanceof Junction) {
+         if (m instanceof Junction) {
             // Hosts must move with their attachments.
             let host = m.host()
-            if (host instanceof SymbolInstance) {
+            if (isMovable(host)) {
                addMovable(host)
-            } else if (host instanceof Segment) {
+            } else if (host) {
                addMovable(movableAt(host.start))
                addMovable(movableAt(host.end))
             }
+         } else {
+            // Attachments must move with their host.
+            for (let a of m.attachments) addMovable(a)
          }
          for (let [segment, v] of m.edges()) {
             if (segment.isRigid() || segment.attachments.size > 0) {
@@ -3583,6 +3636,12 @@
                thing instanceof SymbolInstance ||
                thing instanceof Port) &&
                [...thing.edges()].some(edgeIsAmassed)) ||
+            ((thing instanceof Segment ||
+               thing instanceof SymbolInstance ||
+               thing instanceof TextBox) &&
+               [...thing.attachments].some((junction) =>
+                  [...junction.edges()].some(edgeIsAmassed)
+               )) ||
             (thing instanceof Segment &&
                (amassed.items.has(movableAt(thing.start)) ||
                   amassed.items.has(movableAt(thing.end)) ||
@@ -3593,7 +3652,7 @@
       // Compute the point about which rotation should occur.
       let d = zeroVector
       for (let m of movables) {
-         let p = m instanceof SymbolInstance ? m.center() : m
+         let p = m instanceof Junction ? m : m.center()
          d = d.add(p.displacementFrom(Point.zero))
       }
       let centroid = Point.zero.displacedBy(d.scaledBy(1 / movables.size))
@@ -3606,8 +3665,8 @@
             if (movables.has(movableAt(farVertex)))
                selectedAxes.add(segment.axis)
          }
-         // Consider the intrinsic axis of Symbols.
-         if (movable instanceof SymbolInstance)
+         // Consider the intrinsic axis of Symbols and TextBoxes.
+         if (!(movable instanceof Junction))
             selectedAxes.add(Axis.horizontal.rotatedBy(movable.rotation))
       }
       let keyRotations = new Set<Rotation>()
@@ -3634,7 +3693,7 @@
          affectedSegments,
          rigidSegments,
          originalPositions: copyPositions(),
-         originalRotations: copySymbolRotations(),
+         originalRotations: copyRotations(),
          start: partGrabbed,
          splice: null,
          highlight: new Set(),
@@ -3650,7 +3709,7 @@
          // Revert the operation; it will be redone from scratch.
          for (let m of warp.movables) {
             m.moveTo(warp.originalPositions.read(m))
-            if (m instanceof SymbolInstance) {
+            if (!(m instanceof Junction)) {
                ;(m.rotation as Rotation) = warp.originalRotations.read(m)
             }
          }
@@ -3888,6 +3947,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function updateRotate() {
@@ -3931,6 +3991,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
    function endWarp() {
@@ -3978,6 +4039,8 @@
       if (config.showSymbols.state === "on" || amassRect.mode === "remove")
          for (let symbol of SymbolInstance.s)
             if (range.intersects(symbol)) amassRect.items.add(symbol)
+      for (let textBox of TextBox.es)
+            if (range.intersects(textBox)) amassRect.items.add(textBox)
       if (amassRect.mode === "remove") {
          for (let vertex of allVertices())
             if (range.intersects(vertex)) amassRect.items.add(vertex)
@@ -3994,6 +4057,8 @@
       if (config.showSymbols.state === "on")
          for (let symbol of SymbolInstance.s)
             if (range.intersects(symbol)) eraseRect.items.add(symbol)
+      for (let textBox of TextBox.es)
+         if (range.intersects(textBox)) eraseRect.items.add(textBox)
    }
    function updateFreezeRect() {
       if (!freezeRect) return
@@ -4075,6 +4140,7 @@
       Segment.s = Segment.s
       SymbolInstance.s = SymbolInstance.s
       Port.s = Port.s
+      TextBox.es = TextBox.es
       amassed.items = amassed.items
    }
 
@@ -4546,7 +4612,7 @@
                </div>
             {:else if inspector.mode === "segment"}
                <div class="inspectorSubtitle">Segment color</div>
-               <TextBox
+               <TextField
                   width={110}
                   text={inspector.color}
                   onSubmit={(color) => setColorOfSegments(color)}
@@ -4584,7 +4650,7 @@
                {#each inspector.tags as { tag, count }}
                   <div class="tag">
                      <div class="count">{count}</div>
-                     <TextBox
+                     <TextField
                         width={110}
                         text={tag}
                         textCompletion={allTags}
@@ -4616,7 +4682,7 @@
                {#each inspector.properties as { property, count }}
                   <div class="property">
                      <div class="count">{count}</div>
-                     <TextBox
+                     <TextField
                         text={property.name}
                         textCompletion={allPropertyNames}
                         autoFocus={newlyAddedProperty === property.serialize()}
@@ -4624,7 +4690,7 @@
                         onSubmit={(value) =>
                            replacePropertyName(property, value)}
                      />
-                     <TextBox
+                     <TextField
                         text={property.value}
                         onFocus={propertyFocused}
                         onSubmit={(value) =>

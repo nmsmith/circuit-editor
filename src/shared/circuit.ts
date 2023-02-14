@@ -53,8 +53,8 @@ export interface Deletable {
 }
 
 export type Edge = [Segment, Vertex]
-
 export type GlyphOrientation = "fixed" | "inherit"
+export type Host = Segment | SymbolInstance | TextBox
 
 export class Junction extends Point implements Deletable {
    static s = new Set<Junction>()
@@ -64,7 +64,7 @@ export class Junction extends Point implements Deletable {
    glyph: VertexGlyphKind = { type: "auto" }
    glyphOrientation: GlyphOrientation = "fixed"
    private readonly edges_ = new Set<Edge>()
-   private host_: Segment | SymbolInstance | null = null
+   private host_: Host | null = null
    constructor(point: Point, addToCircuit = true) {
       super(point.x, point.y)
       this.objectID = nextObjectID++
@@ -107,12 +107,12 @@ export class Junction extends Point implements Deletable {
       this.edges_.delete(edge)
       if (this.edges_.size === 0) this.delete()
    }
-   attachTo(host: Segment | SymbolInstance) {
+   attachTo(host: Host) {
       if (this.host_) this.detach()
       this.host_ = host
       host.attachments.add(this)
    }
-   host(): Segment | SymbolInstance | null {
+   host(): Host | null {
       return this.host_
    }
    detach() {
@@ -272,8 +272,8 @@ export type LineTypeConfig = {
 }
 
 export class SpecialAttachPoint extends Point {
-   readonly object: Segment | SymbolInstance
-   constructor(x: number, y: number, object: Segment | SymbolInstance) {
+   readonly object: Host
+   constructor(x: number, y: number, object: Host) {
       super(x, y)
       this.object = object
    }
@@ -660,7 +660,7 @@ export class SymbolInstance extends Rectangle implements Deletable {
    readonly image: SVGElement
    readonly highlight: SVGElement
    readonly ports: Port[]
-   specialAttachPoints: SpecialAttachPoint[] = []
+   specialAttachPoints: SpecialAttachPoint[]
    attachments = new Set<Junction>() // should only be modified from Junction class
 
    constructor(
@@ -817,37 +817,105 @@ function namespaceIDs(svg: SVGElement, suffix: string) {
    }
 }
 
+export class TextBox extends Rectangle implements Deletable {
+   static es = new Set<TextBox>()
+   readonly objectID: number // for serialization
+   tags = new Set<Tag>()
+   properties = new Set<PropertyString>()
+   text = ""
+   specialAttachPoints: SpecialAttachPoint[]
+   attachments = new Set<Junction>() // should only be modified from Junction class
+   static readonly emptyBoundingBox = Range2D.fromXY(
+      new Range1D([0, 20]),
+      new Range1D([0, 40])
+   ) // TODO:
+
+   constructor(position: Point, rotation = Rotation.zero, addToCircuit = true) {
+      super(TextBox.emptyBoundingBox, position, rotation, new Vector(1, 1))
+      this.objectID = nextObjectID++
+      this.specialAttachPoints = this.specialPoints().map(
+         (p) => new SpecialAttachPoint(p.x, p.y, this)
+      )
+      if (addToCircuit) TextBox.es.add(this)
+   }
+   edges(): Set<Edge> {
+      return new Set()
+   }
+   axes(): Axis[] {
+      return []
+   }
+   delete(): Set<Junction> {
+      TextBox.es.delete(this)
+      this.attachments.forEach((a) => a.detach())
+      amassed.items.delete(this)
+      return new Set()
+   }
+   moveTo(point: Point) {
+      ;(this.position as Point) = point
+      this.specialAttachPoints = this.specialPoints().map(
+         (p) => new SpecialAttachPoint(p.x, p.y, this)
+      )
+   }
+   moveBy(displacement: Vector) {
+      this.moveTo(this.position.displacedBy(displacement))
+   }
+   rotateAround(point: Point, rotation: Rotation) {
+      ;(this.rotation as Rotation) = this.rotation.add(rotation)
+      this.moveTo(this.position.rotatedAround(point, rotation))
+   }
+   clone(addToCircuit = true): TextBox {
+      let textBox = new TextBox(this.position, this.rotation, addToCircuit)
+      textBox.tags = new Set(this.tags)
+      textBox.properties = new Set(this.properties)
+      textBox.text = this.text
+      return textBox
+   }
+}
+
 // Amassed items.
-export type Interactable = Junction | Port | Crossing | Segment | SymbolInstance
+export type Interactable =
+   | Junction
+   | Port
+   | Crossing
+   | Segment
+   | SymbolInstance
+   | TextBox
 export const amassed = { items: new Set<Interactable>() }
 
 // Cut/copy/paste functionality.
+export type Copyable = Segment | SymbolInstance | TextBox
+export function isCopyable(thing: any): thing is Copyable {
+   return (
+      thing instanceof Segment ||
+      thing instanceof SymbolInstance ||
+      thing instanceof TextBox
+   )
+}
 type CopiedItems = {
-   items: Set<Segment | SymbolInstance>
+   items: Set<Copyable>
    segments: Map<Segment, Segment>
    symbols: Map<SymbolInstance, SymbolInstance>
+   textBoxes: Map<TextBox, TextBox>
    junctions: Map<Junction, Junction>
    ports: Map<Port, Vertex> // Ports may be converted to junctions when copied.
 }
-let clipboard = new Set<Segment | SymbolInstance>()
-export function cut(items: Iterable<Segment | SymbolInstance>) {
+let clipboard = new Set<Copyable>()
+export function cut(items: Iterable<Copyable>) {
    clipboard = copy_(items, true).items
    for (let item of items) item.delete()
 }
-export function copy(items: Iterable<Segment | SymbolInstance>) {
+export function copy(items: Iterable<Copyable>) {
    clipboard = copy_(items, true).items
 }
-export function duplicate(
-   items: Iterable<Segment | SymbolInstance>
-): CopiedItems {
+export function duplicate(items: Iterable<Copyable>): CopiedItems {
    return copy_(items, false)
 }
-export function paste(): Iterable<Segment | SymbolInstance> {
+export function paste(): Iterable<Copyable> {
    return copy_(clipboard, false).items
 }
 // Copy circuit items — either to the clipboard, or into the circuit.
 export function copy_(
-   items: Iterable<Segment | SymbolInstance>,
+   items: Iterable<Copyable>,
    toClipboard: boolean
 ): CopiedItems {
    if (toClipboard && clipboard.size > 0) {
@@ -856,11 +924,14 @@ export function copy_(
       clipboard = new Set()
    }
    let symbols = new Set<SymbolInstance>()
+   let textBoxes = new Set<TextBox>()
    let segments = new Set<Segment>()
    for (let item of items) if (item instanceof SymbolInstance) symbols.add(item)
+   for (let item of items) if (item instanceof TextBox) textBoxes.add(item)
    for (let item of items) if (item instanceof Segment) segments.add(item)
    let copiedSymbols = new Map<SymbolInstance, SymbolInstance>()
    let copiedPorts = new Map<Port, Vertex>()
+   let copiedTextBoxes = new Map<TextBox, TextBox>()
    let copiedSegments = new Map<Segment, Segment>()
    let copiedJunctions = new Map<Junction, Junction>()
    for (let symbol of symbols) {
@@ -870,6 +941,9 @@ export function copy_(
          copiedSymbol.ports[i].copyFrom(symbol.ports[i])
          copiedPorts.set(symbol.ports[i], copiedSymbol.ports[i])
       }
+   }
+   for (let textBox of textBoxes) {
+      copiedTextBoxes.set(textBox, textBox.clone(!toClipboard))
    }
    for (let segment of segments) {
       let copiedSegment = segment.clone(
@@ -895,9 +969,12 @@ export function copy_(
       if (host instanceof Segment) {
          let copiedSegment = copiedSegments.get(host)
          if (copiedSegment) copiedJunction.attachTo(copiedSegment)
-      } else if (host) {
+      } else if (host instanceof SymbolInstance) {
          let copiedSymbol = copiedSymbols.get(host)
          if (copiedSymbol) copiedJunction.attachTo(copiedSymbol)
+      } else if (host) {
+         let copiedTextBox = copiedTextBoxes.get(host)
+         if (copiedTextBox) copiedJunction.attachTo(copiedTextBox)
       }
    }
    function getCopied(vertex: Vertex): Vertex {
@@ -922,9 +999,14 @@ export function copy_(
       return copiedVertex
    }
    return {
-      items: new Set([...copiedSegments.values(), ...copiedSymbols.values()]),
+      items: new Set([
+         ...copiedSegments.values(),
+         ...copiedSymbols.values(),
+         ...copiedTextBoxes.values(),
+      ]),
       segments: copiedSegments,
       symbols: copiedSymbols,
+      textBoxes: copiedTextBoxes,
       junctions: copiedJunctions,
       ports: copiedPorts,
    }
