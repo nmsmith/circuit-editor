@@ -750,13 +750,13 @@ export class SymbolInstance extends Rectangle implements Deletable {
    }
    moveTo(point: Point) {
       ;(this.position as Point) = point
-      let translate = `translate(${point.x} ${
+      let transform = `translate(${point.x} ${
          point.y
       }) rotate(${this.rotation.toDegrees()}) scale(${this.scale.x}, ${
          this.scale.y
       })`
-      this.image.setAttribute("transform", translate)
-      this.highlight.setAttribute("transform", translate)
+      this.image.setAttribute("transform", transform)
+      this.highlight.setAttribute("transform", transform)
       for (let [i, port] of this.ports.entries()) {
          let p = this.fromRectCoordinates(this.kind.ports[i])
          ;(port.x as number) = p.x
@@ -822,21 +822,55 @@ export class TextBox extends Rectangle implements Deletable {
    readonly objectID: number // for serialization
    tags = new Set<Tag>()
    properties = new Set<PropertyString>()
-   text = ""
+   readonly fontSize = 24
+   readonly text = ""
    specialAttachPoints: SpecialAttachPoint[]
    attachments = new Set<Junction>() // should only be modified from Junction class
-   static readonly emptyBoundingBox = Range2D.fromXY(
-      new Range1D([0, 20]),
-      new Range1D([0, 40])
-   ) // TODO:
+
+   private static readonly font = "Source Sans"
+   private static readonly minWidth = 20
+   private static readonly emptyRange = Range2D.fromXY(
+      new Range1D([0, 0]),
+      new Range1D([0, 0])
+   )
+   private static canvas = document.createElement("canvas") // for size testing
 
    constructor(position: Point, rotation = Rotation.zero, addToCircuit = true) {
-      super(TextBox.emptyBoundingBox, position, rotation, new Vector(1, 1))
+      super(TextBox.emptyRange, position, rotation, new Vector(1, 1))
       this.objectID = nextObjectID++
+      this.setText("text")
       this.specialAttachPoints = this.specialPoints().map(
          (p) => new SpecialAttachPoint(p.x, p.y, this)
       )
       if (addToCircuit) TextBox.es.add(this)
+   }
+   setFontSize(fontSize: number) {
+      ;(this.fontSize as number) = fontSize
+      this.updateBoundingBox()
+   }
+   setText(text: string) {
+      ;(this.text as string) = text
+      this.updateBoundingBox()
+   }
+   private updateBoundingBox() {
+      // Use a Canvas to measure the size of the text.
+      const context = TextBox.canvas.getContext(
+         "2d"
+      ) as CanvasRenderingContext2D
+      context.font = `${this.fontSize}px ${TextBox.font}`
+      const metrics = context.measureText(this.text)
+      // Update the bounding box.
+      ;(this.range as Range2D) = Range2D.fromXY(
+         new Range1D([0, Math.max(metrics.width, TextBox.minWidth)]),
+         new Range1D([
+            -metrics.fontBoundingBoxAscent,
+            metrics.fontBoundingBoxDescent,
+         ])
+      )
+      // Update the positions of the special attachment points.
+      this.specialAttachPoints = this.specialPoints().map(
+         (p) => new SpecialAttachPoint(p.x, p.y, this)
+      )
    }
    edges(): Set<Edge> {
       return new Set()
@@ -867,7 +901,8 @@ export class TextBox extends Rectangle implements Deletable {
       let textBox = new TextBox(this.position, this.rotation, addToCircuit)
       textBox.tags = new Set(this.tags)
       textBox.properties = new Set(this.properties)
-      textBox.text = this.text
+      textBox.setFontSize(this.fontSize)
+      textBox.setText(this.text)
       return textBox
    }
 }
@@ -1012,8 +1047,10 @@ export function copy_(
    }
 }
 
+type ObjectID = number
+
 type JunctionJSON = {
-   objectID: number
+   objectID: ObjectID
    tags: Tag[]
    properties: PropertyString[]
    glyph: VertexGlyphKind
@@ -1022,7 +1059,7 @@ type JunctionJSON = {
 }
 
 type PortJSON = {
-   objectID: number
+   objectID: ObjectID
    tags: Tag[]
    properties: PropertyString[]
    svgID: string // represents a PortKind
@@ -1031,40 +1068,53 @@ type PortJSON = {
 }
 
 type SegmentJSON = {
-   objectID: number
+   objectID: ObjectID
    type: string // must be a LineType.name
    tags: Tag[]
    properties: PropertyString[]
    color: string
    isFrozen: boolean
-   crossingKinds: { segmentID: number; crossing: CrossingGlyphKind }[]
-   attachments?: number[]
-   startID: number
-   endID: number
+   crossingKinds: { segmentID: ObjectID; crossing: CrossingGlyphKind }[]
+   attachments?: ObjectID[]
+   startID: ObjectID
+   endID: ObjectID
    axis: { x: number; y: number }
 }
 
 type SymbolJSON = {
-   objectID: number
+   objectID: ObjectID
    tags: Tag[]
    properties: PropertyString[]
    fileName: string // represents a SymbolKind
    ports: PortJSON[]
-   attachments?: number[]
+   attachments?: ObjectID[]
    // Rectangle data
    position: { x: number; y: number }
    rotation: { x: number; y: number }
    scale: { x: number; y: number }
 }
 
+type TextBoxJSON = {
+   objectID: ObjectID
+   tags: Tag[]
+   properties: PropertyString[]
+   fontSize: number
+   text: string
+   attachments?: ObjectID[]
+   // Rectangle data
+   position: { x: number; y: number }
+   rotation: { x: number; y: number }
+}
+
 type AmassedJSON =
-   | { type: "crossing"; seg1ID: number; seg2ID: number }
-   | { type: "other"; objectID: number }
+   | { type: "crossing"; seg1ID: ObjectID; seg2ID: ObjectID }
+   | { type: "other"; objectID: ObjectID }
 
 export type CircuitJSON = {
    junctions: JunctionJSON[]
    segments: SegmentJSON[]
    symbols: SymbolJSON[]
+   textBoxes: TextBoxJSON[]
    amassedItems: AmassedJSON[]
 }
 
@@ -1072,6 +1122,7 @@ export const emptyCircuitJSON: CircuitJSON = {
    junctions: [],
    segments: [],
    symbols: [],
+   textBoxes: [],
    amassedItems: [],
 }
 
@@ -1131,6 +1182,18 @@ export function saveToJSON(): CircuitJSON {
          scale: { x: s.scale.x, y: s.scale.y },
       }
    })
+   let textBoxes = [...TextBox.es].map((t) => {
+      return {
+         objectID: t.objectID,
+         tags: [...t.tags],
+         properties: [...t.properties],
+         fontSize: t.fontSize,
+         text: t.text,
+         attachments: [...t.attachments].map((j) => j.objectID),
+         position: { x: t.position.x, y: t.position.y },
+         rotation: { x: t.rotation.x, y: t.rotation.y },
+      }
+   })
    let amassedItems: AmassedJSON[] = [...amassed.items].map((i) =>
       i instanceof Crossing
          ? {
@@ -1140,7 +1203,7 @@ export function saveToJSON(): CircuitJSON {
            }
          : { type: "other", objectID: i.objectID }
    )
-   return { junctions, segments, symbols, amassedItems }
+   return { junctions, segments, symbols, textBoxes, amassedItems }
 }
 
 // Load the circuit state from a JSON object.
@@ -1156,10 +1219,12 @@ export function loadFromJSON(
    Port.s = new Set()
    Segment.s = new Set()
    SymbolInstance.s = []
+   TextBox.es = new Set()
    amassed.items = new Set()
-   let vertexMap = new Map<number, Vertex>()
-   let segmentMap = new Map<number, Segment>()
-   let symbolMap = new Map<number, SymbolInstance>()
+   let vertexMap = new Map<ObjectID, Vertex>()
+   let segmentMap = new Map<ObjectID, Segment>()
+   let symbolMap = new Map<ObjectID, SymbolInstance>()
+   let textBoxMap = new Map<ObjectID, TextBox>()
    circuit.junctions.forEach((j) => {
       // This initialization should mimic Junction.clone().
       let junction = new Junction(new Point(j.position.x, j.position.y))
@@ -1210,6 +1275,29 @@ export function loadFromJSON(
          console.error(
             `Failed to load a symbol, because the SymbolKind "${s.fileName}" could not be found.`
          )
+      }
+   })
+   circuit.textBoxes.forEach((t) => {
+      // This initialization should mimic TextBox.clone().
+      let textBox = new TextBox(
+         new Point(t.position.x, t.position.y),
+         new Rotation(t.rotation.x, t.rotation.y)
+      )
+      textBox.tags = new Set(t.tags)
+      textBox.properties = new Set(t.properties)
+      textBox.setFontSize(t.fontSize)
+      textBox.setText(t.text)
+      textBoxMap.set(t.objectID, textBox)
+      // Load the text box's attachments.
+      for (let id of t.attachments || []) {
+         let j = vertexMap.get(id)
+         if (!j) {
+            console.error(
+               `Failed to find a junction (ID ${id}) attached to a text box (ID ${t.objectID}).`
+            )
+         } else {
+            ;(j as Junction).attachTo(textBox)
+         }
       }
    })
    // Pass 1: Construct the Segment objects.
@@ -1286,7 +1374,8 @@ export function loadFromJSON(
          let object =
             vertexMap.get(item.objectID) ||
             segmentMap.get(item.objectID) ||
-            symbolMap.get(item.objectID)
+            symbolMap.get(item.objectID) ||
+            textBoxMap.get(item.objectID)
          if (object) {
             amassed.items.add(object)
          } else {

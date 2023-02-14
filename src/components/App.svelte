@@ -61,6 +61,7 @@
    import GlyphSelectionBox from "./GlyphSelectionBox.svelte"
    import FakeRadioButton from "./FakeRadioButton.svelte"
    import TextField from "./TextField.svelte"
+   import TextBoxSvg from "./TextBox.svelte"
 
    // The following imports only succeed for the Electron version of this app.
    let usingElectron: boolean
@@ -1277,9 +1278,14 @@
            crossings: Set<Crossing>
            glyphs: Set<GlyphKind>
         }
-      | { mode: "segment"; segments: Set<Segment>; color: string | "mixed" }
+      | { mode: "segment"; segments: Set<Segment>; color: string | "(mixed)" }
       | { mode: "symbol"; symbols: Set<SymbolInstance>; canFlip: boolean }
-      | { mode: "textBox"; textBoxes: Set<TextBox> }
+      | {
+           mode: "textBox"
+           textBoxes: Set<TextBox>
+           text: string | "(mixed)"
+           fontSize: number | "(mixed)"
+        }
       | { mode: "mixed" }
    type TagInfo = { tag: Tag; count: number }
    type PropertyInfo = { property: Property; count: number }
@@ -1450,7 +1456,7 @@
             let firstColor = $segments[0].color
             let color = $segments.every((seg) => seg.color === firstColor)
                ? firstColor
-               : "mixed"
+               : "(mixed)"
             inspector = {
                mode: "segment",
                segments: new Set($segments),
@@ -1470,9 +1476,19 @@
                properties,
             }
          } else if ($textBoxes.length > 0) {
+            let firstText = $textBoxes[0].text
+            let text = $textBoxes.every((box) => box.text === firstText)
+               ? firstText
+               : "(mixed)"
+            let firstFontSize = $textBoxes[0].fontSize
+            let fontSize = $textBoxes.every((b) => b.fontSize === firstFontSize)
+               ? firstFontSize
+               : ("(mixed)" as const)
             inspector = {
                mode: "textBox",
                textBoxes: new Set($textBoxes),
+               text,
+               fontSize,
                items: itemsToInspect,
                tags,
                properties,
@@ -1624,7 +1640,7 @@
    }
    function setColorOfSegments(color: string) {
       if (inspector.mode !== "segment") return
-      if (color === "mixed") return //This string was for informational purposes
+      if (color === "(mixed)") return // This string was for informational purposes.
       let somethingChanged = false
       for (let segment of inspector.segments) {
          if (segment.color !== color) {
@@ -1661,6 +1677,35 @@
       for (let symbol of targets) symbol.applyBringToFront()
       commitState("bring to front")
       SymbolInstance.s = SymbolInstance.s
+   }
+   function setTextOfTextBoxes(text: string) {
+      if (inspector.mode !== "textBox") return
+      if (text === "(mixed)") return // This string was for informational purposes.
+      let somethingChanged = false
+      for (let textBox of inspector.textBoxes) {
+         if (textBox.text !== text) {
+            textBox.setText(text)
+            somethingChanged = true
+         }
+      }
+      if (somethingChanged) commitState("change text")
+      TextBox.es = TextBox.es
+   }
+   function setFontSizeOfTextBoxes(fontSizeString: string) {
+      if (inspector.mode !== "textBox") return
+      if (fontSizeString === "(mixed)") return // This string was for informational purposes.
+      let fontSize = Number(fontSizeString)
+      if (isNaN(fontSize) || fontSize < 1) return
+
+      let somethingChanged = false
+      for (let textBox of inspector.textBoxes) {
+         if (textBox.fontSize !== fontSize) {
+            textBox.setFontSize(fontSize)
+            somethingChanged = true
+         }
+      }
+      if (somethingChanged) commitState("change font size")
+      TextBox.es = TextBox.es
    }
    // function randomTag(): Tag {
    //    let tag = ""
@@ -2319,6 +2364,12 @@
          }
       } else if (key.type === "abort") {
          keyAborted(LMB)
+      }
+      // Temporary keybinding for creating text boxes.
+      if (name === RMB) {
+         new TextBox(mouseOnCanvas)
+         commitState("add text box")
+         TextBox.es = TextBox.es
       }
       // Check if a line type shortcut key has been pressed.
       if (lineTypeConfig) {
@@ -3162,7 +3213,7 @@
                }
             } else {
                // Add an initial proposal to the heap.
-               let proposal = { movable: movable, delay, isPush }
+               let proposal = { movable, delay, isPush }
                heap.push(proposal)
                proposals.set(movable, proposal)
             }
@@ -3569,8 +3620,7 @@
             grabbed = dupe.segments.get(grabbed) as Segment
          } else if (grabbed instanceof SymbolInstance) {
             grabbed = dupe.symbols.get(grabbed) as SymbolInstance
-         }
-         else {
+         } else {
             grabbed = dupe.textBoxes.get(grabbed) as TextBox
          }
          if (!grabbed) {
@@ -4040,7 +4090,7 @@
          for (let symbol of SymbolInstance.s)
             if (range.intersects(symbol)) amassRect.items.add(symbol)
       for (let textBox of TextBox.es)
-            if (range.intersects(textBox)) amassRect.items.add(textBox)
+         if (range.intersects(textBox)) amassRect.items.add(textBox)
       if (amassRect.mode === "remove") {
          for (let vertex of allVertices())
             if (range.intersects(vertex)) amassRect.items.add(vertex)
@@ -4455,6 +4505,51 @@
                ? 'initial'
                : 'none'}"
          />
+         <!-- Text layers -->
+         <g id="textBox amassLight layer" class="amassLight">
+            {#each [...TextBox.es] as textBox}
+               {#if amassLight.has(textBox) && !willBeDeleted(textBox)}
+                  <TextBoxSvg
+                     range={textBox.range}
+                     position={textBox.position}
+                     rotation={textBox.rotation}
+                     fontSize={textBox.fontSize}
+                     text={textBox.text}
+                     render="highlight"
+                  />
+               {/if}
+            {/each}
+         </g>
+         <g id="textBox touchLight layer" class="touchLight">
+            {#each [...TextBox.es] as textBox}
+               {#if touchLight.has(textBox) && !willBeDeleted(textBox)}
+                  <TextBoxSvg
+                     range={textBox.range}
+                     position={textBox.position}
+                     rotation={textBox.rotation}
+                     fontSize={textBox.fontSize}
+                     text={textBox.text}
+                     render="highlight"
+                  />
+               {/if}
+            {/each}
+         </g>
+         <g id="textBox layer">
+            {#each [...TextBox.es] as textBox}
+               {#if !willBeDeleted(textBox)}
+                  <TextBoxSvg
+                     range={textBox.range}
+                     position={textBox.position}
+                     rotation={textBox.rotation}
+                     fontSize={textBox.fontSize}
+                     text={textBox.text}
+                     shadeBackground={textBox.text === "" &&
+                        !touchLight.has(textBox) &&
+                        !amassLight.has(textBox)}
+                  />
+               {/if}
+            {/each}
+         </g>
          <!-- Symbol glyph highlight layer -->
          <g>
             <!-- TODO: This is occurrence 3/4 of the glyph-generating code.-->
@@ -4644,6 +4739,19 @@
                >
                   Bring to front
                </button>
+            {:else if inspector.mode === "textBox"}
+               <div class="inspectorSubtitle">Text</div>
+               <TextField
+                  width={110}
+                  text={inspector.text}
+                  onSubmit={(text) => setTextOfTextBoxes(text)}
+               />
+               <div class="inspectorSubtitle">Font size</div>
+               <TextField
+                  width={110}
+                  text={inspector.fontSize.toString()}
+                  onSubmit={(fontSize) => setFontSizeOfTextBoxes(fontSize)}
+               />
             {/if}
             {#if inspector.mode && inspector.mode !== "crossing"}
                <button on:click={addEmptyTag}>New tag</button>

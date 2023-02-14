@@ -555,13 +555,13 @@ export class Range2D {
       this.x = x
       this.y = y
    }
-   static fromCorners(p1: Point, p2: Point) {
+   static fromCorners(p1: Point, p2: Point): Range2D {
       return new Range2D(new Range1D([p1.x, p2.x]), new Range1D([p1.y, p2.y]))
    }
-   static fromXY(x: Range1D, y: Range1D) {
+   static fromXY(x: Range1D, y: Range1D): Range2D {
       return new Range2D(x, y)
    }
-   contains(point: Point) {
+   contains(point: Point): boolean {
       return (
          this.x.low <= point.x &&
          point.x <= this.x.high &&
@@ -569,7 +569,7 @@ export class Range2D {
          point.y <= this.y.high
       )
    }
-   intersects(object: Range2D | Point | LineSegment | Rectangle) {
+   intersects(object: Range2D | Point | LineSegment | Rectangle): boolean {
       if (object instanceof Range2D) {
          return this.x.intersects(object.x) && this.y.intersects(object.y)
       } else if (object instanceof Point) {
@@ -599,7 +599,7 @@ export class Range2D {
    height(): number {
       return this.y.high - this.y.low
    }
-   corners(): Point[] {
+   corners(): [Point, Point, Point, Point] {
       return [
          new Point(this.x.low, this.y.low),
          new Point(this.x.high, this.y.low),
@@ -663,10 +663,15 @@ export class Rectangle extends Object2D {
    center(): Point {
       return this.fromRectCoordinates(this.range.center())
    }
-   corners(): Point[] {
-      return this.range.corners().map((p) => this.fromRectCoordinates(p))
+   corners(): [Point, Point, Point, Point] {
+      return this.range.corners().map((p) => this.fromRectCoordinates(p)) as [
+         Point,
+         Point,
+         Point,
+         Point
+      ]
    }
-   sides(): LineSegment[] {
+   sides(): [LineSegment, LineSegment, LineSegment, LineSegment] {
       let [p1, p2, p3, p4] = this.corners()
       return [
          new LineSegment(p1, p2, p1.axisFrom(p2) || Axis.horizontal),
