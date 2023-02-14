@@ -95,6 +95,12 @@ The freeze tool allows you to make line segments _rigid_, meaning their length c
 
 To toggle the freeze state of a line segment, click on it. Alternatively, you can click and drag to freeze a rectangular region. To _unfreeze_ a rectangular region, hold Alt/Option while dragging.
 
+### Text boxes
+
+Text boxes can be added by right-clicking anywhere on the canvas. They can be moved and rotated using the warp tool.
+
+The text and font size of a text box can be edited via the inspector, as explained in a later section of this guide.
+
 ## Configuring snapping behaviour
 
 To aid you in creating clean and precise diagrams, many operations will snap the objects being manipulated toward a standard angle and/or distance apart. This behaviour can be customized or disabled by toggling the respective icons in the sidebar.
@@ -127,7 +133,8 @@ The inspector pane lists the aggregated tags and properties of all of the items 
 
 In addition to tags and properties, certain kinds of object have "special" properties that serve a purpose within the editor. Specifically:
 
--  Line segments have a "color" property, which can be used to change their color.
+-  Text boxes have a "text" and a "font size" property.
+-  Line segments have a "color" property.
 -  _Vertices_ (i.e. the endpoints of segments, and the ports of symbols) have a "glyph" property, which can be used to change the glyph that is displayed at the vertex. The glyphs available to select are those that were placed in the "vertex glyphs" subfolder of the project folder.
 -  _Crossings_ (i.e. the places where two line segments intersect) also have a "glyph" property. The glyphs available to select are those that were placed in the "crossing glyphs" subfolder.
 -  For symbols, the inspector offers buttons that can be used to change the "depth" at which the symbol is rendered, and a button that can be used to mirror the symbol.
@@ -278,7 +285,9 @@ And a symbol can be positioned midway between two lines as follows:
 
 <img src="./user-guide-images/equal-spacing.png" width="400px">
 
-These pink dots are visible whenever the tether line type is selected. You can use them to align symbols and/or tethers. In this example, the bottom-midpoint of the symbol has been aligned with the midpoint of the horizontal tether by drawing a vertical tether between them. The horizontal tether will act as if it has been frozen using the freeze tool for as long as the vertical tether remains attached to it. This ensures that the alignment is preserved throughout subsequent operations.
+These pink dots appear on symbols and text boxes, and at the midpoint of tethers. You can use them to align circuit elements with each other. In this example, the bottom-midpoint of the symbol has been aligned with the midpoint of the horizontal tether by drawing a vertical tether between them. The horizontal tether will act as if it has been frozen using the freeze tool for as long as the vertical tether remains attached to it. This ensures that the alignment is preserved throughout subsequent operations.
+
+The pink dots are only visible when the tether line type is selected.
 
 ## Q&A
 
